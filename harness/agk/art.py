@@ -34,6 +34,20 @@ TEXT FORMAT (one char per pixel, frames separated by `frame` lines):
     frame
     ...
 
+Sprite options:
+  attached = true   15 colours (+ transparent) from pairs of channels; width
+                    up to 64 (each 16 px column uses 2 channels, from an even
+                    `channel`). Colours go to slots 17-31, shared by all
+                    attached sprites. artXCreate(frame, part), part p ->
+                    channel CHANNEL+p, drawn at x + (p/2)*16; call
+                    spriteSetAttached() on the odd parts.
+  mirror = true     adds left-facing copies of every frame (hardware sprites
+                    can't flip): frame f facing left = f + ART_X_MIRROR.
+
+Editing AI art by hand: `agk art-export NAME` turns art/NAME.png into text
+art art/NAME.txt (one letter per colour) - point art.toml at the .txt and
+edit pixels or add animation frames.
+
 Rules enforced (errors say what to change):
   sprite: width <= 16, at most 3 colours + transparent. Channels 0/1 share
           colours 17-19, 2/3 share 21-23, 4/5 share 25-27, 6/7 share 29-31, so
@@ -163,6 +177,7 @@ def load_png_art(path, frame_width=None, frame_height=None):
 class Asset:
     def __init__(self, name, cfg, art_dir, palette, depth):
         self.name, self.cfg = name, cfg
+        self.attached = False
         self.kind = cfg.get("kind", "sprite")
         self.warnings = []
         src = cfg.get("source")
@@ -213,14 +228,29 @@ class Asset:
         if ch not in SPRITE_BASE:
             raise ArtError(f"[{self.name}]: channel must be 0-7")
         self.channel = ch
-        if self.w > 16:
-            raise ArtError(f"[{self.name}]: {self.w} px wide, but a hardware sprite is 16 px. "
-                           f"Use kind = \"bob\", or split it into 16 px columns on two channels")
+        self.attached = bool(self.cfg.get("attached"))
+        if self.cfg.get("mirror"):
+            # Hardware sprites can't flip: add left-facing copies after the originals
+            self.mirror_offset = len(self.frames)
+            self.frames += [[row[::-1] for row in fr] for fr in self.frames]
+        self.columns = (self.w + 15) // 16
+        if self.attached:
+            if ch % 2:
+                raise ArtError(f"[{self.name}]: attached sprites start on an even channel (0, 2, 4, 6)")
+            if ch + 2 * self.columns > 8:
+                raise ArtError(f"[{self.name}]: {self.w} px attached needs {2 * self.columns} channels "
+                               f"from {ch}, but there are only 8 (0-7)")
+            n_colors = 15
+        else:
+            if self.w > 16:
+                raise ArtError(f"[{self.name}]: {self.w} px wide, but a hardware sprite is 16 px. "
+                               f"Use attached = true (15 colours, 16 px per channel pair), or kind = \"bob\"")
+            n_colors = 3
         used = self.colors_used()
-        if len(used) > 3:
-            self.warnings.append(f"{len(used)} colours, but a sprite has 3 (+ transparent): "
-                                 f"reduced to the 3 most important - check the preview")
-            keep = _reduce(used, 3)
+        if len(used) > n_colors:
+            self.warnings.append(f"{len(used)} colours, but this sprite has {n_colors} (+ transparent): "
+                                 f"reduced to the {n_colors} most important - check the preview")
+            keep = _reduce(used, n_colors)
             remap = {c: min(keep, key=lambda k: dist(c, k)) for c in used}
             self.frames = [[[None if c is None else remap[c] for c in row] for row in fr] for fr in self.frames]
             used = {c: 0 for c in keep}
@@ -231,7 +261,7 @@ class Asset:
                 for c in row:
                     if c is not None and c not in order:
                         order.append(c)
-        self.sprite_colors = order + [0x000] * (3 - len(order))
+        self.sprite_colors = order + [0x000] * (n_colors - len(order))
         self.index = {c: i + 1 for i, c in enumerate(order)}
 
     def _auto_palette(self, depth):
@@ -291,6 +321,8 @@ class Asset:
         out = []
         for fr in self.frames:
             for row in fr:
+                if self.kind == "sprite" and self.attached:
+                    continue  # handled per part below
                 if self.kind == "sprite":
                     p0 = p1 = 0
                     for x, c in enumerate(row):
@@ -317,6 +349,24 @@ class Asset:
                         out += planes[p]
                     if self.kind == "bob":
                         out += mask
+        if self.kind == "sprite" and self.attached:
+            # Per frame, per part (column * 2 + odd), per row: 2 words.
+            # Even channel shows colour bits 0-1, the odd (attached) one bits 2-3.
+            for fr in self.frames:
+                for col in range(self.columns):
+                    for odd in (0, 1):
+                        for row in fr:
+                            pa = pb = 0
+                            for x in range(16):
+                                sx = col * 16 + x
+                                c = row[sx] if sx < len(row) else None
+                                if c is None:
+                                    continue
+                                i = self.index[c] >> (2 * odd)
+                                bit = 0x8000 >> x
+                                pa |= bit if i & 1 else 0
+                                pb |= bit if i & 2 else 0
+                            out += [pa, pb]
         return out
 
     def preview(self, zoom=4, palette=None):
@@ -375,7 +425,7 @@ def build(project_dir, out_dir=None):
     # Sprites sharing a channel pair share their 3 colours
     pairs = {}
     for a in assets:
-        if a.kind == "sprite":
+        if a.kind == "sprite" and not a.attached:
             base = SPRITE_BASE[a.channel]
             if base in pairs and pairs[base].sprite_colors != a.sprite_colors:
                 o = pairs[base]
@@ -384,7 +434,7 @@ def build(project_dir, out_dir=None):
                     f"but use different colours ({_hex(a.sprite_colors)} vs {_hex(o.sprite_colors)}). "
                     f"Give them the same 3 colours, or put one on another channel pair")
             pairs[base] = a
-        if a.kind == "sprite" and palette and any(i in palette for i in range(SPRITE_BASE[a.channel], SPRITE_BASE[a.channel] + 3)):
+        if a.kind == "sprite" and not a.attached and palette and any(i in palette for i in range(SPRITE_BASE[a.channel], SPRITE_BASE[a.channel] + 3)):
             a.warnings.append(f"palette.txt also defines slots {SPRITE_BASE[a.channel]}-{SPRITE_BASE[a.channel] + 2}; "
                               f"art{a.c_name()}ApplyColors() will overwrite them")
 
@@ -427,7 +477,32 @@ def _write_c(assets, palette, depth, out_dir):
         h += [f"// [{a.name}] {a.kind}, {a.w}x{a.h}, {len(a.frames)} frame(s), from art/{os.path.basename(a.source)}",
               f"#define ART_{U}_W {a.w}", f"#define ART_{U}_H {a.h}", f"#define ART_{U}_FRAMES {len(a.frames)}"]
         c += [f"static const UWORD s_pArt{N}[] = {{", _words(data), "};", ""]
-        if a.kind == "sprite":
+        if a.kind == "sprite" and a.attached:
+            parts = a.columns * 2
+            h += [f"#define ART_{U}_CHANNEL {a.channel}  // uses channels {a.channel}-{a.channel + parts - 1}",
+                  f"#define ART_{U}_PARTS {parts}  // hardware sprites per frame: part p -> channel CHANNEL+p",
+                  f"#define ART_{U}_COLUMNS {a.columns}  // part p is drawn at x + (p / 2) * 16"]
+            if getattr(a, "mirror_offset", None) is not None:
+                h += [f"#define ART_{U}_MIRROR {a.mirror_offset}  // frame f facing left = f + ART_{U}_MIRROR"]
+            h += [f"/** 15-colour attached sprite: one bitmap per frame and part (p = column*2 + odd).",
+                  f" *  spriteAdd(ART_{U}_CHANNEL + p, bm); spriteSetAttached() on the odd parts. */",
+                  f"tBitMap *art{N}Create(UBYTE ubFrame, UBYTE ubPart);",
+                  f"/** Set the 15 attached-sprite colours (slots 17-31, shared by all attached sprites). */",
+                  f"void art{N}ApplyColors(UWORD *pPalette);", ""]
+            c += [f"tBitMap *art{N}Create(UBYTE ubFrame, UBYTE ubPart) {{",
+                  f"\ttBitMap *pBm = bitmapCreate(16, ART_{U}_H + 2, 2, BMF_CLEAR | BMF_INTERLEAVED);",
+                  f"\tconst UWORD *pSrc = &s_pArt{N}[(ubFrame * ART_{U}_PARTS + ubPart) * ART_{U}_H * 2];",
+                  f"\tUWORD uwWordsPerRow = pBm->BytesPerRow / 2;",
+                  f"\tfor(UWORD y = 0; y < ART_{U}_H; ++y) {{",
+                  f"\t\tUWORD *pRow = (UWORD *)pBm->Planes[0] + (y + 1) * uwWordsPerRow;",
+                  f"\t\tpRow[0] = *pSrc++;",
+                  f"\t\tpRow[1] = *pSrc++;",
+                  f"\t}}",
+                  f"\treturn pBm;", "}", "",
+                  f"void art{N}ApplyColors(UWORD *pPalette) {{"]
+            c += [f"\tpPalette[{17 + i}] = 0x{col:03X};" for i, col in enumerate(a.sprite_colors)]
+            c += ["}", ""]
+        elif a.kind == "sprite":
             base = SPRITE_BASE[a.channel]
             h += [f"#define ART_{U}_CHANNEL {a.channel}",
                   f"/** Sprite bitmap for frame ubFrame, ready for spriteAdd()/spriteSetBitmap().",
@@ -517,3 +592,39 @@ def _write_c(assets, palette, depth, out_dir):
         if old != text:
             with open(path, "w") as f:
                 f.write(text)
+
+
+# ------------------------------------------------------------------ export
+
+LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+
+def export_text(png_path, txt_path, max_colors=15, frame_width=None):
+    """PNG -> editable text art: colours rounded to 12-bit (reduced to
+    max_colors if needed), one letter per colour ordered dark to light,
+    '.' = transparent. Returns (colour count, warnings)."""
+    w, h, frames = load_png_art(png_path, frame_width)
+    counts = {}
+    for fr in frames:
+        for row in fr:
+            for c in row:
+                if c is not None:
+                    counts[c] = counts.get(c, 0) + 1
+    warnings = []
+    keep = list(counts)
+    if len(keep) > max_colors:
+        warnings.append(f"{len(keep)} colours reduced to {max_colors}")
+        keep = _reduce(counts, max_colors)
+    remap = {c: min(keep, key=lambda k: dist(c, k)) for c in counts}
+    keep.sort(key=lambda c: sum(to_rgb8(c)))
+    letter = {c: LETTERS[i] for i, c in enumerate(keep)}
+    out = [f"# Exported from {os.path.basename(png_path)} by agk art-export. Edit freely:",
+           "# one character per pixel, '.' = transparent; add 'frame' sections to animate.",
+           "colors", "  .  transparent"]
+    out += [f"  {letter[c]}  0x{c:03X}" for c in keep]
+    for fr in frames:
+        out.append("frame")
+        out += ["".join("." if c is None else letter[remap[c]] for c in row) for row in fr]
+    with open(txt_path, "w") as f:
+        f.write("\n".join(out) + "\n")
+    return len(keep), warnings

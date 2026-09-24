@@ -219,6 +219,23 @@ def cmd_art_gen(args):
     return 0 if _run_art(proj) else 1
 
 
+def cmd_art_export(args):
+    from . import art
+    proj = load_project(args.project)
+    src = os.path.join(proj["dir"], "art", f"{args.name}.png")
+    dst = os.path.join(proj["dir"], "art", f"{args.name}.txt")
+    if not os.path.exists(src):
+        raise SystemExit(f"{rel(src)} not found")
+    if os.path.exists(dst) and not args.force:
+        raise SystemExit(f"{rel(dst)} exists - use --force to overwrite")
+    n, warnings = art.export_text(src, dst, args.colors, args.frame_width)
+    print(f"wrote {rel(dst)} ({n} colours)")
+    for w in warnings:
+        print(f"  warning: {w}")
+    print(f'next: point art.toml at it (source = "{args.name}.txt") and edit the pixels')
+    return 0
+
+
 def cmd_build(args):
     proj = load_project(args.project)
     if not _run_art(proj, quiet=True):
@@ -475,6 +492,13 @@ def main(argv=None):
     p = sub.add_parser("art", help="convert art/ to Amiga sprites/BOBs and write previews")
     p.add_argument("project", nargs="?")
 
+    p = sub.add_parser("art-export", help="turn art/NAME.png into editable text art art/NAME.txt")
+    p.add_argument("name")
+    p.add_argument("--project", default=None)
+    p.add_argument("--colors", type=int, default=15, help="max colours (15 = attached sprite, 3 = sprite)")
+    p.add_argument("--frame-width", type=int)
+    p.add_argument("--force", action="store_true")
+
     p = sub.add_parser("art-gen", help="generate pixel art with Retro Diffusion into art/ (needs RD_API_KEY)",
                        description="Generates a PNG constrained to the game palette, saves it as art/NAME.png, "
                                    "adds it to art.toml and converts it. Use --dry-run for a free price check.")
@@ -515,7 +539,8 @@ def main(argv=None):
         return 0
     try:
         return {"doctor": cmd_doctor, "build": cmd_build, "run": cmd_run, "test": cmd_test,
-                "unit": cmd_unit, "new": cmd_new, "art": cmd_art, "art-gen": cmd_art_gen}[args.cmd](args)
+                "unit": cmd_unit, "new": cmd_new, "art": cmd_art, "art-gen": cmd_art_gen,
+                "art-export": cmd_art_export}[args.cmd](args)
     except runner.RunError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

@@ -45,10 +45,14 @@ static tBitMap *s_pTiles;
 static tBitMap *s_pMountains;    // PF2 band 1, 704x96x3, interleaved
 static tBitMap *s_pHills;        // PF2 band 2, 704x80x3, interleaved
 static UWORD *s_pBlankRow;       // PF2 above/below the bands: 42 zero bytes, modulo -42
-static tBitMap *s_pPlayerFrames[ART_PLAYER_FRAMES];
-static tSprite *s_pPlayer;
+// Hero: 32x32, 15 colours = 2 columns x attached pair = 4 hardware sprites
+// (channels 0-3). One bitmap per frame and part; frames 8.. face left.
+#define HERO_X_OFS 8    // art is 32 wide around the 16 px hitbox
+#define HERO_Y_OFS 15   // feet (row 30 of the art) on the hitbox bottom
+static tBitMap *s_pHeroFrames[ART_HERO_FRAMES][ART_HERO_PARTS];
+static tSprite *s_pHero[ART_HERO_PARTS];
+static UBYTE s_ubShownHeroFrame;
 static tGameState s_sState;
-static UBYTE s_ubShownWalkFrame;
 
 // --------------------------------------------------------- copper list ---
 // Raw list, same layout in both buffers:
@@ -295,18 +299,25 @@ void genericCreate(void) {
 		pPal[8 + i] = g_pArtMountainsPalette[i];
 	}
 	pPal[0] = logicSkyColor(0);
-	artPlayerApplyColors(pPal);  // art/player.txt -> colours 17-19
+	artHeroApplyColors(pPal);    // art/hero.txt -> attached-sprite colours 17-31
 
 	logicInit(&s_sState);
 	drawLevel();
 
-	for(UBYTE i = 0; i < ART_PLAYER_FRAMES; ++i) {
-		s_pPlayerFrames[i] = artPlayerCreate(i);
+	for(UBYTE f = 0; f < ART_HERO_FRAMES; ++f) {
+		for(UBYTE p = 0; p < ART_HERO_PARTS; ++p) {
+			s_pHeroFrames[f][p] = artHeroCreate(f, p);
+		}
 	}
 	spriteManagerCreate(s_pView, COP_SPRITES_POS, 0);
 	systemSetDmaBit(DMAB_SPRITE, 1);
-	s_pPlayer = spriteAdd(ART_PLAYER_CHANNEL, s_pPlayerFrames[0]);
-	s_ubShownWalkFrame = 0;
+	for(UBYTE p = 0; p < ART_HERO_PARTS; ++p) {
+		s_pHero[p] = spriteAdd(ART_HERO_CHANNEL + p, s_pHeroFrames[0][p]);
+		if(p & 1) {
+			spriteSetAttached(s_pHero[p], 1);  // odd channel adds colour bits 2-3
+		}
+	}
+	s_ubShownHeroFrame = 0;
 
 	copperCreate();
 	copperUpdate(s_sState.cam);
@@ -331,15 +342,19 @@ void genericProcess(void) {
 	readInput(&sInput);
 	UBYTE isChanged = logicUpdate(&s_sState, &sInput);
 
-	if(s_sState.walkFrame != s_ubShownWalkFrame) {
-		s_ubShownWalkFrame = s_sState.walkFrame;
-		spriteSetBitmap(s_pPlayer, s_pPlayerFrames[s_ubShownWalkFrame]);
+	UBYTE ubHeroFrame = logicHeroFrame(&s_sState) + (s_sState.facingLeft ? ART_HERO_MIRROR : 0);
+	for(UBYTE p = 0; p < ART_HERO_PARTS; ++p) {
+		tSprite *pSpr = s_pHero[p];
+		if(ubHeroFrame != s_ubShownHeroFrame) {
+			spriteSetBitmap(pSpr, s_pHeroFrames[ubHeroFrame][p]);
+		}
+		pSpr->wX = s_sState.x - s_sState.cam - HERO_X_OFS + (p >> 1) * 16;
+		pSpr->wY = s_sState.y - HERO_Y_OFS;
+		spriteRequestMetadataUpdate(pSpr);
+		spriteProcess(pSpr);
+		spriteProcessChannel(ART_HERO_CHANNEL + p);
 	}
-	s_pPlayer->wX = s_sState.x - s_sState.cam;
-	s_pPlayer->wY = s_sState.y;
-	spriteRequestMetadataUpdate(s_pPlayer);
-	spriteProcess(s_pPlayer);
-	spriteProcessChannel(ART_PLAYER_CHANNEL);
+	s_ubShownHeroFrame = ubHeroFrame;
 
 	copperUpdate(s_sState.cam);
 
@@ -354,6 +369,8 @@ void genericProcess(void) {
 		agkState("ground", s_sState.onGround);
 		agkState("vy", s_sState.vy);
 		agkState("walk", s_sState.walkFrame);
+		agkState("anim", logicHeroFrame(&s_sState));
+		agkState("left", s_sState.facingLeft);
 		agkState("jumps", s_sState.jumps);
 		agkState("deaths", s_sState.deaths);
 		agkEnd();
@@ -378,8 +395,10 @@ void genericDestroy(void) {
 	systemUse();
 	systemSetDmaBit(DMAB_SPRITE, 0);
 	spriteManagerDestroy();
-	for(UBYTE i = 0; i < ART_PLAYER_FRAMES; ++i) {
-		bitmapDestroy(s_pPlayerFrames[i]);
+	for(UBYTE f = 0; f < ART_HERO_FRAMES; ++f) {
+		for(UBYTE p = 0; p < ART_HERO_PARTS; ++p) {
+			bitmapDestroy(s_pHeroFrames[f][p]);
+		}
 	}
 	memFree(s_pBlankRow, FETCH_BYTES);
 	bitmapDestroy(s_pHills);

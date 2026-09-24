@@ -1,5 +1,20 @@
 # sidescroller: dual-playfield parallax platformer (A500, OCS, PAL)
 
+## The hero
+
+A 32×32, 15-colour hero made from **4 hardware sprites**: two columns of
+attached pairs on channels 0–3.
+- **Base art:** AI-generated with `agk art-gen hero "..." --size 32x32` for $0.025.
+- **Text art:** turned into editable text art with `agk art-export hero`.
+- **Animation, by hand** in `art/hero.txt`:
+  - idle with breathing
+  - a 4-frame walk: the legs are sheared from the hip into strides and passing poses, with a 1-pixel body bob
+  - jump with knees tucked and arms up
+  - fall
+- **Facing left:** `mirror = true` adds the left-facing copies.
+- **Frame choice:** `logicHeroFrame()` picks the frame from the game state, and it's unit-tested.
+- **Testing:** `tests/hero.agk` checks every animation state on all profiles.
+
 A side-scrolling platformer with two layers of parallax background. It uses
 the OCS **dual playfield** mode, set up with a raw copper list, in the style of
 Shadow of the Beast and Agony. ACE has no dual-playfield support, so this game

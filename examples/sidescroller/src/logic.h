@@ -85,7 +85,20 @@ typedef struct {
 	uint8_t walkTicks;
 	uint8_t deaths;     // fell into a pit
 	uint8_t jumps;      // jumps started
+	uint8_t facingLeft; // last horizontal direction pressed
+	uint8_t moving;     // ran this frame on the ground
 } tGameState;
+
+// Hero animation frames (art/hero.txt); left-facing = + ART_HERO_MIRROR
+#define HERO_IDLE 0
+#define HERO_BREATHE 1
+#define HERO_WALK 2        // 2..5
+#define HERO_JUMP 6
+#define HERO_FALL 7
+#define HERO_BREATHE_SHIFT 5  // idle <-> breathe every 32 frames
+
+/** Which hero frame (0..7, right-facing) shows this state. */
+uint8_t logicHeroFrame(const tGameState *pState);
 
 extern const char *const g_pLevelRows[LEVEL_TILES_H];
 

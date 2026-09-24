@@ -197,7 +197,28 @@ static void testGradients(void) {
 	CHECK(logicHazeColor(0) == 0xBDE && logicHazeColor(HAZE_BANDS - 1) == 0x7AC);
 }
 
+static void testHeroFrames(void) {
+	tGameState s;
+	logicInit(&s);
+	CHECK(logicHeroFrame(&s) == HERO_IDLE);
+	s.frame = 1 << HERO_BREATHE_SHIFT;
+	CHECK(logicHeroFrame(&s) == HERO_BREATHE);
+	s.moving = 1;
+	s.walkFrame = 3;
+	CHECK(logicHeroFrame(&s) == HERO_WALK + 3);
+	s.onGround = 0;
+	s.vy = -10;
+	CHECK(logicHeroFrame(&s) == HERO_JUMP);
+	s.vy = 10;
+	CHECK(logicHeroFrame(&s) == HERO_FALL);
+	tInput in = {.dx = -1};
+	logicInit(&s);
+	logicUpdate(&s, &in);
+	CHECK(s.facingLeft == 1 && s.moving == 1);
+}
+
 int main(void) {
+	testHeroFrames();
 	testLevelShape();
 	testStartsOnGround();
 	testRunsTwoPixelsPerFrame();

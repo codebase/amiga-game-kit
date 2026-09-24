@@ -23,4 +23,4 @@ expect-color start 150 174 0x9CD
 expect-color start 240 112 0xCCB
 expect-color start 60 220 0x964
 # Player sprite in front of everything: top of the head
-expect-color start 38 192 0x000
+expect-color start 44 187 0x723       # hero scarf (art col 20, row 10)

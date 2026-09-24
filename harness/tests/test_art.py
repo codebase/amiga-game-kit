@@ -184,3 +184,45 @@ class BitmapTests(unittest.TestCase):
         (a,) = art.build(d)
         self.assertEqual(len(a.own_palette), 4)               # 0 + 3 colours for 2 planes
         self.assertTrue(any("reduced to 3" in w for w in a.warnings))
+
+
+class AttachedSpriteTests(unittest.TestCase):
+    def test_attached_bits_and_mirror(self):
+        # 17 px wide -> 2 columns; colour index 5 = 0b0101 -> even part bit 0, odd part bit 0
+        cols = ["0x100", "0x200", "0x300", "0x400", "0x500"]
+        text = ("colors\n  .  transparent\n" + "".join(f"  {chr(65 + i)} {c}\n" for i, c in enumerate(cols))
+                + "frame\nE...............A\n")
+        d = project({"art.toml": '[h]\nsource = "h.txt"\nkind = "sprite"\nattached = true\nmirror = true\n',
+                     "h.txt": text})
+        (a,) = art.build(d)
+        self.assertEqual((a.columns, len(a.frames), a.mirror_offset), (2, 2, 1))
+        self.assertEqual(a.index[0x500], 1)          # E first seen -> index 1
+        data = a.planar()                             # frame, part, row: 2 words
+        self.assertEqual(data[0:2], [0x8000, 0])      # part 0 (col 0 even): index 1 -> bit 0
+        self.assertEqual(data[2:4], [0, 0])           # part 1 (col 0 odd): bits 2-3 of 1 = 0
+        self.assertEqual(data[4:6], [0, 0x8000])      # part 2 (col 1 even): A = index 2 (0b10)
+        # mirrored frame: A now at x=0, E at x=16
+        self.assertEqual(data[8:10], [0, 0x8000])
+        h = open(os.path.join(d, "build", "art", "art.h")).read()
+        self.assertIn("ART_H_PARTS 4", h)
+        self.assertIn("ART_H_MIRROR 1", h)
+        c = open(os.path.join(d, "build", "art", "art.c")).read()
+        self.assertIn("pPalette[31]", c)             # 15 colours -> slots 17-31
+
+    def test_attached_needs_even_channel(self):
+        d = project({"art.toml": '[h]\nsource = "h.txt"\nattached = true\nchannel = 1\n', "h.txt": SPRITE})
+        with self.assertRaisesRegex(art.ArtError, "even channel"):
+            art.build(d)
+
+
+class ExportTests(unittest.TestCase):
+    def test_png_to_text_and_back(self):
+        d = project({})
+        png = os.path.join(d, "art", "x.png")
+        Image(bytes((255, 0, 0, 0, 0, 255, 255, 0, 0, 0, 0, 255)), 2, 2).save_png(png)
+        n, warnings = art.export_text(png, os.path.join(d, "art", "x.txt"))
+        self.assertEqual((n, warnings), (2, []))
+        with open(os.path.join(d, "art", "art.toml"), "w") as f:
+            f.write('[x]\nsource = "x.txt"\n')
+        (a,) = art.build(d)
+        self.assertEqual(a.frames[0], [[0xF00, 0x00F], [0xF00, 0x00F]])

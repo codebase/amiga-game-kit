@@ -105,11 +105,17 @@ void logicInit(tGameState *pState) {
 	pState->walkTicks = 0;
 	pState->deaths = 0;
 	pState->jumps = 0;
+	pState->facingLeft = 0;
+	pState->moving = 0;
 }
 
 uint8_t logicUpdate(tGameState *pState, const tInput *pInput) {
 	int16_t oldX = pState->x, oldY = pState->y, oldCam = pState->cam;
 	uint8_t oldGround = pState->onGround, oldWalk = pState->walkFrame;
+
+	if(pInput->dx) {
+		pState->facingLeft = pInput->dx < 0;
+	}
 
 	// Horizontal: pixel by pixel, stop at solid tiles and level edges.
 	if(pInput->dx) {
@@ -191,10 +197,21 @@ uint8_t logicUpdate(tGameState *pState, const tInput *pInput) {
 		pState->walkTicks = 0;
 	}
 
+	pState->moving = pState->onGround && pInput->dx && pState->x != oldX;
 	pState->cam = logicCameraFor(pState->x);
 	++pState->frame;
 	return pState->x != oldX || pState->y != oldY || pState->cam != oldCam ||
 		pState->onGround != oldGround || pState->walkFrame != oldWalk;
+}
+
+uint8_t logicHeroFrame(const tGameState *pState) {
+	if(!pState->onGround) {
+		return pState->vy < 0 ? HERO_JUMP : HERO_FALL;
+	}
+	if(pState->moving) {
+		return HERO_WALK + pState->walkFrame;
+	}
+	return (pState->frame >> HERO_BREATHE_SHIFT) & 1 ? HERO_BREATHE : HERO_IDLE;
 }
 
 // Colour gradients: startup only (tables are built once in main.c).

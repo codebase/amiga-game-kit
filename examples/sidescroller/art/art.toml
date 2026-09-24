@@ -2,11 +2,6 @@
 [art]
 depth = 2                 # bitplanes of the display (BOBs use this)
 
-[player]
-source = "player.txt"     # text art (or a .png)
-kind = "sprite"           # hardware sprite: 16 px wide, 3 colours
-channel = 0               # colours go to palette slots 17-19
-
 [mountains]
 source = "mountains.png"
 kind = "bitmap"
@@ -26,3 +21,10 @@ source = "tiles.txt"      # 16x16 level tiles for PF1, stacked vertically
 kind = "bitmap"
 depth = 3
 palette = "auto"          # own palette -> colours 1-7 of the front playfield
+
+[hero]                    # 32x32, 15 colours: two attached sprite pairs (channels 0-3)
+source = "hero.txt"       # AI base (hero.png) animated by hand as text art
+kind = "sprite"
+attached = true
+channel = 0
+mirror = true             # + left-facing copies of every frame

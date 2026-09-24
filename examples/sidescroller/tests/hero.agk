@@ -1,0 +1,27 @@
+# The hero (art/hero.txt: AI base, hand-animated) picks its frame from the
+# game state: idle/breathe, a 4-frame walk, jump, fall, and mirrored copies
+# when facing left. Scarf pixel: art col 20 row 10 (right-facing), col 11
+# when mirrored -> screen (x-cam+12, y-5) or (x-cam+3, y-5).
+wait 40
+screenshot idle
+expect-serial "anim=1"                 # breathing while standing still
+hold right
+wait-serial "anim=5"
+screenshot walking
+expect-serial "anim=2"
+expect-serial "anim=3"
+expect-serial "anim=4"
+release
+press up 3
+wait-serial "anim=6"
+screenshot jumping
+wait-serial "anim=7"
+screenshot falling
+wait 40
+hold left
+wait-serial "left=1"
+wait 2
+screenshot facing_left
+release
+wait 2
+expect-serial "left=1"

@@ -14,4 +14,4 @@ screenshot end
 expect-serial "x=1264 y=192 cam=960 mtn=240 hills=96 ground=1"
 expect-no-serial "deaths=[1-9]"
 # player at screen x = 1264 - 960 = 304
-expect-color end 310 192 0x000
+expect-color end 316 187 0x723         # hero scarf
