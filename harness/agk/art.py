@@ -422,6 +422,25 @@ def build(project_dir, out_dir=None):
     depth = settings.get("depth") or max(1, (max(palette) if palette else 1).bit_length())
     assets = [Asset(name, a, art_dir, palette, depth) for name, a in cfg.items()]
 
+    # Attached sprites all use colour slots 17-31, so they share ONE palette:
+    # build it from the union of their colours (first asset first) and
+    # re-index every attached asset against it.
+    attached = [a for a in assets if a.kind == "sprite" and a.attached]
+    if len(attached) > 1:
+        shared = []
+        for a in attached:
+            for c in a.sprite_colors:
+                if c not in shared and any(c in used for used in (a.colors_used(),)):
+                    shared.append(c)
+        if len(shared) > 15:
+            names = ", ".join(a.name for a in attached)
+            raise ArtError(f"attached sprites [{names}] share colour slots 17-31 but use {len(shared)} "
+                           f"different colours together (max 15). Draw them with a common set of colours "
+                           f"(e.g. reuse the first sprite's colours)")
+        for a in attached:
+            a.sprite_colors = shared + [0x000] * (15 - len(shared))
+            a.index = {c: i + 1 for i, c in enumerate(shared)}
+
     # Sprites sharing a channel pair share their 3 colours
     pairs = {}
     for a in assets:

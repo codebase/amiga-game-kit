@@ -226,3 +226,23 @@ class ExportTests(unittest.TestCase):
             f.write('[x]\nsource = "x.txt"\n')
         (a,) = art.build(d)
         self.assertEqual(a.frames[0], [[0xF00, 0x00F], [0xF00, 0x00F]])
+
+
+class SharedAttachedPaletteTests(unittest.TestCase):
+    def test_attached_sprites_share_one_palette(self):
+        a = "colors\n  A 0xF00\n  B 0x0F0\nframe\nAB\n"
+        b = "colors\n  B 0x0F0\n  C 0x00F\nframe\nBC\n"
+        d = project({"art.toml": '[a]\nsource = "a.txt"\nattached = true\n[b]\nsource = "b.txt"\n'
+                                 'attached = true\nchannel = 4\n', "a.txt": a, "b.txt": b})
+        x, y = art.build(d)
+        self.assertEqual(x.sprite_colors[:3], [0xF00, 0x0F0, 0x00F])
+        self.assertEqual(x.sprite_colors, y.sprite_colors)
+        self.assertEqual(y.index[0x0F0], 2)             # same index as in [a]
+
+    def test_too_many_shared_colours(self):
+        a = "colors\n" + "".join(f"  {chr(65 + i)} 0x{i:03X}\n" for i in range(10)) + "frame\nABCDEFGHIJ\n"
+        b = "colors\n" + "".join(f"  {chr(65 + i)} 0x{0x100 + i:03X}\n" for i in range(10)) + "frame\nABCDEFGHIJ\n"
+        d = project({"art.toml": '[a]\nsource = "a.txt"\nattached = true\n[b]\nsource = "b.txt"\n'
+                                 'attached = true\nchannel = 4\n', "a.txt": a, "b.txt": b})
+        with self.assertRaisesRegex(art.ArtError, "max 15"):
+            art.build(d)

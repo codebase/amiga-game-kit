@@ -29,3 +29,9 @@ attached = true
 channel = 0
 mirror = true             # + left-facing copies of every frame
 
+[enemy]                   # 16x16, 15 colours: one attached sprite pair (channels 4-5),
+source = "enemy.txt"      # shares the hero's palette; hand-drawn walk x2 + squashed
+kind = "sprite"
+attached = true
+channel = 4
+mirror = true
