@@ -1,0 +1,14 @@
+# Kickstart ROMs are copyrighted - never commit
+roms/
+*.rom
+
+# Fetched / built by tools/setup
+third_party/
+
+# Build and run outputs
+build/
+out/
+
+# Python
+__pycache__/
+*.pyc

@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Fetch pinned third-party sources and build the headless emulator.
+#   tools/setup
+# Needs: git, cmake, Docker (for tools/build), and a C++20 compiler.
+# Apple's Command Line Tools clang 15 is too old for vAmiga; on macOS we use
+# Homebrew LLVM (`brew install llvm`).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TP="$ROOT/third_party"
+VAMIGA_REV=7ae9531039c54669eb821e748220652a3854d34b   # vAmiga 5.0b2 (master)
+ACE_REV=9e6ce064897cbd6b517d56fbd15da43919261a56      # AmigaPorts/ACE
+
+fetch() { # url dir rev
+  if [ ! -d "$2/.git" ]; then git clone -q "$1" "$2"; fi
+  git -C "$2" fetch -q --depth 1 origin "$3" 2>/dev/null || true
+  git -C "$2" checkout -q "$3"
+}
+
+mkdir -p "$TP"
+fetch https://github.com/dirkwhoffmann/vAmiga.git "$TP/vAmiga" "$VAMIGA_REV"
+fetch https://github.com/AmigaPorts/ACE.git "$TP/ACE" "$ACE_REV"
+
+# Adds `wait <n> frames` (frame-aligned) to RetroShell.
+if git -C "$TP/vAmiga" apply --check "$ROOT/harness/patches/vamiga-wait-frames.patch" 2>/dev/null; then
+  git -C "$TP/vAmiga" apply "$ROOT/harness/patches/vamiga-wait-frames.patch"
+fi
+
+CMAKE_ARGS=(-DCMAKE_BUILD_TYPE=Release)
+if [ "$(uname)" = Darwin ] && command -v brew >/dev/null && [ -d "$(brew --prefix llvm 2>/dev/null)" ]; then
+  L="$(brew --prefix llvm)"
+  CMAKE_ARGS+=(-DCMAKE_C_COMPILER="$L/bin/clang" -DCMAKE_CXX_COMPILER="$L/bin/clang++")
+fi
+cmake -S "$TP/vAmiga/Core" -B "$TP/build-vamiga" "${CMAKE_ARGS[@]}" >/dev/null
+cmake --build "$TP/build-vamiga" -j --target VAHeadless
+
+docker pull -q "${AGK_TOOLCHAIN_IMAGE:-amigadev/crosstools:m68k-amigaos}"
+echo "OK: $TP/build-vamiga/VAHeadless"

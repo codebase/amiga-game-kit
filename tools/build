@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Build an example into an Amiga executable and a bootable ADF.
+#   tools/build [example-dir]      (default: examples/hello)
+# Output: <example>/build/<name> and <example>/build/<name>.adf
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+EXAMPLE="${1:-examples/hello}"
+NAME="$(basename "$EXAMPLE")"
+IMAGE="${AGK_TOOLCHAIN_IMAGE:-amigadev/crosstools:m68k-amigaos}"
+
+docker run --rm -u "$(id -u):$(id -g)" -v "$ROOT:/work" -w "/work/$EXAMPLE" "$IMAGE" sh -euc "
+  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE=/opt/m68k-amigaos/lib/m68k-amigaos.cmake \
+    -DM68K_CPU=68000 -DM68K_FPU=soft -DM68K_CRT=nix13 >/dev/null
+  cmake --build build -j
+  m68k-amigaos-strip build/$NAME 2>/dev/null || true
+
+  # OFS disk so Kickstart 1.3 can boot it; startup-sequence launches the game.
+  printf '$NAME\n' > build/startup-sequence
+  rm -f build/$NAME.adf
+  xdftool build/$NAME.adf format AGK ofs + boot install \
+    + write build/$NAME $NAME + makedir s \
+    + write build/startup-sequence s/startup-sequence
+"
+ls -l "$ROOT/$EXAMPLE/build/$NAME" "$ROOT/$EXAMPLE/build/$NAME.adf"

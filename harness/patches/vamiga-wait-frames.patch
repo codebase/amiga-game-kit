@@ -1,0 +1,35 @@
+diff --git a/Core/Misc/RetroShell/Console.cpp b/Core/Misc/RetroShell/Console.cpp
+index b661c82..59edb73 100644
+--- a/Core/Misc/RetroShell/Console.cpp
++++ b/Core/Misc/RetroShell/Console.cpp
+@@ -1185,12 +1185,26 @@ Console::initCommonCommands(RSCommand &root)
+             .flags  = vAmigaDOS ? rs::disabled : rs::hidden,
+             .args   = {
+                 { .name = { "seconds", "Delay" } },
+-                { .name = { "unit", "Unit" }, .flags = rs::opt } // unused
++                { .name = { "unit", "Unit (seconds or frames)" }, .flags = rs::opt }
+             },
+             .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
+-                
+-                auto seconds = parseNum(args.at("seconds"));
+-                shell.scheduleWakeup(SEC(seconds));
++
++                auto count = parseNum(args.at("seconds"));
++                auto unit = args.contains("unit") ? args.at("unit") : "seconds";
++
++                if (unit.rfind("frame", 0) == 0) {
++
++                    // Wake up at the start (v=0, h=0) of the count-th frame
++                    // boundary ahead, so input changes land frame-aligned
++                    auto toNext = agnus.pos.diff(0, 0);
++                    if (toNext <= 0) toNext = agnus.pos.cyclesPerFrame();
++                    auto rest = count > 1 ? agnus.pos.cyclesPerFrames(count - 1) : 0;
++                    shell.scheduleWakeup(DMA_CYCLES(toNext + rest));
++
++                } else {
++
++                    shell.scheduleWakeup(SEC(count));
++                }
+                 throw ScriptInterruption();
+             }
+         });
