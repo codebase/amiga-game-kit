@@ -9,7 +9,7 @@ A project's art lives in art/:
     art/art.toml      one table per asset:
                           [player]
                           source = "player.txt"   # or a .png
-                          kind = "sprite"         # sprite | bob
+                          kind = "sprite"         # sprite | bob | bitmap
                           channel = 0             # sprites: hardware channel 0-7
                           [enemy]
                           source = "enemy.png"
@@ -40,6 +40,10 @@ Rules enforced (errors say what to change):
           sprites on a pair must agree on colours.
   bob:    every colour must be in palette.txt (depth = [art] depth or enough
           bits for the palette); width is padded to a multiple of 16.
+  bitmap: like bob but without a mask (backgrounds, parallax bands, tilesets:
+          frames/tiles stacked vertically). `depth = N` per asset overrides
+          [art] depth; `wrap_x = 320` appends the first 320 columns at the
+          right so a looping band has no seam (ART_X_LOOP_W = original width).
 PNG colours are rounded to the Amiga's 12-bit palette. A sprite PNG with more
 than 3 colours is reduced (warning + preview); a BOB colour that isn't in the
 palette maps to the nearest one (warning).
@@ -175,10 +179,25 @@ class Asset:
             raise ArtError(f"[{name}]: source must be .txt or .png")
         if self.kind == "sprite":
             self._check_sprite()
-        elif self.kind == "bob":
-            self._map_bob(palette, depth)
+        elif self.kind in ("bob", "bitmap"):
+            if self.kind == "bitmap" and cfg.get("wrap_x"):
+                # Append the first wrap_x columns at the right edge, so a
+                # looping band can be displayed at any offset without a seam.
+                wx = cfg["wrap_x"]
+                if wx > self.w:
+                    raise ArtError(f"[{name}]: wrap_x ({wx}) is wider than the image ({self.w})")
+                self.frames = [[row + row[:wx] for row in fr] for fr in self.frames]
+                self.loop_w = self.w
+                self.w += wx
+            own = cfg.get("palette")
+            if own == "auto":
+                palette = self._auto_palette(cfg.get("depth", depth))
+            elif own:
+                palette = parse_palette(os.path.join(art_dir, own))
+            self.own_palette = palette if own else None
+            self._map_bob(palette, cfg.get("depth", depth))
         else:
-            raise ArtError(f"[{name}]: kind must be 'sprite' or 'bob'")
+            raise ArtError(f"[{name}]: kind must be 'sprite', 'bob' or 'bitmap'")
 
     def colors_used(self):
         seen = {}
@@ -215,11 +234,32 @@ class Asset:
         self.sprite_colors = order + [0x000] * (3 - len(order))
         self.index = {c: i + 1 for i, c in enumerate(order)}
 
+    def _auto_palette(self, depth):
+        """Index 0 = transparent / background (the copper can colour it);
+        1..2^depth-1 = the image's most important colours, dark to light."""
+        used = self.colors_used()
+        if not used:
+            raise ArtError(f"[{self.name}]: image is fully transparent")
+        n = (1 << depth) - 1
+        keep = _reduce(used, n) if len(used) > n else list(used)
+        if len(used) > n:
+            self.warnings.append(f"{len(used)} colours reduced to {n} for {depth} bitplanes - check the preview")
+        keep.sort(key=lambda c: sum(to_rgb8(c)))
+        pal = {0: 0x000}
+        pal.update({i + 1: c for i, c in enumerate(keep)})
+        # Remap every pixel onto the kept colours now (map_bob then finds exact matches)
+        remap = {c: min(keep, key=lambda k: dist(c, k)) for c in used}
+        self.frames = [[[None if c is None else remap[c] for c in row] for row in fr] for fr in self.frames]
+        return pal
+
     def _map_bob(self, palette, depth):
         if not palette:
             raise ArtError(f"[{self.name}]: BOBs use the game palette - create art/palette.txt")
         self.depth = depth
-        allowed = {i: c for i, c in palette.items() if i < (1 << depth)}
+        # Transparent pixels become index 0 in a bitmap, so colour matches start at 1
+        # for auto palettes (index 0 is reserved there).
+        allowed = {i: c for i, c in palette.items() if i < (1 << depth)
+                   and not (i == 0 and self.cfg.get("palette") == "auto")}
         by_color = {}
         for i, c in sorted(allowed.items()):
             by_color.setdefault(c, i)
@@ -261,7 +301,7 @@ class Asset:
                         p0 |= bit if i & 1 else 0
                         p1 |= bit if i & 2 else 0
                     out += [p0, p1]
-                else:
+                else:  # bob / bitmap (bitmap ignores the mask words)
                     planes = [[0] * self.words for _ in range(self.depth)]
                     mask = [0] * self.words
                     for x, c in enumerate(row):
@@ -275,7 +315,8 @@ class Asset:
                                 planes[p][x >> 4] |= bit
                     for p in range(self.depth):
                         out += planes[p]
-                    out += mask
+                    if self.kind == "bob":
+                        out += mask
         return out
 
     def preview(self, zoom=4, palette=None):
@@ -288,12 +329,14 @@ class Asset:
             for f, fr in enumerate(self.frames):
                 for x in range(self.w * zoom):
                     c = fr[y // zoom][x // zoom]
-                    if c is None:
+                    if c is None and self.kind == "bitmap":
+                        rgb += bytes(to_rgb8(palette.get(0, 0)))  # bitmaps have no transparency
+                    elif c is None:
                         shade = 0x55 if ((x // 4) + (y // 4)) % 2 else 0x77
                         rgb += bytes((shade, shade, shade))
                     else:
                         shown = c
-                        if self.kind == "bob":
+                        if self.kind != "sprite":
                             shown = palette[self.index[c]]
                         rgb += bytes(to_rgb8(shown))
                 if f < len(self.frames) - 1:
@@ -347,7 +390,8 @@ def build(project_dir, out_dir=None):
 
     os.makedirs(os.path.join(out_dir, "preview"), exist_ok=True)
     for a in assets:
-        a.preview(palette=palette).save_png(os.path.join(out_dir, "preview", f"{a.name}.png"))
+        a.preview(palette=getattr(a, "own_palette", None) or palette).save_png(
+            os.path.join(out_dir, "preview", f"{a.name}.png"))
     _write_c(assets, palette, depth, out_dir)
     return assets
 
@@ -406,6 +450,36 @@ def _write_c(assets, palette, depth, out_dir):
             # Sprite colour index 1..3 -> slots base..base+2 (index 0 = transparent)
             c += [f"\tpPalette[{base + i}] = 0x{col:03X};" for i, col in enumerate(a.sprite_colors)]
             c += ["}", ""]
+        elif a.kind == "bitmap":
+            wpx = a.words * 16
+            h += [f"#define ART_{U}_BITMAP_W {wpx}"]
+            if getattr(a, "own_palette", None):
+                n = 1 << a.depth
+                h += [f"/** This bitmap's own palette ({n} entries; [0] is the transparent/background",
+                      f" *  slot - leave it to the copper/background). Load it with copper MOVEs",
+                      f" *  where this band starts. */",
+                      f"extern const UWORD g_pArt{N}Palette[{n}];"]
+                c += [f"const UWORD g_pArt{N}Palette[{n}] = {{",
+                      "	" + ", ".join(f"0x{a.own_palette.get(i, 0):03X}" for i in range(n)), "};", ""]
+            if getattr(a, "loop_w", None):
+                h += [f"#define ART_{U}_LOOP_W {a.loop_w}  // scroll offset wraps at this width"]
+            h += [f"/** {a.depth} planes, interleaved; frames (tiles) stacked vertically,",
+                  f" *  frame f starts at row f * ART_{U}_H. Transparent pixels are colour 0. */",
+                  f"tBitMap *art{N}Create(void);", ""]
+            c += [f"tBitMap *art{N}Create(void) {{",
+                  f"	tBitMap *pBm = bitmapCreate(",
+                  f"		{wpx}, ART_{U}_H * ART_{U}_FRAMES, {a.depth}, BMF_CLEAR | BMF_INTERLEAVED",
+                  f"	);",
+                  f"	const UWORD *pSrc = s_pArt{N};",
+                  f"	for(UWORD y = 0; y < ART_{U}_H * ART_{U}_FRAMES; ++y) {{",
+                  f"		for(UBYTE p = 0; p < {a.depth}; ++p) {{",
+                  f"			UWORD *pDst = (UWORD *)(pBm->Planes[p] + y * pBm->BytesPerRow);",
+                  f"			for(UBYTE w = 0; w < {a.words}; ++w) {{",
+                  f"				pDst[w] = *pSrc++;",
+                  f"			}}",
+                  f"		}}",
+                  f"	}}",
+                  f"	return pBm;", "}", ""]
         else:
             wpx = a.words * 16
             h += [f"#define ART_{U}_BITMAP_W {wpx}",

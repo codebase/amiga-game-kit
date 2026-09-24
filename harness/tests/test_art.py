@@ -157,3 +157,30 @@ class RetroDiffusionOfflineTests(unittest.TestCase):
             rd.CREDENTIALS = old_path
             if old_env is not None:
                 os.environ["RD_API_KEY"] = old_env
+
+
+class BitmapTests(unittest.TestCase):
+    def test_wrap_x_and_auto_palette(self):
+        text = ("colors\n  .  transparent\n  A 0xF00\n  B 0x00F\n  C 0x0F0\nframe\n"
+                "AB..............\nC...............\n")
+        d = project({"art.toml": '[band]\nsource = "b.txt"\nkind = "bitmap"\ndepth = 2\n'
+                                 'palette = "auto"\nwrap_x = 4\n', "b.txt": text})
+        (a,) = art.build(d)
+        self.assertEqual((a.w, a.loop_w), (20, 16))          # 16 + 4 wrapped columns
+        self.assertEqual(a.frames[0][0][16:18], [0xF00, 0x00F])  # start repeated at the right
+        self.assertEqual(a.own_palette[0], 0x000)            # 0 = transparent slot
+        self.assertEqual(sorted(a.own_palette.values())[1:], sorted([0xF00, 0x00F, 0x0F0]))
+        h = open(os.path.join(d, "build", "art", "art.h")).read()
+        self.assertIn("ART_BAND_LOOP_W 16", h)
+        self.assertIn("g_pArtBandPalette[4]", h)
+        # No mask words for a bitmap: 2 planes x 2 words per row
+        self.assertEqual(len(a.planar()), 2 * 2 * 2)
+
+    def test_auto_palette_reduces_to_depth(self):
+        cols = ["0xF00", "0x0F0", "0x00F", "0xFF0", "0x0FF"]
+        text = "colors\n" + "".join(f"  {chr(65 + i)} {c}\n" for i, c in enumerate(cols)) + "frame\nABCDE\n"
+        d = project({"art.toml": '[b]\nsource = "b.txt"\nkind = "bitmap"\ndepth = 2\npalette = "auto"\n',
+                     "b.txt": text})
+        (a,) = art.build(d)
+        self.assertEqual(len(a.own_palette), 4)               # 0 + 3 colours for 2 planes
+        self.assertTrue(any("reduced to 3" in w for w in a.warnings))

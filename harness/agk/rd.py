@@ -64,15 +64,18 @@ def palette_png(colors):
     return base64.b64encode(Image(rgb, len(colors), 1).to_png()).decode()
 
 
-def generate(prompt, width, height, colors, style=DEFAULT_STYLE, seed=None, n=1, dry_run=False):
+def generate(prompt, width, height, colors, style=DEFAULT_STYLE, seed=None, n=1, dry_run=False,
+             tile_x=False, remove_bg=True):
     """Returns (list of PNG bytes, cost, remaining balance)."""
     body = {
         # The API's guidance: describe the subject, give a plain contrasting
         # background, and let remove_bg make it transparent.
-        "prompt": f"{prompt}, on a plain white background",
+        "prompt": f"{prompt}, on a plain white background" if remove_bg else prompt,
         "prompt_style": style, "width": width, "height": height, "num_images": n,
-        "remove_bg": True,
+        "remove_bg": remove_bg,
     }
+    if tile_x:
+        body["tile_x"] = True
     if colors:
         body["input_palette"] = palette_png(colors)
     if seed is not None:
@@ -96,7 +99,7 @@ def generate(prompt, width, height, colors, style=DEFAULT_STYLE, seed=None, n=1,
     raise GenError(f"generation still running after 3 minutes (task {task_id})")
 
 
-def add_to_art_toml(art_dir, name, source, kind, channel=None, frame_width=None):
+def add_to_art_toml(art_dir, name, source, kind, channel=None, frame_width=None, extra=None):
     path = os.path.join(art_dir, "art.toml")
     text = open(path).read() if os.path.exists(path) else "# Reference: agk help-art\n"
     if f"[{name}]" in text:
@@ -106,6 +109,8 @@ def add_to_art_toml(art_dir, name, source, kind, channel=None, frame_width=None)
         lines.append(f"channel = {channel}")
     if frame_width:
         lines.append(f"frame_width = {frame_width}")
+    for k, v in (extra or {}).items():
+        lines.append(f"{k} = {json.dumps(v)}")
     with open(path, "w") as f:
         f.write(text.rstrip("\n") + "\n" + "\n".join(lines) + "\n")
     return True

@@ -180,11 +180,12 @@ def cmd_art_gen(args):
     art_dir = os.path.join(proj["dir"], "art")
     os.makedirs(art_dir, exist_ok=True)
     try:
-        colors = rd.sprite_colors_from(proj["dir"], args.colors)
+        colors = [] if args.free_colors else rd.sprite_colors_from(proj["dir"], args.colors)
         # Retro Diffusion's smallest sizes are 16 px; generate at least that big
         gw, gh = max(w, 16), max(h, 16)
         images, cost, left = rd.generate(args.prompt, gw, gh, colors, args.style, args.seed,
-                                         args.n, dry_run=args.dry_run)
+                                         args.n, dry_run=args.dry_run, tile_x=args.tile_x,
+                                         remove_bg=not args.opaque)
     except rd.GenError as e:
         raise SystemExit(f"art-gen: {e}")
     if args.dry_run:
@@ -199,8 +200,15 @@ def cmd_art_gen(args):
         with open(path, "wb") as f:
             f.write(png)
         saved.append(path)
+    extra = {}
+    if args.kind == "bitmap":
+        extra["depth"] = args.depth
+        if args.free_colors:
+            extra["palette"] = "auto"
+        if args.tile_x:
+            extra["wrap_x"] = 320
     rd.add_to_art_toml(art_dir, args.name, f"{args.name}.png", args.kind,
-                       channel=args.channel if args.kind == "sprite" else None)
+                       channel=args.channel if args.kind == "sprite" else None, extra=extra)
     print(f"generated {', '.join(rel(p) for p in saved)} (${cost}, balance ${left})")
     if (gw, gh) != (w, h):
         print(f"note: generated at {gw}x{gh} (the API minimum); crop or set frame sizes in art.toml")
@@ -469,7 +477,13 @@ def main(argv=None):
     p.add_argument("name")
     p.add_argument("prompt", help="describe the subject; the style handles the pixel-art look")
     p.add_argument("--project", default=None)
-    p.add_argument("--kind", choices=["bob", "sprite"], default="bob")
+    p.add_argument("--kind", choices=["bob", "sprite", "bitmap"], default="bob",
+                   help="bitmap = background/parallax band/tileset (no mask)")
+    p.add_argument("--depth", type=int, default=3, help="bitmap: bitplanes (colours = 2^depth)")
+    p.add_argument("--tile-x", action="store_true", help="seamless horizontal tiling (looping backgrounds)")
+    p.add_argument("--free-colors", action="store_true",
+                   help="let the model choose colours; the asset gets palette = \"auto\" (its own palette)")
+    p.add_argument("--opaque", action="store_true", help="keep the background (no transparency)")
     p.add_argument("--size", default="32x32", help="WxH in pixels (sprites: width <= 16)")
     p.add_argument("--channel", type=int, default=2, help="sprites: hardware channel")
     p.add_argument("--colors", help="restrict to these 12-bit colours, e.g. 0xFFF,0xFA0,0x000 "
