@@ -8,6 +8,7 @@
     agk unit [PROJECT]              compile game logic for the host and run tests/unit/*.c
     agk new DIR                     start a new game from the template
     agk art [PROJECT]               convert art/ (text or PNG) to sprites/BOBs + previews
+    agk art-gen NAME "PROMPT"       generate pixel art with Retro Diffusion (palette-constrained)
 
 PROJECT is a directory with an agk.toml (default: current directory).
 """
@@ -164,6 +165,45 @@ def cmd_art(args):
     proj = load_project(args.project)
     if not os.path.exists(os.path.join(proj["dir"], "art", "art.toml")):
         raise SystemExit("no art/art.toml in this project - see: agk help-art")
+    return 0 if _run_art(proj) else 1
+
+
+def cmd_art_gen(args):
+    from . import rd
+    proj = load_project(args.project)
+    try:
+        w, h = (int(v) for v in args.size.lower().split("x"))
+    except ValueError:
+        raise SystemExit("--size must look like 32x16")
+    if args.kind == "sprite" and w > 16:
+        raise SystemExit("a hardware sprite is at most 16 px wide - use --kind bob, or --size 16xH")
+    art_dir = os.path.join(proj["dir"], "art")
+    os.makedirs(art_dir, exist_ok=True)
+    try:
+        colors = rd.sprite_colors_from(proj["dir"], args.colors)
+        # Retro Diffusion's smallest sizes are 16 px; generate at least that big
+        gw, gh = max(w, 16), max(h, 16)
+        images, cost, left = rd.generate(args.prompt, gw, gh, colors, args.style, args.seed,
+                                         args.n, dry_run=args.dry_run)
+    except rd.GenError as e:
+        raise SystemExit(f"art-gen: {e}")
+    if args.dry_run:
+        print(f"would cost ${cost} (balance ${left}); nothing generated")
+        return 0
+    if not images:
+        raise SystemExit("art-gen: the API returned no images")
+    saved = []
+    for i, png in enumerate(images):
+        name = args.name if i == 0 else f"{args.name}_alt{i}"
+        path = os.path.join(art_dir, f"{name}.png")
+        with open(path, "wb") as f:
+            f.write(png)
+        saved.append(path)
+    rd.add_to_art_toml(art_dir, args.name, f"{args.name}.png", args.kind,
+                       channel=args.channel if args.kind == "sprite" else None)
+    print(f"generated {', '.join(rel(p) for p in saved)} (${cost}, balance ${left})")
+    if (gw, gh) != (w, h):
+        print(f"note: generated at {gw}x{gh} (the API minimum); crop or set frame sizes in art.toml")
     return 0 if _run_art(proj) else 1
 
 
@@ -423,6 +463,23 @@ def main(argv=None):
     p = sub.add_parser("art", help="convert art/ to Amiga sprites/BOBs and write previews")
     p.add_argument("project", nargs="?")
 
+    p = sub.add_parser("art-gen", help="generate pixel art with Retro Diffusion into art/ (needs RD_API_KEY)",
+                       description="Generates a PNG constrained to the game palette, saves it as art/NAME.png, "
+                                   "adds it to art.toml and converts it. Use --dry-run for a free price check.")
+    p.add_argument("name")
+    p.add_argument("prompt", help="describe the subject; the style handles the pixel-art look")
+    p.add_argument("--project", default=None)
+    p.add_argument("--kind", choices=["bob", "sprite"], default="bob")
+    p.add_argument("--size", default="32x32", help="WxH in pixels (sprites: width <= 16)")
+    p.add_argument("--channel", type=int, default=2, help="sprites: hardware channel")
+    p.add_argument("--colors", help="restrict to these 12-bit colours, e.g. 0xFFF,0xFA0,0x000 "
+                                    "(default: art/palette.txt)")
+    p.add_argument("--style", default="rd_plus__low_res",
+                   help="Retro Diffusion style (rd_plus__low_res $0.025; rd_pro__default $0.18, best)")
+    p.add_argument("--seed", type=int)
+    p.add_argument("-n", type=int, default=1, help="number of variants (saved as NAME_altN.png)")
+    p.add_argument("--dry-run", action="store_true", help="free price check; generates nothing")
+
     sub.add_parser("help-scenario", help="print the scenario language reference")
     sub.add_parser("help-art", help="print the art pipeline reference")
     sub.add_parser("help", help="show this help")
@@ -440,7 +497,7 @@ def main(argv=None):
         return 0
     try:
         return {"doctor": cmd_doctor, "build": cmd_build, "run": cmd_run, "test": cmd_test,
-                "unit": cmd_unit, "new": cmd_new, "art": cmd_art}[args.cmd](args)
+                "unit": cmd_unit, "new": cmd_new, "art": cmd_art, "art-gen": cmd_art_gen}[args.cmd](args)
     except runner.RunError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

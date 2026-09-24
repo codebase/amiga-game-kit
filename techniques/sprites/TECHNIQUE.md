@@ -25,6 +25,32 @@ agk test techniques/sprites    # 12/12 on a500, a500-ks31, a500-aros
 
 Whatever the source, the rules below are enforced and the preview shows the result.
 
+## Generating art with AI: `agk art-gen`
+
+```sh
+agk art-gen slime "a small green slime monster with big eyes, side view" --size 32x16
+```
+
+This calls [Retro Diffusion](https://retrodiffusion.ai/), a model trained on
+real pixel art at native resolution. It passes **the game's palette as
+`input_palette`** and asks for a transparent background. Then it:
+- saves `art/slime.png`
+- adds `[slime]` to `art.toml`
+- converts it and prints the preview path and the cost
+
+Measured: 12 s, **$0.024** with the default `rd_plus__low_res` style, every
+colour inside the palette (no warnings), and it drew correctly as a BOB in the
+game on the first try:
+
+| generated (8×) | in the game |
+|---|---|
+| ![](../../docs/img/ai-slime.png) | ![](../../docs/img/ai-slime-ingame.png) |
+
+- **`--dry-run`** is a free price check. `--style rd_pro__default` is the best quality, at $0.18. `-n 3` gives variants (`NAME_alt1.png` …).
+- **Sprites:** use `--kind sprite --size 16x16 --colors 0xFFF,0xFA0,0x000` to generate in the sprite's 3 colours.
+- **Key:** `RD_API_KEY`, or `~/.config/agk/credentials` with a line `RD_API_KEY=rdpk-...`. Never put it in the project.
+- **Animation:** Retro Diffusion can animate a start frame (walk, idle, attack) into a sprite sheet. That's not wired into `art-gen` yet; save the sheet as a PNG and set `frame_width`.
+
 ## The files
 
 ```

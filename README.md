@@ -74,6 +74,7 @@ an AI generator) in `art/`:
 - It **enforces the hardware's rules**, e.g. a sprite is 16 px wide with 3 colours, sprites on a channel pair share colours, and BOB colours must be in the palette. Problems come back as clear errors or warnings.
 - It writes zoomed **previews** of exactly what the Amiga will show.
 - Games call generated functions (`artPlayerCreate(frame)`, …). See `agk help-art` and `techniques/sprites`.
+- **`agk art-gen`** creates art with [Retro Diffusion](https://retrodiffusion.ai/) (pixel-art models, constrained to the game's palette): about $0.02 and 12 s per image. It needs your own API key in `RD_API_KEY` or `~/.config/agk/credentials`.
 
 ## Project structure
 

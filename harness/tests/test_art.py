@@ -112,3 +112,48 @@ class PngTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RetroDiffusionOfflineTests(unittest.TestCase):
+    """The parts of agk art-gen that don't need the network or a key."""
+
+    def test_palette_png_is_one_pixel_per_colour(self):
+        import base64
+        from agk import rd
+        png = base64.b64decode(rd.palette_png([0xF00, 0x0F0, 0x00F]))
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "pal.png")
+        with open(p, "wb") as f:
+            f.write(png)
+        w, h, px = load_png_rgba(p)
+        self.assertEqual((w, h), (3, 1))
+        self.assertEqual([c[:3] for c in px], [(255, 0, 0), (0, 255, 0), (0, 0, 255)])
+
+    def test_add_to_art_toml_once(self):
+        import tomllib
+        from agk import rd
+        d = project({"art.toml": "[art]\ndepth = 3\n"})
+        art_dir = os.path.join(d, "art")
+        self.assertTrue(rd.add_to_art_toml(art_dir, "slime", "slime.png", "bob"))
+        self.assertFalse(rd.add_to_art_toml(art_dir, "slime", "slime.png", "bob"))
+        with open(os.path.join(art_dir, "art.toml"), "rb") as f:
+            cfg = tomllib.load(f)
+        self.assertEqual(cfg["slime"], {"source": "slime.png", "kind": "bob"})
+
+    def test_key_from_credentials_file(self):
+        from agk import rd
+        d = tempfile.mkdtemp()
+        cred = os.path.join(d, "credentials")
+        with open(cred, "w") as f:
+            f.write("OTHER=x\nRD_API_KEY=rdpk-test\n")
+        old_env, old_path = os.environ.pop("RD_API_KEY", None), rd.CREDENTIALS
+        try:
+            rd.CREDENTIALS = cred
+            self.assertEqual(rd.api_key(), "rdpk-test")
+            rd.CREDENTIALS = os.path.join(d, "missing")
+            with self.assertRaisesRegex(rd.GenError, "RD_API_KEY"):
+                rd.api_key()
+        finally:
+            rd.CREDENTIALS = old_path
+            if old_env is not None:
+                os.environ["RD_API_KEY"] = old_env
