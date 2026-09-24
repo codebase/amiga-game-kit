@@ -1,0 +1,4 @@
+# The title screen: six copper bars and the sprite in the middle.
+screenshot start
+expect-serial "AGK ready"
+expect-no-serial "ERR|STACK SMASHED"

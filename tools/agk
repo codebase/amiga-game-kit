@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Amiga Game Kit CLI. Add tools/ to PATH to call it as plain `agk`.
+ROOT="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." && pwd)"
+PYTHONPATH="$ROOT/harness${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m agk "$@"

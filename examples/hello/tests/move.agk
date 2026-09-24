@@ -1,0 +1,9 @@
+# The sprite moves 2 pixels per frame while the stick is held.
+press right 20
+wait 2
+screenshot right
+expect-serial "x=192 y=120"
+press down+left 10
+wait 2
+screenshot down_left
+expect-serial "x=172 y=140"

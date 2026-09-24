@@ -49,8 +49,8 @@ static void createSpriteBitmap(void) {
 
 void genericCreate(void) {
 	dbgInit();
-	dbgPuts("AGK hello: boot\n");
-	dbgPuts("AGK vblankfreq=");
+	dbgPuts("AGK boot hello\n");
+	dbgPuts("AGK info vblankfreq=");
 	dbgPutNum(SysBase->VBlankFrequency);
 	dbgPuts(" gfxpal=");
 	dbgPutNum((GfxBase->DisplayFlags & PAL) ? 1 : 0);
@@ -95,7 +95,6 @@ void genericCreate(void) {
 
 	viewLoad(s_pView);
 	systemUnuse();
-	dbgPuts("AGK hello: ready\n");
 }
 
 void genericProcess(void) {
@@ -125,8 +124,9 @@ void genericProcess(void) {
 	spriteProcess(s_pSpr);
 	spriteProcessChannel(0);
 
-	// Machine-readable state line every 25 frames (0.5s PAL) for the harness.
-	if(s_uwFrame % 25 == 0) {
+	// Machine-readable state line whenever the sprite moves (and every
+	// 50 frames as a heartbeat) so tests can assert on game state.
+	if(wDx || wDy || s_uwFrame % 50 == 0) {
 		dbgPuts("AGK frame=");
 		dbgPutNum(s_uwFrame);
 		dbgPuts(" x=");
@@ -139,6 +139,12 @@ void genericProcess(void) {
 
 	copProcessBlocks();
 	vPortWaitForEnd(s_pVPort);
+
+	// Copper lists are double-buffered: after two frames the display shows
+	// our first real frame. Only then tell the harness we're ready.
+	if(s_uwFrame == 2) {
+		dbgPuts("AGK ready\n");
+	}
 }
 
 void genericDestroy(void) {

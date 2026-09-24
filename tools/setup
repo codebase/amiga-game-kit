@@ -21,10 +21,19 @@ mkdir -p "$TP"
 fetch https://github.com/dirkwhoffmann/vAmiga.git "$TP/vAmiga" "$VAMIGA_REV"
 fetch https://github.com/AmigaPorts/ACE.git "$TP/ACE" "$ACE_REV"
 
-# Adds `wait <n> frames` (frame-aligned) to RetroShell.
-if git -C "$TP/vAmiga" apply --check "$ROOT/harness/patches/vamiga-wait-frames.patch" 2>/dev/null; then
-  git -C "$TP/vAmiga" apply "$ROOT/harness/patches/vamiga-wait-frames.patch"
-fi
+# Local patches (all intended for upstream):
+#   vamiga-agk.patch    wait N frames, waitserial, agk screenshot/serial/snapsave/snapload,
+#                       frame-skip reset fix
+#   ace-ks13-pal.patch  detect PAL from Agnus on Kickstart 1.x
+apply_patch() { # repo patch
+  if git -C "$1" apply --check "$ROOT/patches/$2" 2>/dev/null; then
+    git -C "$1" apply "$ROOT/patches/$2"
+  elif ! git -C "$1" apply --reverse --check "$ROOT/patches/$2" 2>/dev/null; then
+    echo "error: patches/$2 does not apply to $1 (local changes?)" >&2; exit 1
+  fi
+}
+apply_patch "$TP/vAmiga" vamiga-agk.patch
+apply_patch "$TP/ACE" ace-ks13-pal.patch
 
 CMAKE_ARGS=(-DCMAKE_BUILD_TYPE=Release)
 if [ "$(uname)" = Darwin ] && command -v brew >/dev/null && [ -d "$(brew --prefix llvm 2>/dev/null)" ]; then

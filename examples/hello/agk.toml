@@ -1,0 +1,4 @@
+name = "hello"
+profile = "a500"
+test_profiles = ["a500", "a500-ks31", "a500-aros"]
+boot = "AGK ready"

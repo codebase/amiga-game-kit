@@ -1,0 +1,235 @@
+diff --git a/Core/Components/Denise/Denise.cpp b/Core/Components/Denise/Denise.cpp
+index 87200c4..8aa833f 100644
+--- a/Core/Components/Denise/Denise.cpp
++++ b/Core/Components/Denise/Denise.cpp
+@@ -122,6 +122,8 @@ Denise::setOption(Opt option, i64 value)
+         case Opt::DENISE_FRAME_SKIPPING:
+ 
+             config.frameSkipping = (isize)value;
++            // Apply immediately instead of after the pending skip run
++            if (frameSkips > config.frameSkipping) frameSkips = config.frameSkipping;
+             return;
+ 
+         case Opt::DENISE_HIDDEN_BITPLANES:
+diff --git a/Core/Misc/RetroShell/Console.cpp b/Core/Misc/RetroShell/Console.cpp
+index b661c82..d08ee3f 100644
+--- a/Core/Misc/RetroShell/Console.cpp
++++ b/Core/Misc/RetroShell/Console.cpp
+@@ -1185,16 +1185,112 @@ Console::initCommonCommands(RSCommand &root)
+             .flags  = vAmigaDOS ? rs::disabled : rs::hidden,
+             .args   = {
+                 { .name = { "seconds", "Delay" } },
+-                { .name = { "unit", "Unit" }, .flags = rs::opt } // unused
++                { .name = { "unit", "Unit (seconds or frames)" }, .flags = rs::opt }
+             },
+             .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
+-                
+-                auto seconds = parseNum(args.at("seconds"));
+-                shell.scheduleWakeup(SEC(seconds));
++
++                auto count = parseNum(args.at("seconds"));
++                auto unit = args.contains("unit") ? args.at("unit") : "seconds";
++
++                if (unit.rfind("frame", 0) == 0) {
++
++                    // Wake up at the start (v=0, h=0) of the count-th frame
++                    // boundary ahead, so input changes land frame-aligned
++                    auto toNext = agnus.pos.diff(0, 0);
++                    if (toNext <= 0) toNext = agnus.pos.cyclesPerFrame();
++                    auto rest = count > 1 ? agnus.pos.cyclesPerFrames(count - 1) : 0;
++                    shell.scheduleWakeup(DMA_CYCLES(toNext + rest));
++
++                } else {
++
++                    shell.scheduleWakeup(SEC(count));
++                }
+                 throw ScriptInterruption();
+             }
+         });
+         
++        //
++        // AGK harness extensions
++        //
++
++        root.add({
++
++            .tokens = { "waitserial" },
++            .chelp  = { "Pause the script until the serial log contains a text" },
++            .flags  = vAmigaDOS ? rs::disabled : rs::hidden,
++            .args   = {
++                { .name = { "text", "Text to wait for" } },
++                { .name = { "frames", "Timeout in frames" }, .flags = rs::opt }
++            },
++            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
++
++                auto frames = args.contains("frames") ? parseNum(args.at("frames")) : 3000;
++                shell.awaitSerial(args.at("text"), frames);
++                throw ScriptInterruption();
++            }
++        });
++
++        root.add({
++
++            .tokens = { "agk" },
++            .ghelp  = { "Amiga Game Kit harness helpers" },
++            .flags  = vAmigaDOS ? rs::disabled : rs::hidden
++        });
++
++        root.add({
++
++            .tokens = { "agk", "screenshot" },
++            .chelp  = { "Write the current frame as raw RGB without exiting" },
++            .args   = { { .name = { "path", "File path" } } },
++            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
++
++                auto path = host.makeAbsolute(args.at("path"));
++                std::ofstream file(path, std::ios::binary);
++                if (!file.is_open()) throw IOError(IOError::FILE_CANT_CREATE, path);
++                amiga.regressionTester.dumpTexture(amiga, file);
++            }
++        });
++
++        root.add({
++
++            .tokens = { "agk", "serial" },
++            .chelp  = { "Write everything the Amiga sent over serial to a file" },
++            .args   = { { .name = { "path", "File path" } } },
++            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
++
++                auto path = host.makeAbsolute(args.at("path"));
++                std::ofstream file(path, std::ios::binary);
++                if (!file.is_open()) throw IOError(IOError::FILE_CANT_CREATE, path);
++                file << serialPort.agkLog;
++            }
++        });
++
++        root.add({
++
++            .tokens = { "agk", "snapsave" },
++            .chelp  = { "Save a snapshot of the whole machine" },
++            .args   = { { .name = { "path", "File path" } } },
++            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
++
++                amiga.saveSnapshot(host.makeAbsolute(args.at("path")));
++            }
++        });
++
++        root.add({
++
++            .tokens = { "agk", "snapload" },
++            .chelp  = { "Restore a snapshot of the whole machine" },
++            .args   = { { .name = { "path", "File path" } } },
++            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
++
++                // Power on first so that running afterwards doesn't cold-boot
++                // over the restored state
++                emulator.powerOn();
++                amiga.loadSnapshot(host.makeAbsolute(args.at("path")));
++                emulator.run();
++            }
++        });
++
+         root.add({
+             
+             .tokens = { "shutdown" },
+diff --git a/Core/Misc/RetroShell/RetroShell.cpp b/Core/Misc/RetroShell/RetroShell.cpp
+index fc6320d..d2b3a74 100644
+--- a/Core/Misc/RetroShell/RetroShell.cpp
++++ b/Core/Misc/RetroShell/RetroShell.cpp
+@@ -374,9 +374,50 @@ RetroShell::setStream(std::ostream &os)
+     console.setStream(os);
+ }
+ 
++void
++RetroShell::awaitSerial(const string &pattern, isize frames)
++{
++    awaitPattern = pattern;
++    awaitFrames = frames;
++    scheduleWakeup(DMA_CYCLES(agnus.pos.cyclesPerFrame()));
++}
++
+ void
+ RetroShell::serviceEvent()
+ {
++    if (!awaitPattern.empty()) {
++
++        auto &log = serialPort.agkLog;
++        auto pos = log.find(awaitPattern, awaitOffset);
++
++        if (pos == string::npos) {
++
++            if (--awaitFrames > 0) {
++
++                // Not there yet: check again one frame later
++                scheduleWakeup(DMA_CYCLES(agnus.pos.cyclesPerFrame()));
++                return;
++            }
++
++            *this << "waitserial: timeout waiting for '" << awaitPattern << "'\n";
++
++            // Show what the Amiga did print; it's usually the best clue
++            auto tail = log.size() > 1000 ? log.substr(log.size() - 1000) : log;
++            std::erase(tail, '\r'); // the console treats CR as "clear line"
++            *this << "waitserial: serial log tail (" << isize(log.size()) << " bytes total):\n";
++            *this << "<<<\n" << tail << "\n>>>\n";
++            awaitPattern.clear();
++            cancelWakeup();
++            commands.clear();
++            msgQueue.put(Msg::RSH_ERROR, objid);
++            return;
++        }
++
++        // Later waits only match output that arrives after this match
++        awaitOffset = pos + awaitPattern.size();
++        awaitPattern.clear();
++    }
++
+     emulator.put(Command(Cmd::RSH_EXECUTE));
+     cancelWakeup();
+ }
+diff --git a/Core/Misc/RetroShell/RetroShell.h b/Core/Misc/RetroShell/RetroShell.h
+index 3d7c834..d98d32f 100644
+--- a/Core/Misc/RetroShell/RetroShell.h
++++ b/Core/Misc/RetroShell/RetroShell.h
+@@ -133,6 +133,13 @@ public:
+      */
+     void scheduleWakeup(Cycle delay);
+     void cancelWakeup();
++
++    // AGK: 'waitserial' pauses the script until the serial log contains a
++    // pattern (checked once per frame) or the frame budget runs out
++    string awaitPattern;
++    isize awaitFrames = 0;
++    usize awaitOffset = 0;
++    void awaitSerial(const string &pattern, isize frames);
+     
+     
+     //
+diff --git a/Core/Ports/SerialPort.cpp b/Core/Ports/SerialPort.cpp
+index b8a0833..d4440db 100644
+--- a/Core/Ports/SerialPort.cpp
++++ b/Core/Ports/SerialPort.cpp
+@@ -312,6 +312,7 @@ SerialPort::recordOutgoingByte(int byte)
+ 
+         // Record the incoming byte
+         outgoing += char(byte);
++        agkLog += char(byte);
+ 
+         // Inform the GUI if the record buffer had been empty
+         if (outgoing.length() == 1) msgQueue.put(Msg::SER_OUT);
+diff --git a/Core/Ports/SerialPort.h b/Core/Ports/SerialPort.h
+index db191e4..9274c6c 100644
+--- a/Core/Ports/SerialPort.h
++++ b/Core/Ports/SerialPort.h
+@@ -57,6 +57,11 @@ public:
+     std::u16string incoming;
+     std::u16string outgoing;
+ 
++public:
++
++    // AGK: every byte ever sent by the Amiga (not consumed by the GUI)
++    std::string agkLog;
++
+ 
+     //
+     // Methods

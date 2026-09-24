@@ -1,0 +1,7 @@
+# Holding a direction for a long time stops at the screen edge.
+press right 200
+press down 200
+wait 2
+screenshot corner
+expect-serial "x=304 y=240"
+expect-no-serial "x=30[5-9]|x=31"
