@@ -1,8 +1,12 @@
-"""Scenario files: a line-based script of what to do to a running game.
+r"""Scenario files: a line-based script of what to do to a running game.
 
-Time is measured in video frames (PAL: 50/s) from the moment the game is
-"ready" (the boot text appeared on serial). Every input change lands exactly
-on a frame boundary, so the same scenario always produces the same result.
+Time is measured in frames (PAL: 50/s) from the moment the game is "ready"
+(the boot text appeared on serial). With sync = "ticks" in agk.toml (the
+template's default) a frame is one iteration of the game's main loop, marked
+by agkPerfBegin(): input changes land right before the game reads its input,
+so the same scenario gives the same result on every machine profile no matter
+how long the game's frame work takes. With sync = "frames" (games that don't
+call agkPerfBegin) frames are video frames and changes land at line 0.
 
     # tests/move.agk
     press right 20          # hold joystick right for 20 frames, then release
@@ -14,8 +18,8 @@ on a frame boundary, so the same scenario always produces the same result.
 Commands:
     wait N                          run N frames
     wait-serial "TEXT" [TIMEOUT]    run until the literal TEXT appears on serial (timeout in frames,
-                                    default 500). Resumes on the first frame boundary after the text
-                                    has arrived; the game has usually run one more frame by then.
+                                    default 500). With tick sync it resumes at the start of the next
+                                    game frame; with frame sync, the game may run one more frame first.
     press INPUT [N]                 hold INPUT for N frames (default 1), then release it
     hold INPUT / release [INPUT]    hold until released; bare 'release' releases everything
     key CODE                        tap a raw Amiga keycode (e.g. 0x45 = Esc); vAmiga holds it
@@ -27,6 +31,8 @@ Commands:
     expect-no-serial "REGEX"        serial log must not match
     expect-color SHOT X Y 0xRGB     pixel X,Y (game coordinates, 320x256) of screenshot SHOT
                                     must be the 12-bit Amiga colour 0xRGB (e.g. 0xFA0)
+    expect-no-dropped-frames        the game never missed a frame (needs agk/perf.h in the game)
+    expect-max-load PERCENT         no frame used more than PERCENT of the frame time (agk/perf.h)
 
 Goldens: `agk test` compares each screenshot with tests/golden/<test>/<shot>.png
 (shared by all profiles; a profile that differs on purpose gets
@@ -34,6 +40,17 @@ tests/golden/<test>/<profile>/<shot>.png). Record them with `agk test --update`.
 
 INPUT is up, down, left, right, fire, fire2, or a combination such as right+fire.
 Joystick commands go to port 2 (the normal game port).
+
+Regexes are Python `re.search` with MULTILINE: ^ and $ match at line starts and
+ends, and . does not cross lines (use [\s\S] for that). Backslashes inside
+"..." reach the regex unchanged ("\d+" works).
+
+Timing: the game reads the joystick once per frame, so holding for N frames
+moves it N times. The game's own frame counter doesn't equal scenario time (it
+started counting before AGK ready). A screenshot shows the last frame the
+display finished; with double buffering that is one step behind the serial
+log. To check an exact state, sync on the game's own output (wait-serial
+"x=100"), then screenshot.
 """
 import re
 import shlex
@@ -50,6 +67,11 @@ class ScenarioError(Exception):
     pass
 
 
+# Placeholder after wait-serial; the runner turns it into "wait 1 frames" in
+# frame sync and drops it in tick sync (which resumes on a tick already).
+REALIGN = "#realign"
+
+
 def serial_text(text):
     """Encode text for vAmiga's waitserial (hex, so '=' etc. survive parsing)."""
     return "hex:" + text.encode("latin-1").hex()
@@ -64,6 +86,7 @@ class Scenario:
     regs: list = field(default_factory=list)          # (name, [components])
     expects: list = field(default_factory=list)       # (regex, should_match, lineno)
     colors: list = field(default_factory=list)        # (shot, x, y, (r4, g4, b4), lineno)
+    perf: list = field(default_factory=list)          # ("dropped", 0, lineno) / ("maxload", pct, lineno)
     origins: list = field(default_factory=list)       # scenario line number of each entry in lines
     frames: int = 0                                   # frames of scenario time
 
@@ -124,7 +147,7 @@ def parse(text, name="scenario"):
                 raise ScenarioError(f'line {lineno}: usage: wait-serial "TEXT" [TIMEOUT]')
             timeout = _int(args[1], lineno, "timeout") if len(args) == 2 else 500
             sc.lines.append(f"waitserial {serial_text(args[0])} {timeout}")
-            sc.lines.append("wait 1 frames")   # re-align to a frame boundary
+            sc.lines.append(REALIGN)   # frame sync: re-align to a frame boundary
 
         elif cmd in ("press", "hold"):
             if not args or len(args) > (2 if cmd == "press" else 1):
@@ -192,6 +215,19 @@ def parse(text, name="scenario"):
             except re.error as e:
                 raise ScenarioError(f"line {lineno}: bad regex: {e}")
             sc.expects.append((args[0], cmd == "expect-serial", lineno))
+
+        elif cmd == "expect-no-dropped-frames":
+            if args:
+                raise ScenarioError(f"line {lineno}: usage: expect-no-dropped-frames")
+            sc.perf.append(("dropped", 0, lineno))
+
+        elif cmd == "expect-max-load":
+            if len(args) != 1:
+                raise ScenarioError(f"line {lineno}: usage: expect-max-load PERCENT")
+            pct = _int(args[0], lineno, "percent")
+            if not 1 <= pct <= 100:
+                raise ScenarioError(f"line {lineno}: percent must be 1-100")
+            sc.perf.append(("maxload", pct, lineno))
 
         elif cmd == "expect-color":
             if len(args) != 4:

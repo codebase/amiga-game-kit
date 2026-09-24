@@ -3,15 +3,55 @@
 #include <ace/utils/custom.h>
 #include <hardware/intbits.h>
 
+static UBYTE s_isLineOpen;
+static UBYTE s_isReady;
+
+#ifdef AGK_CHANNEL_HOST
+//------------------------------------------------------------------ host channel
+// The emulator (AGK's patched vAmiga) picks the string up directly when the
+// CPU writes 0xA6E0, address high, address low to NOOP ($DFF1FE). Costs a few
+// instructions; on real hardware these writes do nothing.
+
+#define NOOP (*(volatile UWORD *)0xDFF1FE)
+
+void agkDebugInit(void) {
+}
+
+void agkDebugAsync(UBYTE isOn) {
+	(void)isOn;
+}
+
+void agkDebugFlush(void) {
+}
+
+void agkTick(void) {
+	NOOP = 0xA6E1;
+}
+
+void agkPrint(const char *szText) {
+	ULONG ulAddr = (ULONG)szText;
+	// Keep interrupts from splitting the 3-word sequence.
+	UWORD uwIntEna = g_pCustom->intenar & INTF_INTEN;
+	g_pCustom->intena = INTF_INTEN;
+	NOOP = 0xA6E0;
+	NOOP = (UWORD)(ulAddr >> 16);
+	NOOP = (UWORD)ulAddr;
+	if(uwIntEna) {
+		g_pCustom->intena = INTF_SETCLR | INTF_INTEN;
+	}
+}
+
+#else
+//---------------------------------------------------------------- serial channel
+// Real serial port at 115200 baud, for debugging on real hardware.
+
 // PAL colour clock 3546895 Hz / 115200 baud - 1
 #define AGK_SERPER 30
 #define SERDATR_TBE (1 << 13)
 #define AGK_QUEUE_SIZE 2048 // power of two
 
-static UBYTE s_isLineOpen;
-
 // Async mode: characters go into a ring buffer that the serial "transmit
-// buffer empty" interrupt drains, so printing costs the game almost nothing.
+// buffer empty" interrupt drains.
 static volatile UBYTE s_isAsync;
 static volatile UBYTE s_isSending;   // a character is in flight; TBE will follow
 static volatile UWORD s_uwHead, s_uwTail;
@@ -44,6 +84,9 @@ void agkDebugInit(void) {
 	g_pCustom->serper = AGK_SERPER;
 }
 
+void agkTick(void) {
+}
+
 void agkDebugAsync(UBYTE isOn) {
 	if(isOn && !s_isAsync) {
 		s_uwHead = s_uwTail = 0;
@@ -62,15 +105,14 @@ void agkDebugFlush(void) {
 	while(s_isAsync && (s_isSending || s_uwHead != s_uwTail)) continue;
 }
 
-static void agkPutc(char c) {
-	if(!s_isAsync) {
-		putcBlocking(c);
-		return;
-	}
+// Queue one character. Caller has the TBE interrupt disabled.
+static void enqueue(char c) {
 	UWORD uwNext = (s_uwHead + 1) & (AGK_QUEUE_SIZE - 1);
-	while(uwNext == s_uwTail) continue; // queue full: wait for the interrupt
-
-	g_pCustom->intena = INTF_TBE; // keep the interrupt out while we decide
+	while(uwNext == s_uwTail) {
+		// Queue full: let the interrupt drain some, then block it again.
+		g_pCustom->intena = INTF_SETCLR | INTF_TBE;
+		g_pCustom->intena = INTF_TBE;
+	}
 	if(!s_isSending) {
 		s_isSending = 1;
 		sendNow(c);
@@ -79,42 +121,73 @@ static void agkPutc(char c) {
 		s_pQueue[s_uwHead] = c;
 		s_uwHead = uwNext;
 	}
-	g_pCustom->intena = INTF_SETCLR | INTF_TBE;
 }
 
 void agkPrint(const char *szText) {
+	if(!s_isAsync) {
+		while(*szText) {
+			if(*szText == '\n') {
+				putcBlocking('\r');
+			}
+			putcBlocking(*szText++);
+		}
+		return;
+	}
+	// One interrupt toggle per string, not per character.
+	g_pCustom->intena = INTF_TBE;
 	while(*szText) {
 		if(*szText == '\n') {
-			agkPutc('\r');
+			enqueue('\r');
 		}
-		agkPutc(*szText++);
+		enqueue(*szText++);
 	}
+	g_pCustom->intena = INTF_SETCLR | INTF_TBE;
 }
 
+#endif
+
+//--------------------------------------------------------------------- formatting
+
 void agkPrintNum(LONG lValue) {
+	// No division: the 68000 has no 32-bit divide, and libgcc's is slow.
+	static const ULONG pPowers[] = {
+		1000000000, 100000000, 10000000, 1000000, 100000, 10000, 1000, 100, 10, 1
+	};
 	char szBuf[12];
-	UBYTE ubPos = sizeof(szBuf) - 1;
+	UBYTE ubPos = 0;
 	ULONG ulAbs = lValue < 0 ? -(ULONG)lValue : (ULONG)lValue;
-	szBuf[ubPos] = '\0';
-	do {
-		// 32-bit divide is a libgcc call on 68000; fine for debug output.
-		szBuf[--ubPos] = '0' + (ulAbs % 10);
-		ulAbs /= 10;
-	} while(ulAbs);
 	if(lValue < 0) {
-		szBuf[--ubPos] = '-';
+		szBuf[ubPos++] = '-';
 	}
-	agkPrint(&szBuf[ubPos]);
+	UBYTE isStarted = 0;
+	for(UBYTE i = 0; i < sizeof(pPowers) / sizeof(pPowers[0]); ++i) {
+		char cDigit = '0';
+		while(ulAbs >= pPowers[i]) {
+			ulAbs -= pPowers[i];
+			++cDigit;
+		}
+		if(cDigit != '0' || isStarted || i == 9) {
+			szBuf[ubPos++] = cDigit;
+			isStarted = 1;
+		}
+	}
+	szBuf[ubPos] = '\0';
+	agkPrint(szBuf);
 }
 
 void agkReady(void) {
 	agkPrint("AGK ready\n");
+	s_isReady = 1;
+}
+
+UBYTE agkIsReady(void) {
+	return s_isReady;
 }
 
 void agkState(const char *szKey, LONG lValue) {
 	agkPrint(s_isLineOpen ? " " : "AGK ");
 	agkPrint(szKey);
-	agkPutc('=');
+	agkPrint("=");
 	agkPrintNum(lValue);
 	s_isLineOpen = 1;
 }

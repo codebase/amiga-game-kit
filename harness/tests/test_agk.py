@@ -39,7 +39,7 @@ class ScenarioTests(unittest.TestCase):
     def test_wait_serial_is_hex_encoded(self):
         # '=' would otherwise be parsed as a key=value argument by RetroShell
         sc = scenario.parse('wait-serial "score=1" 100')
-        self.assertEqual(sc.lines, ["waitserial hex:73636f72653d31 100", "wait 1 frames"])
+        self.assertEqual(sc.lines, ["waitserial hex:73636f72653d31 100", scenario.REALIGN])
 
     def test_expect_color(self):
         sc = scenario.parse("screenshot a\nexpect-color a 10 20 0xFA0")
@@ -77,6 +77,22 @@ class ScenarioTests(unittest.TestCase):
             with self.subTest(text=text):
                 with self.assertRaisesRegex(scenario.ScenarioError, msg):
                     scenario.parse(text)
+
+
+class SyncTests(unittest.TestCase):
+    def test_frames_mode_realigns_after_wait_serial(self):
+        from agk.runner import _sync_lines
+        lines = scenario.parse('press right 3\nwait-serial "x"').lines
+        self.assertEqual(_sync_lines(lines, "frames"),
+                         ["joystick2 pull right", "wait 3 frames", "joystick2 release x",
+                          "waitserial hex:78 500", "wait 1 frames"])
+
+    def test_ticks_mode_counts_game_frames(self):
+        from agk.runner import _sync_lines
+        lines = scenario.parse('press right 3\nwait-serial "x"\nwait 2').lines
+        self.assertEqual(_sync_lines(lines, "ticks"),
+                         ["joystick2 pull right", "wait 3 ticks", "joystick2 release x",
+                          "waitserial hex:78 500", "wait 2 ticks"])
 
 
 class GoldenTests(unittest.TestCase):

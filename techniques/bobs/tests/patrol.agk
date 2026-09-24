@@ -1,0 +1,37 @@
+# The enemy is a blitter BOB patrolling y=150 between x=90 and x=210 at
+# 1 px/frame. It must leave no trail and must not damage the walls.
+# (The picture lags the logic by one frame: double-buffered display.)
+
+# Mid-patrol, moving right: enemy spans x=153..184, y=150..165.
+wait 60
+screenshot mid
+expect-serial "frame=60 .*lives=3 ex=150"
+expect-color mid 153 162 0xD22    # body, left edge
+expect-color mid 161 154 0xFF8    # eye
+expect-color mid 163 156 0x200    # pupil
+expect-color mid 153 150 0x113    # transparent corner shows the background
+# No trail where it has been: just behind it, and further back.
+expect-color mid 152 162 0x113
+expect-color mid 140 158 0x113
+expect-color mid 100 162 0x113
+
+# At the right end (x=210) it overlaps the right pillar (x=240..255).
+wait 57
+screenshot over_wall
+expect-serial "ex=210"
+expect-color over_wall 240 162 0xD22
+expect-color over_wall 241 162 0xD22
+expect-color over_wall 242 162 0x468   # rest of the pillar untouched
+
+# 32 frames later it has turned and moved back to x=178: the pillar must be
+# restored exactly, and no trail left where it was.
+wait 32
+screenshot returned
+expect-color returned 178 162 0xD22
+expect-color returned 210 162 0x113
+expect-color returned 225 158 0x113
+expect-color returned 239 162 0x113
+expect-color returned 240 162 0x9BD    # pillar edge restored
+expect-color returned 241 162 0x468    # pillar inside restored
+expect-color returned 240 150 0x9BD
+expect-no-serial "ERR|STACK SMASHED"

@@ -7,7 +7,7 @@ import subprocess
 import time
 
 from . import profiles
-from .scenario import serial_text
+from .scenario import REALIGN, serial_text
 from .image import Image
 from .paths import CACHE, VAMIGA
 
@@ -88,6 +88,23 @@ def _emulator_error(out, line_to_source=None, script=None):
     return "emulator exited with an error (see emulator.log)"
 
 
+def _nearest_color(screen, x, y, want, radius=24):
+    """Where is the expected colour closest to (x,y)? Helps place checks."""
+    best = None
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            px, py = x + dx, y + dy
+            if 0 <= px < screen.width and 0 <= py < screen.height:
+                r, g, b = screen.pixel(px, py)
+                if (r >> 4, g >> 4, b >> 4) == want:
+                    d = abs(dx) + abs(dy)
+                    if best is None or d < best[0]:
+                        best = (d, px, py)
+    if best:
+        return f"; nearest 0x{want[0]:X}{want[1]:X}{want[2]:X} is at ({best[1]},{best[2]})"
+    return f"; no 0x{want[0]:X}{want[1]:X}{want[2]:X} within {radius}px"
+
+
 def _extract_regs(out, comps):
     """Collect the output block printed after each 'r <comp>' echo line."""
     blocks, current = {}, None
@@ -139,7 +156,21 @@ def _prune_cache(keep=24):
                 os.remove(path)
 
 
-def run(adf, profile_name, scenario, outdir, boot_text, fresh=False):
+def _sync_lines(lines, sync):
+    """Adapt scenario lines to the sync mode: 'frames' (video frames) or
+    'ticks' (game frames marked by agkPerfBegin/agkTick)."""
+    out = []
+    for l in lines:
+        if l == REALIGN:
+            if sync == "frames":
+                out.append("wait 1 frames")
+            continue
+        m = re.match(r"^wait (\d+) frames$", l)
+        out.append(f"wait {m.group(1)} ticks" if m and sync == "ticks" else l)
+    return out
+
+
+def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frames"):
     """Play a parsed scenario. Returns a result dict (never raises for test failures)."""
     os.makedirs(outdir, exist_ok=True)
     for f in os.listdir(outdir):
@@ -166,9 +197,14 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False):
     # Scenario time 0 is one full frame after the boot snapshot point: video
     # buffers aren't part of snapshots, so this makes the first screenshot
     # identical whether we booted fresh or restored.
-    lines.append("wait 1 frames")
+    if sync == "ticks":
+        # Scenario time 0 = the start of a game frame, after a full frame has
+        # been drawn since the snapshot point.
+        lines += ["wait 1 frames", "agk sync true", "wait 1 ticks"]
+    else:
+        lines.append("wait 1 frames")
     first = len(lines) + 1   # script line number (1-based) of the scenario's first line
-    lines += [l.replace("{out}", outdir) for l in scenario.lines]
+    lines += _sync_lines([l.replace("{out}", outdir) for l in scenario.lines], sync)
 
     def line_to_source(n):
         i = n - first
@@ -208,17 +244,42 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False):
             result["ok"] = False
             result["failures"].append(f"screenshot '{name}' was not produced")
 
+    if scenario.perf:
+        reports = [dict(kv.split("=") for kv in re.findall(r"\w+=\d+", l))
+                   for l in serial.splitlines() if l.startswith("AGK perf ")]
+        for kind, limit, lineno in scenario.perf:
+            if not reports:
+                result["ok"] = False
+                result["failures"].append(
+                    f"line {lineno}: no 'AGK perf' lines on serial - call agkPerfBegin()/agkPerfEnd() "
+                    f"(agk/perf.h) every frame; reports come every 50 frames, so run at least that long")
+                break
+            if kind == "dropped":
+                dropped = sum(int(r.get("dropped", 0)) for r in reports)
+                if dropped:
+                    result["ok"] = False
+                    result["failures"].append(f"line {lineno}: {dropped} dropped frame(s) "
+                                              f"(worst load {max(int(r.get('maxload', 0)) for r in reports)}%)")
+            else:
+                worst = max(int(r.get("maxload", 0)) for r in reports)
+                if worst > limit:
+                    result["ok"] = False
+                    result["failures"].append(f"line {lineno}: a frame used {worst}% of the frame time, limit {limit}%")
+        result["perf"] = reports
+
     for shot, x, y, want, lineno in scenario.colors:
         info = result["screenshots"].get(shot)
         if not info:
             continue  # missing screenshot is already reported
-        r, g, b = Image.load_png(info["screen_png"]).pixel(x, y)
+        screen = Image.load_png(info["screen_png"])
+        r, g, b = screen.pixel(x, y)
         got = (r >> 4, g >> 4, b >> 4)
         if got != want:
             result["ok"] = False
+            hint = _nearest_color(screen, x, y, want)
             result["failures"].append(
                 f"line {lineno}: pixel ({x},{y}) of '{shot}' is 0x{got[0]:X}{got[1]:X}{got[2]:X}, "
-                f"expected 0x{want[0]:X}{want[1]:X}{want[2]:X}")
+                f"expected 0x{want[0]:X}{want[1]:X}{want[2]:X}" + hint)
 
     for name, comps in scenario.regs:
         text = _extract_regs(out, comps)

@@ -39,8 +39,11 @@ the screenshots as images. If `agk` isn't on your PATH, it's `{{kit}}/tools/agk`
 - `regs NAME cpu copper`
 - `dump-mem NAME 0x0 0x80000`
 
-Time is in frames: 50 per second, starting when the game prints `AGK ready`.
-Runs are deterministic, so the same scenario gives the same pixels every time.
+Time is in game frames: 50 per second, starting when the game prints `AGK ready`.
+`agkPerfBegin()` at the top of each frame marks the frames, and `sync = "ticks"`
+in agk.toml tells the harness to count them. Keep that call first in
+`genericProcess()`. Runs are deterministic, so the same scenario gives the
+same pixels on every profile, every time.
 
 ### Golden images
 `tests/golden/<test>/<shot>.png` are the approved screenshots, shared by all
@@ -70,8 +73,29 @@ layer that maps state to hardware.
 - `agkPrint("AGK level 2\n")` prints free text; `wait-serial "level 2"` syncs a test on it.
 - `agkReady()` has already been called for you: the template calls it once the first frame is on screen. Keep that behaviour if you restructure startup.
 
-Print when something **changes**, not every frame. Each character busy-waits
-about 87 µs.
+Printing is almost free in the emulator: the default "host" channel hands
+strings straight to it, so a status line every frame is fine. For values that
+change every frame (an enemy's x), a line every frame or a heartbeat every N
+frames both work. For real hardware, `AGK_DEBUG_CHANNEL serial` (see
+CMakeLists.txt) uses the serial port, where every character does cost time.
+
+## Performance: measure, don't guess
+
+`main.c` wraps each frame in `agkPerfBegin()` … `agkPerfEnd()`. Every 50
+frames this prints `AGK perf frames=50 dropped=0 load=9 maxload=11`:
+- **load** and **maxload** are the average and worst % of the 1/50 s frame spent on your code.
+- **dropped** counts frames that missed the vertical blank. That's visible as stutter or half speed.
+
+`tests/perf.agk` guards this with `expect-no-dropped-frames` and
+`expect-max-load 60`. Keep it passing:
+- After adding something expensive, look at `maxload`.
+- If a change pushes it up a lot, the usual fixes are:
+  - move work out of per-frame code (precompute and use lookup tables)
+  - avoid `int`/`long` multiply and divide
+  - draw only what changed
+- Measure again after each fix.
+
+Baseline: the template uses about 4% idle and about 9% while moving.
 
 ## Amiga facts that bite
 
@@ -100,6 +124,16 @@ about 87 µs.
 - After `systemUnuse()` the game owns the hardware: don't call AmigaOS (DOS, Intuition, graphics.library).
 - Load files before `systemUnuse()`, or wrap them in `systemUse()` … `systemUnuse()`.
 - Kickstart 1.3 is the baseline. Don't use OS functions newer than V34.
+
+## Techniques: copy what's proven
+
+`{{kit}}/techniques/` has small, complete games. Each one is tested on every
+profile and comes with a `TECHNIQUE.md` covering the recipe, the gotchas and
+measured frame cost:
+- `bobs`: blitter objects, i.e. masked, double-buffered, background restore, no trails. Read it before drawing anything with the blitter; ACE's own BOB guide has a wrong signature.
+
+`{{kit}}/docs/references.md` lists open-source Amiga games and what each is
+good for studying, with licences.
 
 ## ACE documentation
 

@@ -1,0 +1,7 @@
+# Frame budget guard: busy movement must never drop a frame.
+# Tighten the limit as the game grows; see agk/perf.h.
+press right+down 60
+press left 60
+press up+left 40
+expect-no-dropped-frames
+expect-max-load 60

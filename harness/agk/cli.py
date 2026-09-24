@@ -3,6 +3,7 @@
     agk doctor                      check toolchain, emulator, ROMs
     agk build [PROJECT]             compile + make bootable ADF
     agk run [PROJECT] [-s STEP]...  boot, play steps, save screenshots + serial
+    agk run tests/NAME.agk          run one scenario file (same as -f)
     agk test [PROJECT] [--update]   run tests/*.agk, compare screenshots to goldens
     agk unit [PROJECT]              compile game logic for the host and run tests/unit/*.c
     agk new DIR                     start a new game from the template
@@ -41,16 +42,19 @@ def load_project(path):
         "boot": cfg.get("boot", "AGK ready"),
         "adf": os.path.join(path, "build", f"{name}.adf"),
         "unit_sources": cfg.get("unit_sources", []),
+        "sync": cfg.get("sync", "frames"),
     }
 
 
 def _newest_source(proj):
     newest = 0.0
-    for base, dirs, files in os.walk(proj["dir"]):
-        dirs[:] = [d for d in dirs if d not in ("build", "tests", ".git")]
-        for f in files:
-            if f.endswith((".c", ".h", ".s", ".asm", ".i", ".txt", ".cmake", ".toml")) or f == "CMakeLists.txt":
-                newest = max(newest, os.path.getmtime(os.path.join(base, f)))
+    # The kit's runtime library is compiled into every game too.
+    for root in (proj["dir"], os.path.join(ROOT, "runtime")):
+        for base, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if d not in ("build", "tests", ".git")]  # prune in place
+            for f in files:
+                if f.endswith((".c", ".h", ".s", ".asm", ".i", ".cmake", ".toml")) or f == "CMakeLists.txt":
+                    newest = max(newest, os.path.getmtime(os.path.join(base, f)))
     return newest
 
 
@@ -144,6 +148,10 @@ def _report(res, as_json):
 
 
 def cmd_run(args):
+    # Friendly: `agk run tests/foo.agk` means "run this scenario file".
+    if args.project and args.project.endswith(".agk") and os.path.isfile(args.project):
+        args.file = args.file or args.project
+        args.project = os.path.dirname(os.path.dirname(os.path.abspath(args.project)))
     proj = load_project(args.project)
     need_adf(proj, not args.no_build)
     if args.file:
@@ -157,8 +165,9 @@ def cmd_run(args):
     except scenario.ScenarioError as e:
         raise SystemExit(f"scenario error: {e}")
     profile = args.profile or proj["profile"]
-    outdir = os.path.abspath(args.out or os.path.join(proj["dir"], "build", "agk", profile, name))
-    res = runner.run(proj["adf"], profile, sc, outdir, proj["boot"], fresh=args.fresh)
+    # Separate from agk test's build/agk/<profile>/<test> so ad hoc runs don't clobber test output.
+    outdir = os.path.abspath(args.out or os.path.join(proj["dir"], "build", "agk-run", profile, name))
+    res = runner.run(proj["adf"], profile, sc, outdir, proj["boot"], fresh=args.fresh, sync=proj["sync"])
     _report(res, args.json)
     return 0 if res["ok"] else 1
 
@@ -234,7 +243,7 @@ def cmd_test(args):
                                 "failures": [f"{f}: {e}"], "screenshots": {}, "outdir": tdir})
                 continue
             outdir = os.path.join(proj["dir"], "build", "agk", profile, name)
-            res = runner.run(proj["adf"], profile, sc, outdir, proj["boot"])
+            res = runner.run(proj["adf"], profile, sc, outdir, proj["boot"], sync=proj["sync"])
             if not res["failures"] or res["screenshots"]:
                 _check_goldens(res, os.path.join(tdir, "golden", name), profile, args.update, refreshed)
             results.append(res)

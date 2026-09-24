@@ -1,0 +1,18 @@
+# Walk down into the patrolling enemy: lose a life and respawn at the start.
+wait 28
+hold down
+wait-serial "y=130"
+screenshot approach
+expect-color approach 152 132 0xFFF   # player's top edge, just above the enemy
+expect-color approach 138 160 0xD22   # enemy under it
+wait-serial "AGK hit"
+release
+wait 2
+screenshot respawned
+expect-serial "lives=3 ex=140\s+AGK frame=\d+ x=152 y=100 .*lives=2"
+expect-serial "AGK hit"
+expect-no-serial "gameover"
+# Player is back near the start (it walked 2 more frames before release)...
+expect-color respawned 152 104 0xFFF
+# ...and not where it was hit.
+expect-color respawned 152 132 0x113

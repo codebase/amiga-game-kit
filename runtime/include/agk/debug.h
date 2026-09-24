@@ -10,10 +10,13 @@
  *                                      frame is actually on screen
  *   agkState("x", x); agkEnd();     -> "AGK x=12 y=5" machine-readable state
  *
- * Speed: by default each character busy-waits ~87us (115200 baud). After
- * systemUnuse(), call agkDebugAsync(1): output then goes through a 2KB ring
- * buffer drained by the serial interrupt and costs the game almost nothing.
- * Call agkDebugAsync(0) before systemUse() - the OS must not see our handler.
+ * Channels (CMake AGK_DEBUG_CHANNEL):
+ *   host   (default) three writes to the NOOP register hand the string to
+ *          AGK's emulator - costs a few instructions, nothing on real hardware.
+ *   serial the real serial port at 115200 baud, for real-hardware debugging.
+ *          Each character costs CPU time; after systemUnuse() call
+ *          agkDebugAsync(1) to make it interrupt-driven, and agkDebugAsync(0)
+ *          before systemUse(). (Both are no-ops on the host channel.)
  *
  * Build with -DAGK_SERIAL=OFF for release: every call compiles to nothing.
  */
@@ -27,9 +30,12 @@
 void agkDebugInit(void);
 void agkDebugAsync(UBYTE isOn);
 void agkDebugFlush(void);
+/** Mark the start of a game frame for the harness (agkPerfBegin calls it). */
+void agkTick(void);
 void agkPrint(const char *szText);
 void agkPrintNum(LONG lValue);
 void agkReady(void);
+UBYTE agkIsReady(void);
 
 /** Start (or continue) an "AGK key=value ..." line. Finish it with agkEnd(). */
 void agkState(const char *szKey, LONG lValue);
@@ -40,9 +46,11 @@ void agkEnd(void);
 #define agkDebugInit() do {} while(0)
 #define agkDebugAsync(on) do { (void)(on); } while(0)
 #define agkDebugFlush() do {} while(0)
+#define agkTick() do {} while(0)
 #define agkPrint(sz) do { (void)(sz); } while(0)
 #define agkPrintNum(l) do { (void)(l); } while(0)
 #define agkReady() do {} while(0)
+#define agkIsReady() 1
 #define agkState(sz, l) do { (void)(sz); (void)(l); } while(0)
 #define agkEnd() do {} while(0)
 

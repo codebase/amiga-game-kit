@@ -1,4 +1,4 @@
-name = "{{name}}"
+name = "bobs"
 profile = "a500"                                     # default for agk run
 test_profiles = ["a500", "a500-ks31", "a500-aros"]   # agk test runs all of these
 sync = "ticks"                                       # waits count game frames (agkPerfBegin marks them)

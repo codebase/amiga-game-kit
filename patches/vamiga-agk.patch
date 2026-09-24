@@ -11,11 +11,25 @@ index 87200c4..8aa833f 100644
              return;
  
          case Opt::DENISE_HIDDEN_BITPLANES:
+diff --git a/Core/Components/Memory/Memory.cpp b/Core/Components/Memory/Memory.cpp
+index 1b7087b..a316d29 100644
+--- a/Core/Components/Memory/Memory.cpp
++++ b/Core/Components/Memory/Memory.cpp
+@@ -3095,6 +3095,9 @@ Memory::pokeCustom16(u32 addr, u16 value)
+         case 0x1FC >> 1: // FMODE (AGA)
+             agnus.pokeFMODE<s>(value); return;
+         case 0x1FE >> 1: // NO-OP
++            // AGK: CPU writes of 0xA6E0, ptr hi, ptr lo hand a C string to the
++            // test harness (no-ops on real hardware)
++            if constexpr (s == Accessor::CPU) serialPort.agkHostWrite(value);
+             copper.pokeNOOP(value); return;
+     }
+     
 diff --git a/Core/Misc/RetroShell/Console.cpp b/Core/Misc/RetroShell/Console.cpp
-index b661c82..ade653d 100644
+index b661c82..15c6ca4 100644
 --- a/Core/Misc/RetroShell/Console.cpp
 +++ b/Core/Misc/RetroShell/Console.cpp
-@@ -1185,16 +1185,125 @@ Console::initCommonCommands(RSCommand &root)
+@@ -1185,16 +1185,141 @@ Console::initCommonCommands(RSCommand &root)
              .flags  = vAmigaDOS ? rs::disabled : rs::hidden,
              .args   = {
                  { .name = { "seconds", "Delay" } },
@@ -30,7 +44,12 @@ index b661c82..ade653d 100644
 +                auto count = parseNum(args.at("seconds"));
 +                auto unit = args.contains("unit") ? args.at("unit") : "seconds";
 +
-+                if (unit.rfind("frame", 0) == 0) {
++                if (unit.rfind("tick", 0) == 0) {
++
++                    // Game frames (AGK ticks); time out after 4x as many video frames
++                    shell.awaitTicks(count, 4 * count + 250);
++
++                } else if (unit.rfind("frame", 0) == 0) {
 +
 +                    // Wake up at the start (v=0, h=0) of the count-th frame
 +                    // boundary ahead, so input changes land frame-aligned
@@ -86,6 +105,17 @@ index b661c82..ade653d 100644
 +            .tokens = { "agk" },
 +            .ghelp  = { "Amiga Game Kit harness helpers" },
 +            .flags  = vAmigaDOS ? rs::disabled : rs::hidden
++        });
++
++        root.add({
++
++            .tokens = { "agk", "sync" },
++            .chelp  = { "Match waitserial on game ticks (on) or video frames (off)" },
++            .args   = { { .name = { "mode", "on or off" } } },
++            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
++
++                shell.tickSync = parseBool(args.at("mode"));
++            }
 +        });
 +
 +        root.add({
@@ -146,10 +176,10 @@ index b661c82..ade653d 100644
              
              .tokens = { "shutdown" },
 diff --git a/Core/Misc/RetroShell/RetroShell.cpp b/Core/Misc/RetroShell/RetroShell.cpp
-index fc6320d..d2b3a74 100644
+index fc6320d..e510ceb 100644
 --- a/Core/Misc/RetroShell/RetroShell.cpp
 +++ b/Core/Misc/RetroShell/RetroShell.cpp
-@@ -374,9 +374,50 @@ RetroShell::setStream(std::ostream &os)
+@@ -374,9 +374,108 @@ RetroShell::setStream(std::ostream &os)
      console.setStream(os);
  }
  
@@ -161,13 +191,71 @@ index fc6320d..d2b3a74 100644
 +    scheduleWakeup(DMA_CYCLES(agnus.pos.cyclesPerFrame()));
 +}
 +
++void
++RetroShell::awaitTicks(isize ticks, isize timeoutFrames)
++{
++    awaitTickTarget = serialPort.agkTicks + ticks;
++    awaitFrames = timeoutFrames;
++    scheduleWakeup(DMA_CYCLES(agnus.pos.cyclesPerFrame()));
++}
++
++void
++RetroShell::onAgkTick()
++{
++    bool resume = false;
++
++    if (awaitTickTarget >= 0 && serialPort.agkTicks >= awaitTickTarget) {
++
++        awaitTickTarget = -1;
++        resume = true;
++    }
++    if (tickSync && !awaitPattern.empty()) {
++
++        auto pos = serialPort.agkLog.find(awaitPattern, awaitOffset);
++        if (pos != string::npos) {
++
++            awaitOffset = pos + awaitPattern.size();
++            awaitPattern.clear();
++            resume = true;
++        }
++    }
++    if (resume) {
++
++        // Run the script now, synchronously, at the start of the game frame
++        cancelWakeup();
++        exec();
++    }
++}
++
  void
  RetroShell::serviceEvent()
  {
++    if (awaitTickTarget >= 0) {
++
++        // Fallback timer while waiting for ticks: only detects a stuck game
++        if (--awaitFrames > 0) {
++
++            scheduleWakeup(DMA_CYCLES(agnus.pos.cyclesPerFrame()));
++            return;
++        }
++        *this << "waitticks: timeout - the game stopped marking frames (crashed, hung, or not calling agkPerfBegin)\n";
++        auto &log = serialPort.agkLog;
++        auto tail = log.size() > 1000 ? log.substr(log.size() - 1000) : log;
++        std::erase(tail, '\r');
++        *this << "waitserial: serial log tail (" << isize(log.size()) << " bytes total):\n";
++        *this << "<<<\n" << tail << "\n>>>\n";
++        awaitTickTarget = -1;
++        cancelWakeup();
++        commands.clear();
++        msgQueue.put(Msg::RSH_ERROR, objid);
++        return;
++    }
++
 +    if (!awaitPattern.empty()) {
 +
 +        auto &log = serialPort.agkLog;
-+        auto pos = log.find(awaitPattern, awaitOffset);
++        // In tick mode only ticks may match (determinism); frames just time out
++        auto pos = tickSync ? string::npos : log.find(awaitPattern, awaitOffset);
 +
 +        if (pos == string::npos) {
 +
@@ -201,10 +289,10 @@ index fc6320d..d2b3a74 100644
      cancelWakeup();
  }
 diff --git a/Core/Misc/RetroShell/RetroShell.h b/Core/Misc/RetroShell/RetroShell.h
-index 3d7c834..d98d32f 100644
+index 3d7c834..5b77865 100644
 --- a/Core/Misc/RetroShell/RetroShell.h
 +++ b/Core/Misc/RetroShell/RetroShell.h
-@@ -133,6 +133,13 @@ public:
+@@ -133,6 +133,22 @@ public:
       */
      void scheduleWakeup(Cycle delay);
      void cancelWakeup();
@@ -215,14 +303,61 @@ index 3d7c834..d98d32f 100644
 +    isize awaitFrames = 0;
 +    usize awaitOffset = 0;
 +    void awaitSerial(const string &pattern, isize frames);
++
++    // AGK tick sync: the game marks the start of each frame of its main loop
++    // (a NOOP write). In tick mode, waits count game frames and resume the
++    // script right at a tick - just before the game reads its input - so
++    // results don't depend on how long the game's frame work takes.
++    bool tickSync = false;
++    i64 awaitTickTarget = -1;
++    void awaitTicks(isize ticks, isize timeoutFrames);
++    void onAgkTick();
      
      
      //
 diff --git a/Core/Ports/SerialPort.cpp b/Core/Ports/SerialPort.cpp
-index b8a0833..d4440db 100644
+index b8a0833..9e811a3 100644
 --- a/Core/Ports/SerialPort.cpp
 +++ b/Core/Ports/SerialPort.cpp
-@@ -312,6 +312,7 @@ SerialPort::recordOutgoingByte(int byte)
+@@ -303,6 +303,37 @@ SerialPort::recordIncomingByte(int byte)
+     }
+ }
+ 
++void
++SerialPort::agkHostWrite(u16 value)
++{
++    switch (agkHostState) {
++
++        case 0: // Waiting for the magic word
++            if (value == 0xA6E0) agkHostState = 1;
++            if (value == 0xA6E1) { agkTicks++; retroShell.onAgkTick(); }
++            break;
++
++        case 1: // Upper half of the string address
++            agkHostPtr = u32(value) << 16;
++            agkHostState = 2;
++            break;
++
++        default: // Lower half: copy the NUL-terminated string into the log
++        {
++            agkHostPtr |= value;
++            agkHostState = 0;
++            {   SYNCHRONIZED
++                for (isize i = 0; i < 4096; i++) {
++                    auto c = mem.spypeek8<Accessor::CPU>(u32(agkHostPtr + i));
++                    if (c == 0) break;
++                    agkLog += char(c);
++                }
++            }
++            break;
++        }
++    }
++}
++
+ void
+ SerialPort::recordOutgoingByte(int byte)
+ {
+@@ -312,6 +343,7 @@ SerialPort::recordOutgoingByte(int byte)
  
          // Record the incoming byte
          outgoing += char(byte);
@@ -231,10 +366,10 @@ index b8a0833..d4440db 100644
          // Inform the GUI if the record buffer had been empty
          if (outgoing.length() == 1) msgQueue.put(Msg::SER_OUT);
 diff --git a/Core/Ports/SerialPort.h b/Core/Ports/SerialPort.h
-index db191e4..9274c6c 100644
+index db191e4..e7197e6 100644
 --- a/Core/Ports/SerialPort.h
 +++ b/Core/Ports/SerialPort.h
-@@ -57,6 +57,11 @@ public:
+@@ -57,6 +57,24 @@ public:
      std::u16string incoming;
      std::u16string outgoing;
  
@@ -242,6 +377,19 @@ index db191e4..9274c6c 100644
 +
 +    // AGK: every byte ever sent by the Amiga (not consumed by the GUI)
 +    std::string agkLog;
++
++    // AGK host channel: strings handed over via writes to NOOP ($DFF1FE)
++    void agkHostWrite(u16 value);
++
++    // AGK: number of game-frame marks (ticks) seen
++    i64 agkTicks = 0;
++
++private:
++
++    isize agkHostState = 0;
++    u32 agkHostPtr = 0;
++
++public:
 +
  
      //

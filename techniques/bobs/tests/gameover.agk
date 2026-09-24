@@ -1,0 +1,15 @@
+# Keep walking down into the enemy: 3 hits -> game over, player frozen.
+hold down
+wait-serial "gameover" 3000
+release
+expect-serial "lives=2"
+expect-serial "lives=1"
+expect-serial "x=152 y=100 .*lives=0"
+expect-serial "AGK gameover"
+# Joystick no longer moves the player.
+press right 20
+press up 10
+wait 2
+screenshot frozen
+expect-no-serial "lives=0 .*\n(.*\n)*AGK frame=\d+ x=(?!152 y=100)"
+expect-color frozen 152 100 0xFFF

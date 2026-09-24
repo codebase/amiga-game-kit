@@ -11,6 +11,7 @@
 #include <ace/utils/extview.h>
 #include <hardware/dmabits.h>
 #include <agk/debug.h>
+#include <agk/perf.h>
 #include "logic.h"
 
 // Palette indices. Sprite channels 0/1 use colours 17-19.
@@ -93,6 +94,7 @@ void genericCreate(void) {
 }
 
 void genericProcess(void) {
+	agkPerfBegin(); // frame budget meter: prints "AGK perf ... dropped= load= maxload="
 	keyProcess();
 	joyProcess();
 	if(keyCheck(KEY_ESCAPE)) {
@@ -121,6 +123,7 @@ void genericProcess(void) {
 	}
 
 	copProcessBlocks();
+	agkPerfEnd();
 	vPortWaitForEnd(s_pVPort);
 
 	// Copper lists are double-buffered: after two frames our first frame is
