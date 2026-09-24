@@ -90,10 +90,14 @@ PNGs work too, from any tool or AI generator.
 - `agkPrint("AGK level 2\n")` prints free text; `wait-serial "level 2"` syncs a test on it.
 - `agkReady()` has already been called for you: the template calls it once the first frame is on screen. Keep that behaviour if you restructure startup.
 
-Printing is almost free in the emulator: the default "host" channel hands
-strings straight to it, so a status line every frame is fine. For values that
-change every frame (an enemy's x), a line every frame or a heartbeat every N
-frames both work. For real hardware, `AGK_DEBUG_CHANNEL serial` (see
+Printing is cheap but not free. The default "host" channel hands each line
+straight to the emulator, but formatting it still takes CPU time: about 1–2%
+of a frame per value on a plain screen. With many bitplanes (e.g. a 6-plane
+dual playfield) the display DMA slows the CPU, and a 10-value line cost about
+12% of a frame (`examples/sidescroller`). So:
+- print when something changes, plus a heartbeat every N frames
+- keep lines short
+- check `maxload` in the perf lines For real hardware, `AGK_DEBUG_CHANNEL serial` (see
 CMakeLists.txt) uses the serial port, where every character does cost time.
 
 ## Performance: measure, don't guess

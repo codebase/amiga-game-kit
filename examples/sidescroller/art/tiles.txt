@@ -1,0 +1,63 @@
+# Level tiles for the front playfield (PF1): 16x16, stacked vertically.
+# frame 1 = grass top, 2 = dirt, 3 = stone slab (one-way platform).
+# '.' = transparent (colour 0): the parallax background shows through.
+colors
+  .  transparent
+  G  0x8D3
+  g  0x372
+  D  0x964
+  d  0x642
+  K  0x321
+  S  0xCCB
+  s  0x887
+frame
+.G...G..G....G..
+GG.GGGG.GG..GGG.
+GGGGGGGGGGGGGGGG
+GGgGGGGgGGGGgGGG
+gGggGgGggGgGGgGg
+gggggggggggggggg
+DgDgggDgDggDggDg
+DDDdDDDDDDdDDDDD
+DDDDDDdDDDDDDdDD
+DdDDDDDDKDDDDDDD
+DDDDDdDDDDDDdDDD
+DDKDDDDDDDdDDDDD
+DDDDdDDDDDDDDDDK
+DdDDDDDKDDDdDDDD
+DDDDDDDDDDDDDDDD
+DDDDdDDDdDDDDDdD
+frame
+DDDdDDDDDDdDDDDD
+DDDDDDdDDDDDDdDD
+DdDDDDDDKDDDDDDD
+DDDDDdDDDDDDdDDD
+DDKDDDDDDDdDDDDD
+DDDDdDDDDDDDDDDK
+DdDDDDDKDDDdDDDD
+DDDDDDDDDDDDDDDD
+DDDDdDDDdDDDDDdD
+DDdDDDDDDDDKDDDD
+DDDDDDKDDDDDDDDD
+DKDDDdDDDDdDDDDD
+DDDDDDDDDDDDDDDD
+DDDDDDdDDDDDDKDD
+DdDDDDDDDdDDDDDD
+DDDDKDDDDDDDDDDD
+frame
+SSSSSSSSSSSSSSSS
+SSSSSSSsSSSSSSSs
+SsssssssKSssssss
+SsssssssKSssssss
+SsssssssKSssssss
+KKKKKKKKKKKKKKKK
+SSSSSSSSSSSSSsSS
+SsssKSssssssssKS
+SsssKSssssssssKS
+SsssKSssssssssKS
+KKKKKKKKKKKKKKKK
+.KKKKKKKKKKKKKK.
+................
+................
+................
+................

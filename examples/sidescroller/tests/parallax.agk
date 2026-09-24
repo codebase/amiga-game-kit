@@ -1,0 +1,39 @@
+# Proves the parallax: the same feature of each layer, at camera 0 and at
+# camera 160. The level (PF1) moves 160 px, the hills (PF2, cam/2) 80 px,
+# the mountains (PF2, cam/4) 40 px. Each feature is a vertical colour edge:
+# left pixel / right pixel, so a 1 px error fails.
+screenshot cam0
+expect-serial "x=32 y=192 cam=0 mtn=0 hills=0"
+# mountains edge at x=66|67, y=60
+expect-color cam0 66 60 0x47A
+expect-color cam0 67 60 0x358
+# hills edge at x=115|116, y=178
+expect-color cam0 115 178 0x6B3
+expect-color cam0 116 178 0x273
+# level: left end of the stone slab (row 7) at x=240, y=112
+expect-color cam0 239 112 0x8CE
+expect-color cam0 240 112 0xCCB
+
+press right 140
+wait 3
+screenshot cam160
+expect-serial "x=312 y=192 cam=160 mtn=40 hills=80 ground=1"
+# mountains edge moved by 160/4 = 40 px: now at x=26|27
+expect-color cam160 26 60 0x47A
+expect-color cam160 27 60 0x358
+expect-color cam160 67 60 0x537
+# hills edge moved by 160/2 = 80 px: now at x=35|36
+expect-color cam160 35 178 0x6B3
+expect-color cam160 36 178 0x273
+expect-color cam160 116 178 0x9BD
+# level edge moved by 160 px: now at x=79|80
+expect-color cam160 79 112 0x47A
+expect-color cam160 80 112 0xCCB
+expect-color cam160 240 112 0x8CE
+# the first pit is on screen: COLOR00 below the bands (pit colour)
+expect-color cam160 200 240 0x102
+# player is centred: screen x = 312 - 160 = 152
+expect-color cam160 158 192 0x000
+
+# Far right: camera clamps at 960 (level 1280 - 320); hills offset wraps
+# (960/2 = 480 -> 96), mountains 960/4 = 240.

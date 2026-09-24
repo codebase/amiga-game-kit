@@ -18,9 +18,12 @@ PYTHONPATH="$KIT/harness" python3 -m unittest discover -s "$KIT/harness/tests" -
 step "doctor"
 "$AGK" doctor
 
-step "examples/hello"
-"$AGK" build "$KIT/examples/hello"
-"$AGK" test "$KIT/examples/hello" ${PROFILES[@]+"${PROFILES[@]}"}
+for e in "$KIT"/examples/*/; do
+  [ -f "$e/agk.toml" ] || continue
+  step "examples/$(basename "$e")"
+  if [ -d "$e/tests/unit" ]; then "$AGK" unit "$e" >/dev/null; fi
+  "$AGK" test "$e" ${PROFILES[@]+"${PROFILES[@]}"}
+done
 
 step "techniques"
 for t in "$KIT"/techniques/*/; do

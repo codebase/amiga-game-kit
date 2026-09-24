@@ -32,7 +32,11 @@ def load_project(path):
     path = os.path.abspath(path or ".")
     cfg_path = os.path.join(path, "agk.toml")
     if not os.path.exists(cfg_path):
-        raise SystemExit(f"no agk.toml in {path}")
+        hint = ""
+        name = os.path.basename(path)
+        if os.path.exists(os.path.join(os.getcwd(), "tests", f"{name}.agk")):
+            hint = f" - to run the test '{name}': agk test --only {name}  (or: agk run tests/{name}.agk)"
+        raise SystemExit(f"no agk.toml in {path}{hint}")
     with open(cfg_path, "rb") as f:
         cfg = tomllib.load(f)
     name = cfg.get("name") or os.path.basename(path)

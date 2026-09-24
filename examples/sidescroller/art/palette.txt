@@ -1,0 +1,6 @@
+# Game palette: index, 12-bit Amiga colour (0xRGB), name. The display has
+# 2 bitplanes = 4 colours (0-3). Sprite colours (17-19...) come from each
+# sprite's own art file. See: agk help-art
+0  0x113  background
+1  0x468  wall
+2  0x9BD  wall edge

@@ -1,0 +1,19 @@
+# Frame budget guard: run, jump over pits, land on platforms, fall into a pit.
+press right 60
+press right+up 1
+press right 40
+press right 100
+press right+fire 1
+press right 45
+press left 30
+press up 1
+wait 40
+press right 200
+press right+up 1
+press right 80
+press left+up 1
+press left 60
+expect-no-dropped-frames
+# Measured on a500: load ~23%, maxload 27% while running (most of it is the
+# 11-value serial state line printed every frame; ~7% without it).
+expect-max-load 40

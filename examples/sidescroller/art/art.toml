@@ -1,0 +1,28 @@
+# Game art, converted by agk (agk art / agk build). Reference: agk help-art
+[art]
+depth = 2                 # bitplanes of the display (BOBs use this)
+
+[player]
+source = "player.txt"     # text art (or a .png)
+kind = "sprite"           # hardware sprite: 16 px wide, 3 colours
+channel = 0               # colours go to palette slots 17-19
+
+[mountains]
+source = "mountains.png"
+kind = "bitmap"
+depth = 3
+palette = "auto"
+wrap_x = 320
+
+[hills]
+source = "hills.png"
+kind = "bitmap"
+depth = 3
+palette = "auto"
+wrap_x = 320
+
+[tiles]
+source = "tiles.txt"      # 16x16 level tiles for PF1, stacked vertically
+kind = "bitmap"
+depth = 3
+palette = "auto"          # own palette -> colours 1-7 of the front playfield

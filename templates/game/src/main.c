@@ -94,8 +94,9 @@ void genericProcess(void) {
 	spriteProcess(s_pPlayer);
 	spriteProcessChannel(ART_PLAYER_CHANNEL);
 
-	// Report state for tests: on every change, plus a heartbeat.
-	if(isChanged || s_sState.frame % 50 == 0) {
+	// Report state for tests: the first frames (so a test can see the start
+	// state), every change, and a heartbeat.
+	if(isChanged || s_sState.frame < 3 || s_sState.frame % 50 == 0) {
 		agkState("frame", s_sState.frame);
 		agkState("x", s_sState.x);
 		agkState("y", s_sState.y);

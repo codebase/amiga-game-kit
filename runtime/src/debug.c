@@ -148,30 +148,43 @@ void agkPrint(const char *szText) {
 
 //--------------------------------------------------------------------- formatting
 
-void agkPrintNum(LONG lValue) {
-	// No division: the 68000 has no 32-bit divide, and libgcc's is slow.
-	static const ULONG pPowers[] = {
-		1000000000, 100000000, 10000000, 1000000, 100000, 10000, 1000, 100, 10, 1
-	};
-	char szBuf[12];
-	UBYTE ubPos = 0;
+// agkState() collects a whole "AGK k=v k=v" line here and agkEnd() sends it in
+// one go: one host transfer per line instead of four per value.
+#define AGK_LINE_MAX 200
+static char s_szLine[AGK_LINE_MAX + 2];
+static UBYTE s_ubLineLen;
+
+static const ULONG s_pPowers[] = {
+	1000000000, 100000000, 10000000, 1000000, 100000, 10000, 1000, 100, 10, 1
+};
+
+// Writes lValue in decimal to pDst, returns the number of chars written.
+// No division: the 68000 has no 32-bit divide, and libgcc's is slow.
+static UBYTE formatNum(char *pDst, LONG lValue) {
+	UBYTE ubLen = 0;
 	ULONG ulAbs = lValue < 0 ? -(ULONG)lValue : (ULONG)lValue;
 	if(lValue < 0) {
-		szBuf[ubPos++] = '-';
+		pDst[ubLen++] = '-';
 	}
-	UBYTE isStarted = 0;
-	for(UBYTE i = 0; i < sizeof(pPowers) / sizeof(pPowers[0]); ++i) {
+	// Skip powers of ten larger than the value (most values are small)
+	UBYTE i = 0;
+	while(i < 9 && ulAbs < s_pPowers[i]) {
+		++i;
+	}
+	for(; i < 10; ++i) {
 		char cDigit = '0';
-		while(ulAbs >= pPowers[i]) {
-			ulAbs -= pPowers[i];
+		while(ulAbs >= s_pPowers[i]) {
+			ulAbs -= s_pPowers[i];
 			++cDigit;
 		}
-		if(cDigit != '0' || isStarted || i == 9) {
-			szBuf[ubPos++] = cDigit;
-			isStarted = 1;
-		}
+		pDst[ubLen++] = cDigit;
 	}
-	szBuf[ubPos] = '\0';
+	return ubLen;
+}
+
+void agkPrintNum(LONG lValue) {
+	char szBuf[12];
+	szBuf[formatNum(szBuf, lValue)] = '\0';
 	agkPrint(szBuf);
 }
 
@@ -184,17 +197,33 @@ UBYTE agkIsReady(void) {
 	return s_isReady;
 }
 
+static void lineAppend(const char *sz) {
+	while(*sz && s_ubLineLen < AGK_LINE_MAX) {
+		s_szLine[s_ubLineLen++] = *sz++;
+	}
+}
+
 void agkState(const char *szKey, LONG lValue) {
-	agkPrint(s_isLineOpen ? " " : "AGK ");
-	agkPrint(szKey);
-	agkPrint("=");
-	agkPrintNum(lValue);
-	s_isLineOpen = 1;
+	if(!s_isLineOpen) {
+		s_ubLineLen = 0;
+		lineAppend("AGK ");
+		s_isLineOpen = 1;
+	}
+	else {
+		lineAppend(" ");
+	}
+	lineAppend(szKey);
+	lineAppend("=");
+	if(s_ubLineLen <= AGK_LINE_MAX - 11) {
+		s_ubLineLen += formatNum(&s_szLine[s_ubLineLen], lValue);
+	}
 }
 
 void agkEnd(void) {
 	if(s_isLineOpen) {
-		agkPrint("\n");
+		s_szLine[s_ubLineLen++] = '\n';
+		s_szLine[s_ubLineLen] = '\0';
+		agkPrint(s_szLine);
 		s_isLineOpen = 0;
 	}
 }

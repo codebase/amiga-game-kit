@@ -120,6 +120,7 @@ the double buffering, it does this for two frames after each change.
 
 - **ACE has no copper guide.** `docs/programming/` has nothing on the copper. The real sources are `include/ace/managers/copper.h`, `src/ace/managers/copper.c` and `showcase/src/test/copper.c`. The showcase covers both modes but has no sprites and never shows how to mark a value-only edit as dirty (see below).
 - **ACE loads the palette once, in `viewLoad()`, by CPU.** A colour the copper changes stays changed. At the bottom of the frame COLOR00 still holds the last sky colour. So the copper list must set the HUD colours again **at the top of every frame**: raw MOVEs before the first WAIT, or a block at WAIT 0,0.
+- **Only about 14 MOVEs fit in one horizontal blank** with 6 lores bitplanes (measured in `examples/sidescroller`). More than that and the last ones land visibly inside the next line. For a band switch that needs more (pointers + scroll + 7 colours), use a 1-line gap: load the palette on a blank line first.
 - **WAIT has only 8 bits of Y.** Lines 256+ (game y ≥ 212 on PAL) need one `WAIT(0xDF, 0xFF)`, then WAITs with `y & 0xFF`. In raw mode that's your job; forget it and every WAIT after line 255 fires at once. Block mode inserts it for you, but:
 - **Stock ACE put a block at exactly beam line 255 one line late.**
   - `copUpdateFromBlocks()` emitted only the `WAIT(0xDF,0xFF)` wrap guard for Y == 0xFF, so the MOVEs landed at the end of line 255, and game line 211 showed line 210's colour.

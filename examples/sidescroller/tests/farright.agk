@@ -1,0 +1,17 @@
+# Run to the end of the level, jumping the three pits. The camera clamps at
+# 960 (level 1280 - screen 320); the player stops at the level edge (1264).
+press right 154
+press right+up 1
+press right 100
+press right 99
+press right+up 1
+press right 100
+press right 27
+press right+up 1
+press right 150
+wait 3
+screenshot end
+expect-serial "x=1264 y=192 cam=960 mtn=240 hills=96 ground=1"
+expect-no-serial "deaths=[1-9]"
+# player at screen x = 1264 - 960 = 304
+expect-color end 310 192 0x000

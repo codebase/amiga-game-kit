@@ -17,6 +17,19 @@ PASS move [a500] 0.4s
 9/9 passed
 ```
 
+## Example: `examples/sidescroller`
+
+![sidescroller](docs/img/sidescroller.png)
+
+A dual-playfield parallax platformer, built by an AI agent with the kit:
+- The mountains and hills are AI-generated with `agk art-gen` (Retro Diffusion, about $0.08 in total).
+- They scroll at ¼ and ½ speed behind the level, over a copper sky gradient.
+- Run, jump, platforms and pits.
+
+It's tested pixel-exact on Kickstart 1.3, 3.1 and AROS, including a test that
+proves the parallax speeds, and it runs at 50 fps using about 21% of the
+frame. See its README for the register-level setup.
+
 ## Quick start
 
 ```sh
