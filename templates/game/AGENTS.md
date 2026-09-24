@@ -11,7 +11,12 @@ agk unit        # game rules only, on the host, in milliseconds - run after edit
 agk build       # cross-compile in Docker -> build/{{name}}.adf (a bootable floppy)
 agk test        # boot on every profile, play tests/*.agk, compare screenshots to goldens
 agk run -s "press right 20" -s "screenshot moved"   # try something ad hoc
+agk help        # all commands;  agk help-scenario  # the test/run step language
 ```
+
+`agk run` and `agk test` rebuild automatically when sources are newer than the
+ADF. The template ships passing tests and goldens, so run `agk test` once
+**before** you change anything: that's your baseline.
 
 After a change you can see, **look at the screenshot**. `agk run` and `agk test`
 print the path of `<name>.screen.png`, a 320×256 image in game coordinates
@@ -28,8 +33,9 @@ the screenshots as images. If `agk` isn't on your PATH, it's `{{kit}}/tools/agk`
 - `hold left` … `release`
 - `wait 10`
 - `screenshot NAME`
-- `expect-serial "x=224"`
-- `wait-serial "level 2"`
+- `expect-serial "x=224"`: a regex over the whole serial log
+- `expect-color NAME 44 44 0xFC0`: the pixel at game (44,44) in screenshot NAME must be Amiga colour $FC0. Use this to prove something is or isn't drawn; a golden only proves "same as last time".
+- `wait-serial "score=1"`: literal text, not a regex. It resumes one frame after the text arrives, so the game has usually run one more frame with the old input.
 - `regs NAME cpu copper`
 - `dump-mem NAME 0x0 0x80000`
 
@@ -37,7 +43,9 @@ Time is in frames: 50 per second, starting when the game prints `AGK ready`.
 Runs are deterministic, so the same scenario gives the same pixels every time.
 
 ### Golden images
-`tests/golden/<test>/<shot>.png` are the approved screenshots.
+`tests/golden/<test>/<shot>.png` are the approved screenshots, shared by all
+profiles. Colours are exact: Amiga colour `0xRGB` appears as
+(R×17, G×17, B×17).
 - If a test fails with `DIFFERENT`, open the `*.diff.png` it names. Changed pixels are red, and the message gives the changed area in game coordinates.
 - Only if the change is intended, run `agk test --update`, and say which goldens you updated and why.
 - Never update goldens just to make a failing test pass.
@@ -84,6 +92,7 @@ about 87 µs.
 - Hardware sprites (`spriteAdd`) are 16 px wide, 3 colours plus transparent. Channels 0/1 use palette entries 17–19, 2/3 use 21–23, and so on.
 - A sprite bitmap is 2-bitplane, interleaved, with an extra empty line at the top and bottom for the hardware control words.
 - Moving objects wider than 16 px or with more colours are BOBs, drawn with the blitter (ACE `bob` manager, `docs/programming/using_bobs.md`).
+- The template's `simpleBufferCreate` is **single-buffered**, so `pBack == pFront`. Draw or erase static things once. If you add double buffering (`TAG_SIMPLEBUFFER_IS_DBLBUF`), every change must be made in both buffers, or the old image flickers back every other frame.
 - The copper changes registers at chosen scanlines: colour bars, palette splits, scroll. ACE: `copBlockCreate` / `copMove`.
 - ACE copper lists are double-buffered, so a change appears a frame or two later.
 

@@ -44,9 +44,28 @@ def load_project(path):
     }
 
 
-def need_adf(proj):
-    if not os.path.exists(proj["adf"]):
-        raise SystemExit(f"{proj['adf']} not found - run: agk build {os.path.relpath(proj['dir'])}")
+def _newest_source(proj):
+    newest = 0.0
+    for base, dirs, files in os.walk(proj["dir"]):
+        dirs[:] = [d for d in dirs if d not in ("build", "tests", ".git")]
+        for f in files:
+            if f.endswith((".c", ".h", ".s", ".asm", ".i", ".txt", ".cmake", ".toml")) or f == "CMakeLists.txt":
+                newest = max(newest, os.path.getmtime(os.path.join(base, f)))
+    return newest
+
+
+def need_adf(proj, build=True):
+    """Make sure build/<name>.adf exists and is newer than the sources,
+    rebuilding if needed so tests never run against stale code."""
+    stale = not os.path.exists(proj["adf"]) or os.path.getmtime(proj["adf"]) < _newest_source(proj)
+    if not stale:
+        return
+    if not build:
+        raise SystemExit(f"{rel(proj['adf'])} is missing or older than the sources - run: agk build")
+    print("sources changed since the last build - building first", file=sys.stderr)
+    rc = subprocess.run([os.path.join(ROOT, "tools", "build"), proj["dir"]], stdout=sys.stderr).returncode
+    if rc != 0:
+        raise SystemExit(rc)
 
 
 def rel(p):
@@ -111,12 +130,12 @@ def _report(res, as_json):
                 print("    golden: match")
             elif g["status"] == "new":
                 print(f"    golden: none yet (run with --update to accept)")
-            elif g["status"] == "updated":
-                print(f"    golden: updated {rel(g['path'])}")
+            elif g["status"] in ("updated", "created"):
+                print(f"    golden: {g['status']} {rel(g['path'])}")
             else:
                 x0, y0, x1, y1 = g["bbox"]
                 gx0, gy0 = max(0, (x0 - SCREEN_X0) // 2), max(0, y0 - SCREEN_Y0)
-                gx1, gy1 = (x1 - SCREEN_X0) // 2, y1 - SCREEN_Y0
+                gx1, gy1 = min(319, (x1 - SCREEN_X0) // 2), min(255, y1 - SCREEN_Y0)
                 print(f"    golden: DIFFERENT - {g['pixels']} px changed around game x={gx0}..{gx1} "
                       f"y={gy0}..{gy1}, see {rel(g['diff'])}")
     for f in res["failures"]:
@@ -126,7 +145,7 @@ def _report(res, as_json):
 
 def cmd_run(args):
     proj = load_project(args.project)
-    need_adf(proj)
+    need_adf(proj, not args.no_build)
     if args.file:
         text = open(args.file).read()
         name = os.path.splitext(os.path.basename(args.file))[0]
@@ -144,7 +163,7 @@ def cmd_run(args):
     return 0 if res["ok"] else 1
 
 
-def _check_goldens(res, golden_dir, profile, update):
+def _check_goldens(res, golden_dir, profile, update, refreshed):
     """Goldens live in tests/golden/<test>/<shot>.png, shared by all profiles.
     A profile that legitimately renders differently gets an override in
     tests/golden/<test>/<profile>/<shot>.png."""
@@ -155,10 +174,19 @@ def _check_goldens(res, golden_dir, profile, update):
         got = Image.load_png(shot["png"])
         info = {"path": gpath}
         if update:
+            # The first profile of this run defines the shared golden; later
+            # profiles only get an override where they really differ from it.
             os.makedirs(golden_dir, exist_ok=True)
-            if not os.path.exists(shared):
-                shutil.copyfile(shot["png"], shared)
-                info.update(status="updated", path=shared)
+            if shared not in refreshed:
+                refreshed.add(shared)
+                if os.path.exists(shared) and Image.load_png(shared).rgb == got.rgb:
+                    info.update(status="match", path=shared)
+                else:
+                    status = "updated" if os.path.exists(shared) else "created"
+                    shutil.copyfile(shot["png"], shared)
+                    info.update(status=status, path=shared)
+                if os.path.exists(override):
+                    os.remove(override)
             elif Image.load_png(shared).rgb == got.rgb:
                 if os.path.exists(override):
                     os.remove(override)
@@ -188,14 +216,14 @@ def _check_goldens(res, golden_dir, profile, update):
 
 def cmd_test(args):
     proj = load_project(args.project)
-    need_adf(proj)
+    need_adf(proj, not args.no_build)
     tdir = os.path.join(proj["dir"], "tests")
     files = sorted(f for f in os.listdir(tdir) if f.endswith(".agk")) if os.path.isdir(tdir) else []
     if args.only:
         files = [f for f in files if os.path.splitext(f)[0] in args.only]
     if not files:
         raise SystemExit(f"no tests found in {rel(tdir)}")
-    results = []
+    results, refreshed = [], set()
     for profile in args.profile or proj["profiles"]:
         for f in files:
             name = os.path.splitext(f)[0]
@@ -208,7 +236,7 @@ def cmd_test(args):
             outdir = os.path.join(proj["dir"], "build", "agk", profile, name)
             res = runner.run(proj["adf"], profile, sc, outdir, proj["boot"])
             if not res["failures"] or res["screenshots"]:
-                _check_goldens(res, os.path.join(tdir, "golden", name), profile, args.update)
+                _check_goldens(res, os.path.join(tdir, "golden", name), profile, args.update, refreshed)
             results.append(res)
             if not args.json:
                 _report(res, False)
@@ -301,6 +329,7 @@ def main(argv=None):
     p.add_argument("-p", "--profile")
     p.add_argument("-o", "--out")
     p.add_argument("--fresh", action="store_true", help="boot from scratch instead of the cached snapshot")
+    p.add_argument("--no-build", action="store_true", help="don't rebuild when sources are newer than the ADF")
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("test", help="run tests/*.agk and compare screenshots with goldens")
@@ -308,6 +337,7 @@ def main(argv=None):
     p.add_argument("-p", "--profile", action="append", help="profile(s) to test (default: agk.toml test_profiles)")
     p.add_argument("--only", action="append", help="only run this test (repeatable)")
     p.add_argument("--update", action="store_true", help="accept current screenshots as goldens")
+    p.add_argument("--no-build", action="store_true", help="don't rebuild when sources are newer than the ADF")
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("unit", help="compile game logic for the host and run tests/unit/*.c")
@@ -320,8 +350,12 @@ def main(argv=None):
     p.add_argument("--template", default="game")
 
     sub.add_parser("help-scenario", help="print the scenario language reference")
+    sub.add_parser("help", help="show this help")
 
     args = ap.parse_args(argv)
+    if args.cmd == "help":
+        ap.print_help()
+        return 0
     if args.cmd == "help-scenario":
         print(scenario.__doc__)
         return 0

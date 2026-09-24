@@ -12,10 +12,10 @@ index 87200c4..8aa833f 100644
  
          case Opt::DENISE_HIDDEN_BITPLANES:
 diff --git a/Core/Misc/RetroShell/Console.cpp b/Core/Misc/RetroShell/Console.cpp
-index b661c82..d08ee3f 100644
+index b661c82..ade653d 100644
 --- a/Core/Misc/RetroShell/Console.cpp
 +++ b/Core/Misc/RetroShell/Console.cpp
-@@ -1185,16 +1185,112 @@ Console::initCommonCommands(RSCommand &root)
+@@ -1185,16 +1185,125 @@ Console::initCommonCommands(RSCommand &root)
              .flags  = vAmigaDOS ? rs::disabled : rs::hidden,
              .args   = {
                  { .name = { "seconds", "Delay" } },
@@ -63,7 +63,20 @@ index b661c82..d08ee3f 100644
 +            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
 +
 +                auto frames = args.contains("frames") ? parseNum(args.at("frames")) : 3000;
-+                shell.awaitSerial(args.at("text"), frames);
++                auto text = args.at("text");
++
++                // "hex:414243" spells any text, including '=' and quotes, which
++                // the argument parser would otherwise interpret
++                if (text.rfind("hex:", 0) == 0) {
++
++                    string decoded;
++                    for (usize i = 4; i + 1 < text.size(); i += 2) {
++                        decoded += char(std::stoi(text.substr(i, 2), nullptr, 16));
++                    }
++                    text = decoded;
++                }
++                if (text.empty()) throw CoreError(CoreError::OPT_INV_ARG, "empty text");
++                shell.awaitSerial(text, frames);
 +                throw ScriptInterruption();
 +            }
 +        });

@@ -36,9 +36,29 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(sc.lines, ["agk screenshot {out}/a.raw"])
         self.assertEqual([(p, m) for p, m, _ in sc.expects], [("x=1", True), ("ERR", False)])
 
-    def test_wait_serial_realigns(self):
-        sc = scenario.parse('wait-serial "level 2" 100')
-        self.assertEqual(sc.lines, ['waitserial "level 2" 100', "wait 1 frames"])
+    def test_wait_serial_is_hex_encoded(self):
+        # '=' would otherwise be parsed as a key=value argument by RetroShell
+        sc = scenario.parse('wait-serial "score=1" 100')
+        self.assertEqual(sc.lines, ["waitserial hex:73636f72653d31 100", "wait 1 frames"])
+
+    def test_expect_color(self):
+        sc = scenario.parse("screenshot a\nexpect-color a 10 20 0xFA0")
+        self.assertEqual(sc.colors, [("a", 10, 20, (15, 10, 0), 2)])
+        for bad, msg in [("screenshot a\nexpect-color b 1 1 0x000", "unknown screenshot"),
+                         ("screenshot a\nexpect-color a 320 1 0x000", "inside the 320x256"),
+                         ("screenshot a\nexpect-color a 1 1 0x1000", "12-bit")]:
+            with self.subTest(bad=bad):
+                with self.assertRaisesRegex(scenario.ScenarioError, msg):
+                    scenario.parse(bad)
+
+    def test_origins_map_generated_lines_to_source(self):
+        sc = scenario.parse("press right 2\n\n# c\nhold left\nscreenshot s\nrelease")
+        self.assertEqual(len(sc.origins), len(sc.lines))
+        self.assertEqual(sc.origins, [1, 1, 1, 4, 5, 6])
+
+    def test_dump_mem_bounds(self):
+        with self.assertRaisesRegex(scenario.ScenarioError, "24-bit"):
+            scenario.parse("dump-mem big 0 0x7FFFFFFF")
 
     def test_regs_and_dump(self):
         sc = scenario.parse("regs r cpu copper\ndump-mem chip 0 0x80000")
@@ -59,6 +79,43 @@ class ScenarioTests(unittest.TestCase):
                     scenario.parse(text)
 
 
+class GoldenTests(unittest.TestCase):
+    """--update: first profile of a run defines the shared golden, later
+    profiles get an override only where they differ."""
+
+    def _shot(self, d, name, rgb):
+        p = os.path.join(d, name + ".png")
+        Image(rgb, 2, 1).save_png(p)
+        return {"screenshots": {"s": {"png": p}}, "ok": True, "failures": [], "outdir": d}
+
+    def test_update_rules(self):
+        from agk.cli import _check_goldens
+        with tempfile.TemporaryDirectory() as d:
+            gdir = os.path.join(d, "golden")
+            red, blue = b"\xff\0\0" * 2, b"\0\0\xff" * 2
+            refreshed = set()
+            _check_goldens(self._shot(d, "a", red), gdir, "p1", True, refreshed)
+            _check_goldens(self._shot(d, "b", red), gdir, "p2", True, refreshed)
+            _check_goldens(self._shot(d, "c", blue), gdir, "p3", True, refreshed)
+            self.assertTrue(os.path.exists(os.path.join(gdir, "s.png")))
+            self.assertFalse(os.path.exists(os.path.join(gdir, "p2")))
+            self.assertTrue(os.path.exists(os.path.join(gdir, "p3", "s.png")))
+            # A new run where everything changed rewrites the shared golden, not overrides
+            refreshed = set()
+            for prof in ("p1", "p2"):
+                _check_goldens(self._shot(d, prof, blue), gdir, prof, True, refreshed)
+            self.assertEqual(Image.load_png(os.path.join(gdir, "s.png")).rgb, blue)
+            self.assertFalse(os.path.exists(os.path.join(gdir, "p1")))
+            # Checking (no update): p3's override is used, p1 matches shared
+            res = self._shot(d, "x", blue)
+            _check_goldens(res, gdir, "p3", False, set())
+            self.assertTrue(res["ok"])
+            res = self._shot(d, "y", red)
+            _check_goldens(res, gdir, "p1", False, set())
+            self.assertFalse(res["ok"])
+            self.assertEqual(res["screenshots"]["s"]["golden"]["pixels"], 2)
+
+
 class ImageTests(unittest.TestCase):
     def test_png_roundtrip(self):
         rgb = bytes((x * 7 + y * 13) % 256 for y in range(5) for x in range(12))
@@ -76,6 +133,11 @@ class ImageTests(unittest.TestCase):
         count, bbox, dimg = diff(a, Image(bytes(b_rgb), 4, 3))
         self.assertEqual((count, bbox), (2, (2, 1, 3, 2)))
         self.assertEqual(dimg.pixel(2, 1), (255, 0, 0))
+
+    def test_canonical12(self):
+        # vAmiga shows OCS colour nibble n as n*16; canonical form is n*17
+        img = Image(bytes((0xF0, 0xA0, 0x00, 0x10, 0x10, 0x30)), 2, 1).canonical12()
+        self.assertEqual(img.rgb, bytes((255, 170, 0, 17, 17, 51)))
 
     def test_diff_identical(self):
         a = Image(bytes(2 * 2 * 3), 2, 2)

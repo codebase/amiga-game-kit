@@ -23,7 +23,9 @@ step "examples/hello"
 "$AGK" test "$KIT/examples/hello" ${PROFILES[@]+"${PROFILES[@]}"}
 
 step "new project from template"
-TMP="$(mktemp -d)"
+# Inside the kit (not /tmp) so a Docker daemon shared with a CI container can see it.
+mkdir -p "$KIT/out"
+TMP="$(mktemp -d "$KIT/out/selftest.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 "$AGK" new "$TMP/selftest_game"
 "$AGK" unit "$TMP/selftest_game"

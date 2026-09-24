@@ -7,12 +7,15 @@ on a frame boundary, so the same scenario always produces the same result.
     # tests/move.agk
     press right 20          # hold joystick right for 20 frames, then release
     wait 5                  # let 5 more frames run
-    screenshot moved        # compared against tests/golden/<profile>/move/moved.png
+    screenshot moved        # compared against tests/golden/move/moved.png (agk test)
     expect-serial "x=192"   # regex, checked against the whole serial log
+    expect-color moved 160 100 0xFA0   # pixel (160,100) of 'moved' is Amiga colour $FA0
 
 Commands:
     wait N                          run N frames
-    wait-serial "TEXT" [TIMEOUT]    run until TEXT appears on serial (timeout in frames, default 500)
+    wait-serial "TEXT" [TIMEOUT]    run until the literal TEXT appears on serial (timeout in frames,
+                                    default 500). Resumes on the first frame boundary after the text
+                                    has arrived; the game has usually run one more frame by then.
     press INPUT [N]                 hold INPUT for N frames (default 1), then release it
     hold INPUT / release [INPUT]    hold until released; bare 'release' releases everything
     key CODE                        tap a raw Amiga keycode (e.g. 0x45 = Esc); vAmiga holds it
@@ -22,6 +25,12 @@ Commands:
     regs NAME [cpu|agnus|copper|denise|paula|blitter|ciaa|ciab]...   save register view to NAME.txt
     expect-serial "REGEX"           serial log must match (checked after the run)
     expect-no-serial "REGEX"        serial log must not match
+    expect-color SHOT X Y 0xRGB     pixel X,Y (game coordinates, 320x256) of screenshot SHOT
+                                    must be the 12-bit Amiga colour 0xRGB (e.g. 0xFA0)
+
+Goldens: `agk test` compares each screenshot with tests/golden/<test>/<shot>.png
+(shared by all profiles; a profile that differs on purpose gets
+tests/golden/<test>/<profile>/<shot>.png). Record them with `agk test --update`.
 
 INPUT is up, down, left, right, fire, fire2, or a combination such as right+fire.
 Joystick commands go to port 2 (the normal game port).
@@ -41,6 +50,11 @@ class ScenarioError(Exception):
     pass
 
 
+def serial_text(text):
+    """Encode text for vAmiga's waitserial (hex, so '=' etc. survive parsing)."""
+    return "hex:" + text.encode("latin-1").hex()
+
+
 @dataclass
 class Scenario:
     name: str
@@ -49,6 +63,8 @@ class Scenario:
     dumps: list = field(default_factory=list)         # (name, kind)
     regs: list = field(default_factory=list)          # (name, [components])
     expects: list = field(default_factory=list)       # (regex, should_match, lineno)
+    colors: list = field(default_factory=list)        # (shot, x, y, (r4, g4, b4), lineno)
+    origins: list = field(default_factory=list)       # scenario line number of each entry in lines
     frames: int = 0                                   # frames of scenario time
 
 
@@ -89,6 +105,7 @@ def parse(text, name="scenario"):
             sc.frames += n
 
     for lineno, raw in enumerate(text.splitlines(), 1):
+        start = len(sc.lines)  # lines generated from here on come from this lineno
         try:
             toks = shlex.split(raw, comments=True)
         except ValueError as e:
@@ -106,8 +123,7 @@ def parse(text, name="scenario"):
             if not 1 <= len(args) <= 2:
                 raise ScenarioError(f'line {lineno}: usage: wait-serial "TEXT" [TIMEOUT]')
             timeout = _int(args[1], lineno, "timeout") if len(args) == 2 else 500
-            text_arg = args[0].replace('"', "")
-            sc.lines.append(f'waitserial "{text_arg}" {timeout}')
+            sc.lines.append(f"waitserial {serial_text(args[0])} {timeout}")
             sc.lines.append("wait 1 frames")   # re-align to a frame boundary
 
         elif cmd in ("press", "hold"):
@@ -118,10 +134,10 @@ def parse(text, name="scenario"):
                 sc.lines.append(f"joystick2 {DIRECTIONS[i][0]}")
             if cmd == "hold":
                 held.update(ins)
-                continue
-            run_frames(_int(args[1], lineno, "frames") if len(args) == 2 else 1)
-            for i in ins:
-                sc.lines.append(f"joystick2 {DIRECTIONS[i][1]}")
+            else:
+                run_frames(_int(args[1], lineno, "frames") if len(args) == 2 else 1)
+                for i in ins:
+                    sc.lines.append(f"joystick2 {DIRECTIONS[i][1]}")
 
         elif cmd == "release":
             targets = _inputs(args[0], lineno) if args else sorted(held)
@@ -149,6 +165,9 @@ def parse(text, name="scenario"):
                 raise ScenarioError(f"line {lineno}: usage: dump-mem NAME ADDR LEN")
             n = _name(args[0], lineno, names)
             addr, length = _int(args[1], lineno, "address"), _int(args[2], lineno, "length")
+            if addr > 0xFFFFFF or length == 0 or addr + length > 0x1000000:
+                raise ScenarioError(f"line {lineno}: dump-mem must stay inside the 24-bit address space "
+                                    f"(0x000000-0xFFFFFF), length > 0")
             sc.dumps.append((n, "mem"))
             sc.lines.append(f"mem save bin {{out}}/{n}.bin {addr} {length}")
 
@@ -174,9 +193,25 @@ def parse(text, name="scenario"):
                 raise ScenarioError(f"line {lineno}: bad regex: {e}")
             sc.expects.append((args[0], cmd == "expect-serial", lineno))
 
+        elif cmd == "expect-color":
+            if len(args) != 4:
+                raise ScenarioError(f"line {lineno}: usage: expect-color SHOT X Y 0xRGB")
+            x, y = _int(args[1], lineno, "x"), _int(args[2], lineno, "y")
+            if x >= 320 or y >= 256:
+                raise ScenarioError(f"line {lineno}: x,y must be inside the 320x256 playfield")
+            rgb = _int(args[3], lineno, "colour")
+            if rgb > 0xFFF:
+                raise ScenarioError(f"line {lineno}: colour must be 12-bit, 0x000-0xFFF")
+            sc.colors.append((args[0], x, y, ((rgb >> 8) & 15, (rgb >> 4) & 15, rgb & 15), lineno))
+
         else:
             raise ScenarioError(f"line {lineno}: unknown command '{cmd}'")
+        sc.origins += [lineno] * (len(sc.lines) - start)
 
     for i in sorted(held):   # leave the joystick centred at the end
         sc.lines.append(f"joystick2 {DIRECTIONS[i][1]}")
+    sc.origins += [0] * (len(sc.lines) - len(sc.origins))
+    for shot, *_rest, lineno in sc.colors:
+        if shot not in sc.screenshots:
+            raise ScenarioError(f"line {lineno}: expect-color refers to unknown screenshot '{shot}'")
     return sc

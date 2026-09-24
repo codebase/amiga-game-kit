@@ -7,6 +7,7 @@ import subprocess
 import time
 
 from . import profiles
+from .scenario import serial_text
 from .image import Image
 from .paths import CACHE, VAMIGA
 
@@ -29,7 +30,15 @@ def _sha(path, n=None):
 def _setup_lines(profile, rom, ext):
     setup = f"regression setup {profile.scheme} {rom}" + (f" {ext}" if ext else "")
     # Frame skipping (default 16 in warp) would make screenshots stale.
-    return [setup, *profile.config, "denise set FRAME_SKIPPING 0"]
+    return [setup, *profile.config, *_display_lines()]
+
+
+def _display_lines():
+    # Frame skipping (default 16 in warp) would make screenshots stale, and the
+    # default monitor emulation (CRT gamma, brightness...) would distort colours:
+    # with PALETTE RGB a colour register value 0xRGB appears as (R*17, G*17, B*17).
+    # Neither setting is part of a snapshot, so this runs after restores too.
+    return ["denise set FRAME_SKIPPING 0", "monitor set PALETTE RGB"]
 
 
 def boot_key(adf, profile_name, rom, boot_text):
@@ -54,18 +63,28 @@ def _run_vamiga(lines, workdir, timeout=600):
     return proc.returncode, out, time.time() - t0
 
 
-def _emulator_error(out):
-    """Pick the failing line + message out of RetroShell's verbose output."""
+def _emulator_error(out, line_to_source=None, script=None):
+    """Pick the failing line + message out of RetroShell's verbose output.
+    line_to_source maps a script line number to a scenario line number."""
+    executed = 0  # how many script lines RetroShell has echoed so far
     for i, line in enumerate(out):
+        if script and executed < len(script) and line.strip() == script[executed]:
+            executed += 1
         if line.startswith("waitserial: timeout"):
+            src = line_to_source(executed) if line_to_source and executed else None
+            if src:
+                line = f"line {src}: {line}"
             if "<<<" in out[i:]:
                 a = out.index("<<<", i)
                 b = out.index(">>>", a) if ">>>" in out[a:] else len(out)
                 tail = "\n".join(out[a + 1:b]).replace("\r", "").strip()
                 return f"{line}\nserial so far:\n{tail or '(nothing)'}"
             return line
-        if re.match(r"^Line \d+: ", line) and i + 1 < len(out) and out[i + 1] != "std::exception":
-            return f"{line} -> {out[i + 1]}"
+        m = re.match(r"^Line (\d+): (.*)$", line)
+        if m and i + 1 < len(out) and out[i + 1] != "std::exception":
+            src = line_to_source(int(m.group(1))) if line_to_source else None
+            where = f"line {src}" if src else "emulator setup"
+            return f"{where}: {out[i + 1]} (emulator command: {m.group(2)})"
     return "emulator exited with an error (see emulator.log)"
 
 
@@ -91,12 +110,13 @@ def ensure_boot(adf, profile_name, boot_text, boot_timeout=DEFAULT_BOOT_TIMEOUT,
     os.makedirs(CACHE, exist_ok=True)
     snap = os.path.join(CACHE, boot_key(adf, profile_name, rom, boot_text) + ".vasnap")
     if os.path.exists(snap):
+        os.utime(snap)
         return snap, None
     workdir = workdir or os.path.join(CACHE, "boot")
     os.makedirs(workdir, exist_ok=True)
     lines = _setup_lines(profile, rom, ext) + [
         f"regression run {os.path.abspath(adf)}",
-        f'waitserial "{boot_text}" {boot_timeout}',
+        f"waitserial {serial_text(boot_text)} {boot_timeout}",
         "wait 1 frames",
         f"agk serial {snap}.serial.txt",
         f"agk snapsave {snap}.tmp.vasnap",
@@ -105,7 +125,18 @@ def ensure_boot(adf, profile_name, boot_text, boot_timeout=DEFAULT_BOOT_TIMEOUT,
     if code != 0 or not os.path.exists(f"{snap}.tmp.vasnap"):
         raise RunError(f"boot failed ({profile_name}): {_emulator_error(out)}")
     os.replace(f"{snap}.tmp.vasnap", snap)
+    _prune_cache()
     return snap, secs
+
+
+def _prune_cache(keep=24):
+    """Boot snapshots are ~17MB each; keep the most recently used ones."""
+    snaps = sorted((os.path.join(CACHE, f) for f in os.listdir(CACHE) if f.endswith(".vasnap")
+                    and not f.endswith(".tmp.vasnap")), key=os.path.getmtime, reverse=True)
+    for old in snaps[keep:]:
+        for path in (old, f"{old}.serial.txt"):
+            if os.path.exists(path):
+                os.remove(path)
 
 
 def run(adf, profile_name, scenario, outdir, boot_text, fresh=False):
@@ -122,7 +153,7 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False):
     if fresh:
         # Boot inside this run (no snapshot) - used to verify snapshot parity.
         lines += [f"regression run {os.path.abspath(adf)}",
-                  f'waitserial "{boot_text}" {DEFAULT_BOOT_TIMEOUT}', "wait 1 frames"]
+                  f"waitserial {serial_text(boot_text)} {DEFAULT_BOOT_TIMEOUT}", "wait 1 frames"]
     else:
         try:
             snap, boot_secs = ensure_boot(adf, profile_name, boot_text)
@@ -130,13 +161,18 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False):
             result.update(ok=False, failures=[str(e)])
             return result
         result["boot_seconds"] = boot_secs
-        lines += [f"agk snapload {snap}", "denise set FRAME_SKIPPING 0"]
+        lines += [f"agk snapload {snap}", *_display_lines()]
 
     # Scenario time 0 is one full frame after the boot snapshot point: video
     # buffers aren't part of snapshots, so this makes the first screenshot
     # identical whether we booted fresh or restored.
     lines.append("wait 1 frames")
+    first = len(lines) + 1   # script line number (1-based) of the scenario's first line
     lines += [l.replace("{out}", outdir) for l in scenario.lines]
+
+    def line_to_source(n):
+        i = n - first
+        return scenario.origins[i] if 0 <= i < len(scenario.origins) and scenario.origins[i] else None
     lines.append(f"agk serial {outdir}/serial.txt")
     code, out, secs = _run_vamiga(lines, outdir)
     result["seconds"] = round(secs, 2)
@@ -154,12 +190,14 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False):
 
     if code != 0:
         result["ok"] = False
-        result["failures"].append(_emulator_error(out))
+        result["failures"].append(_emulator_error(out, line_to_source, lines))
 
     for name in scenario.screenshots:
         raw = os.path.join(outdir, f"{name}.raw")
         if os.path.exists(raw):
             img = Image.from_raw_file(raw)
+            if not profile.aga:
+                img = img.canonical12()
             img.save_png(os.path.join(outdir, f"{name}.png"))
             img.screen().save_png(os.path.join(outdir, f"{name}.screen.png"))
             os.remove(raw)
@@ -169,6 +207,18 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False):
         elif code == 0:
             result["ok"] = False
             result["failures"].append(f"screenshot '{name}' was not produced")
+
+    for shot, x, y, want, lineno in scenario.colors:
+        info = result["screenshots"].get(shot)
+        if not info:
+            continue  # missing screenshot is already reported
+        r, g, b = Image.load_png(info["screen_png"]).pixel(x, y)
+        got = (r >> 4, g >> 4, b >> 4)
+        if got != want:
+            result["ok"] = False
+            result["failures"].append(
+                f"line {lineno}: pixel ({x},{y}) of '{shot}' is 0x{got[0]:X}{got[1]:X}{got[2]:X}, "
+                f"expected 0x{want[0]:X}{want[1]:X}{want[2]:X}")
 
     for name, comps in scenario.regs:
         text = _extract_regs(out, comps)

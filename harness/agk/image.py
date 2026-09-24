@@ -38,6 +38,13 @@ class Image:
                 + chunk(b"IDAT", zlib.compress(rows, 9))
                 + chunk(b"IEND", b""))
 
+    def canonical12(self):
+        """Map every channel to its 4-bit Amiga value * 17 (0x0->0, 0xF->255).
+        vAmiga shows OCS/ECS colour registers as n*16 and AGA ones as n*17; this
+        makes a 12-bit colour look the same on every chipset."""
+        lut = bytes((v >> 4) * 17 for v in range(256))
+        return Image(self.rgb.translate(lut), self.width, self.height)
+
     def screen(self):
         """The 320x256 lores playfield, one image pixel per game pixel."""
         out = bytearray()
