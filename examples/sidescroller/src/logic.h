@@ -73,6 +73,45 @@ typedef struct {
 	uint8_t jump;   // fire or up held
 } tInput;
 
+// Enemies: 16x16 mushroom critters (art/enemy.txt) that patrol a floor.
+// They walk ENEMY_SPEED_FIX/16 px per frame and turn at walls, at the end of
+// their floor (pit or platform edge) and at the level ends. They never fall.
+#define ENEMY_COUNT 7
+#define ENEMY_W 16
+#define ENEMY_H 16
+#define ENEMY_HB_L 2        // collision box: columns 2..13, rows 3..15
+#define ENEMY_HB_R 13
+#define ENEMY_HB_T 3
+#define ENEMY_SPEED_FIX 8   // 0.5 px/frame (1/16 px units)
+#define ENEMY_ANIM_SHIFT 2  // walk pose A/B alternates every 4 px walked
+#define SQUASH_TICKS 25     // squashed frame shows 0.5 s, then the enemy is gone
+// Stomp: the hero is falling (vy > 0) and his feet (bottom row) are within
+// STOMP_WINDOW rows of the enemy's top: rows ENEMY_HB_T..ENEMY_HB_T+7 = the
+// cap. Max fall speed is 7 px/frame, so a falling hero can't skip past it.
+#define STOMP_WINDOW 8
+#define BOUNCE_VEL 72       // after a stomp: 4.5 px/frame up (~27 px hop)
+// Holding jump during a stomp bounces a full jump (JUMP_VEL) instead.
+
+// Enemy art frames (art/enemy.txt): base frames face LEFT, + ART_ENEMY_MIRROR = right
+#define ENEMY_FRAME_WALK 0  // 0, 1
+#define ENEMY_FRAME_SQUASHED 2
+#define ENEMY_FRAME_MIRROR 3
+
+typedef enum {
+	ENEMY_WALK = 0,
+	ENEMY_SQUASHED,         // timer counts down, no collision
+	ENEMY_GONE,
+} tEnemyState;
+
+typedef struct {
+	int16_t x, y;       // sprite top-left in level pixels (y fixed: they never fall)
+	int16_t xFix;       // x << FIX_SHIFT plus sub-pixel
+	int16_t xMin, xMax; // patrol range, from the level at placement (logicEnemyPlace)
+	int8_t dir;         // -1 left, +1 right
+	uint8_t state;      // tEnemyState
+	uint8_t timer;      // squash countdown
+} tEnemy;
+
 typedef struct {
 	int16_t x, y;       // player top-left in level pixels
 	int16_t yFix;       // y << FIX_SHIFT plus sub-pixel
@@ -87,7 +126,24 @@ typedef struct {
 	uint8_t jumps;      // jumps started
 	uint8_t facingLeft; // last horizontal direction pressed
 	uint8_t moving;     // ran this frame on the ground
+	tEnemy pEnemies[ENEMY_COUNT];
+	uint8_t pOrderY[ENEMY_COUNT]; // enemy ids sorted by y (logicEnemySortY)
+	uint8_t stomps;     // enemies stomped
+	uint8_t hits;       // times an enemy killed the hero (also counted in deaths)
+	uint8_t eventStomp; // this frame: bit i = enemy i was stomped
+	uint8_t eventHit;   // this frame: enemy id + 1 that killed the hero, 0 = none
 } tGameState;
+
+// Sprite multiplexing plan: which enemies the ONE attached sprite pair
+// (channels 4+5) shows this frame, top to bottom. On a channel a sprite must
+// end (VSTOP) before the next one starts: next y >= previous y + ENEMY_H + 1
+// (the DMA needs the blank line to fetch the next control words).
+#define ENEMY_MUX_GAP (ENEMY_H + 1)
+typedef struct {
+	uint8_t count;              // enemies shown
+	uint8_t skipped;            // visible but not shown (vertical overlap)
+	uint8_t pId[ENEMY_COUNT];   // shown enemies, sorted by y
+} tEnemyPlan;
 
 // Hero animation frames (art/hero.txt); left-facing = + ART_HERO_MIRROR
 #define HERO_IDLE 0
@@ -109,6 +165,27 @@ void logicInit(tGameState *pState);
 
 /** Advance one frame. Returns 1 if anything visible changed. */
 uint8_t logicUpdate(tGameState *pState, const tInput *pInput);
+
+/** Put an enemy at x,y walking dir, and work out its patrol range once:
+ *  it walks until the next step would leave the level, enter a solid tile
+ *  or step off its floor (pit / platform edge). The level never changes, so
+ *  the per-frame move is a compare instead of three tile lookups. */
+void logicEnemyPlace(tEnemy *pEnemy, int16_t x, int16_t y, int8_t dir);
+
+/** Art frame (0..5) for an enemy: walk A/B by distance walked, squashed;
+ *  + ENEMY_FRAME_MIRROR when walking right. */
+uint8_t logicEnemyFrame(const tEnemy *pEnemy);
+
+/** Sort pOrderY by enemy y (stable). logicInit() does it; call it again
+ *  after changing an enemy's y (enemies never change height in the game). */
+void logicEnemySortY(tGameState *pState);
+
+/** Plan the enemy sprite chain for the current camera: visible enemies
+ *  (any column on screen, not gone), sorted by y. When two overlap
+ *  vertically only one can be shown: on even frames the upper (earlier) one
+ *  wins, on odd frames the lower one - they flicker at 25 Hz instead of one
+ *  vanishing for good. */
+void logicEnemyPlan(const tGameState *pState, tEnemyPlan *pPlan);
 
 /** Camera for a player x: centred on the player, clamped to the level. */
 int16_t logicCameraFor(int16_t playerX);

@@ -88,6 +88,185 @@ uint8_t logicScrollDelay(uint16_t scrollX) {
 	return (uint8_t)((16 - (scrollX & 15)) & 15);
 }
 
+// ----------------------------------------------------------------- enemies
+
+// Where the enemies start: x, the tile row of the floor they walk on, and the
+// initial direction. Their heights on screen (y = 48, 96, 144, 192) are all at
+// least ENEMY_MUX_GAP apart, so enemies on different floors never compete for
+// the multiplexed sprite; two ground enemies (1, 5) are 300+ px apart.
+static const struct {
+	int16_t x;
+	uint8_t floorRow;
+	int8_t dir;
+} s_pEnemySpawns[ENEMY_COUNT] = {
+	{ 270,  7, -1}, // 0: first slab on screen (240..303), y 96
+	{ 560, 13, -1}, // 1: ground between pit 1 and pit 2 (400..751), y 192
+	{ 510, 10,  1}, // 2: low slab (480..559), y 144
+	{ 736,  4, -1}, // 3: high slab (720..767), y 48
+	{ 930,  7,  1}, // 4: middle slab (912..975), y 96
+	{1150, 13, -1}, // 5: last stretch of ground (1040..1279), y 192
+	{1180, 10,  1}, // 6: last low slab (1152..1215), y 144
+};
+
+// Can an enemy at x,y take one pixel step in dir? Not past the level ends,
+// not into a solid tile, and not off its floor: the tile under the leading
+// foot column must be ground or a slab top (that's how it turns at pits and
+// platform edges).
+static uint8_t enemyCanStep(int16_t x, int16_t y, int8_t dir) {
+	int16_t nx = x + dir;
+	if(nx < 0 || nx > LEVEL_W - ENEMY_W) {
+		return 0;
+	}
+	int16_t lead = dir > 0 ? nx + ENEMY_HB_R : nx + ENEMY_HB_L;
+	if(isSolidPx(lead, y) || isSolidPx(lead, y + ENEMY_H - 1)) {
+		return 0;
+	}
+	uint8_t t = logicTileAt(lead >> TILE_SHIFT, (y + ENEMY_H) >> TILE_SHIFT);
+	return t != TILE_EMPTY;
+}
+
+void logicEnemyPlace(tEnemy *pEnemy, int16_t x, int16_t y, int8_t dir) {
+	pEnemy->x = x;
+	pEnemy->xFix = x << FIX_SHIFT;
+	pEnemy->y = y;
+	pEnemy->dir = dir;
+	pEnemy->state = ENEMY_WALK;
+	pEnemy->timer = 0;
+	pEnemy->xMin = x;
+	while(enemyCanStep(pEnemy->xMin, y, -1)) --pEnemy->xMin;
+	pEnemy->xMax = x;
+	while(enemyCanStep(pEnemy->xMax, y, 1)) ++pEnemy->xMax;
+}
+
+static void enemiesInit(tGameState *pState) {
+	for(uint8_t i = 0; i < ENEMY_COUNT; ++i) {
+		logicEnemyPlace(&pState->pEnemies[i], s_pEnemySpawns[i].x,
+			s_pEnemySpawns[i].floorRow * TILE_SIZE - ENEMY_H, s_pEnemySpawns[i].dir);
+	}
+	logicEnemySortY(pState);
+}
+
+static void enemiesMove(tGameState *pState) {
+	for(uint8_t i = 0; i < ENEMY_COUNT; ++i) {
+		tEnemy *pE = &pState->pEnemies[i];
+		if(pE->state == ENEMY_SQUASHED) {
+			if(--pE->timer == 0) {
+				pE->state = ENEMY_GONE;
+			}
+			continue;
+		}
+		if(pE->state != ENEMY_WALK) {
+			continue;
+		}
+		int16_t nextFix = pE->xFix + (pE->dir > 0 ? ENEMY_SPEED_FIX : -ENEMY_SPEED_FIX);
+		if((nextFix >> FIX_SHIFT) == pE->x) {
+			pE->xFix = nextFix; // sub-pixel step only
+		}
+		else if(pE->dir > 0 ? pE->x < pE->xMax : pE->x > pE->xMin) {
+			pE->xFix = nextFix;
+			pE->x = nextFix >> FIX_SHIFT;
+		}
+		else {
+			// Turn around: stays on this pixel, starts the other way from
+			// the pixel's middle so both directions take the same time.
+			pE->dir = -pE->dir;
+			pE->xFix = (pE->x << FIX_SHIFT) + (1 << (FIX_SHIFT - 1));
+		}
+	}
+}
+
+static void respawn(tGameState *pState);
+
+// Hero vs enemies, after both have moved. Returns 1 if the hero died.
+static uint8_t enemiesCollide(tGameState *pState, uint8_t isJumpHeld) {
+	int16_t hL = pState->x + PLAYER_HB_L, hR = pState->x + PLAYER_HB_R;
+	int16_t hT = pState->y, hB = pState->y + PLAYER_H - 1;
+	uint8_t isFalling = pState->vy > 0;
+	uint8_t isStomped = 0;
+	for(uint8_t i = 0; i < ENEMY_COUNT; ++i) {
+		tEnemy *pE = &pState->pEnemies[i];
+		if(pE->state != ENEMY_WALK) {
+			continue;
+		}
+		int16_t eT = pE->y + ENEMY_HB_T;
+		if(hR < pE->x + ENEMY_HB_L || hL > pE->x + ENEMY_HB_R || hB < eT || hT > pE->y + ENEMY_H - 1) {
+			continue; // no overlap
+		}
+		if(isFalling && hB < eT + STOMP_WINDOW) {
+			pE->state = ENEMY_SQUASHED;
+			pE->timer = SQUASH_TICKS;
+			++pState->stomps;
+			pState->eventStomp |= 1 << i;
+			isStomped = 1;
+		}
+		else {
+			// Side, below, or rising into it: the hero dies.
+			pState->eventHit = i + 1;
+			++pState->hits;
+			++pState->deaths;
+			respawn(pState);
+			return 1;
+		}
+	}
+	if(isStomped) {
+		pState->vy = isJumpHeld ? -JUMP_VEL : -BOUNCE_VEL;
+		pState->yFix = pState->y << FIX_SHIFT;
+		pState->onGround = 0;
+	}
+	return 0;
+}
+
+uint8_t logicEnemyFrame(const tEnemy *pEnemy) {
+	uint8_t ubFrame = pEnemy->state == ENEMY_WALK ?
+		ENEMY_FRAME_WALK + ((pEnemy->x >> ENEMY_ANIM_SHIFT) & 1) : ENEMY_FRAME_SQUASHED;
+	return pEnemy->dir > 0 ? ubFrame + ENEMY_FRAME_MIRROR : ubFrame;
+}
+
+void logicEnemySortY(tGameState *pState) {
+	// Insertion sort by y, stable (equal y keeps id order). Enemies never
+	// change height, so this runs once, not per frame.
+	for(uint8_t i = 0; i < ENEMY_COUNT; ++i) {
+		uint8_t j = i;
+		while(j > 0 && pState->pEnemies[pState->pOrderY[j - 1]].y > pState->pEnemies[i].y) {
+			pState->pOrderY[j] = pState->pOrderY[j - 1];
+			--j;
+		}
+		pState->pOrderY[j] = i;
+	}
+}
+
+void logicEnemyPlan(const tGameState *pState, tEnemyPlan *pPlan) {
+	// Walk the enemies top to bottom, keeping the visible ones (any column
+	// on screen: screen x -15..319, and not gone). Greedy: a candidate that
+	// starts less than ENEMY_MUX_GAP below the last shown one conflicts with
+	// it. Even frame: keep the upper one; odd frame: replace it (the
+	// candidate is lower, so it still fits below the one before).
+	uint8_t ubCount = 0, ubSkipped = 0;
+	int16_t wLastY = 0;
+	for(uint8_t k = 0; k < ENEMY_COUNT; ++k) {
+		uint8_t id = pState->pOrderY[k];
+		const tEnemy *pE = &pState->pEnemies[id];
+		if((uint16_t)(pE->x - pState->cam + (ENEMY_W - 1)) >= SCREEN_W + ENEMY_W - 1 || pE->state == ENEMY_GONE) {
+			continue;
+		}
+		if(ubCount == 0 || pE->y >= wLastY + ENEMY_MUX_GAP) {
+			pPlan->pId[ubCount++] = id;
+			wLastY = pE->y;
+		}
+		else {
+			++ubSkipped;
+			if(pState->frame & 1) {
+				pPlan->pId[ubCount - 1] = id;
+				wLastY = pE->y;
+			}
+		}
+	}
+	pPlan->count = ubCount;
+	pPlan->skipped = ubSkipped;
+}
+
+// -------------------------------------------------------------------- hero
+
 static void respawn(tGameState *pState) {
 	pState->x = START_X;
 	pState->y = START_Y;
@@ -107,11 +286,18 @@ void logicInit(tGameState *pState) {
 	pState->jumps = 0;
 	pState->facingLeft = 0;
 	pState->moving = 0;
+	pState->stomps = 0;
+	pState->hits = 0;
+	pState->eventStomp = 0;
+	pState->eventHit = 0;
+	enemiesInit(pState);
 }
 
 uint8_t logicUpdate(tGameState *pState, const tInput *pInput) {
 	int16_t oldX = pState->x, oldY = pState->y, oldCam = pState->cam;
 	uint8_t oldGround = pState->onGround, oldWalk = pState->walkFrame;
+	pState->eventStomp = 0;
+	pState->eventHit = 0;
 
 	if(pInput->dx) {
 		pState->facingLeft = pInput->dx < 0;
@@ -197,11 +383,18 @@ uint8_t logicUpdate(tGameState *pState, const tInput *pInput) {
 		pState->walkTicks = 0;
 	}
 
+	// Enemies walk; then hero vs enemies (stomp = bounce, anything else =
+	// respawn at the start like a pit). Squashed enemies stay squashed and
+	// the walkers keep walking across a respawn: the level isn't reset.
+	enemiesMove(pState);
+	enemiesCollide(pState, pInput->jump);
+
 	pState->moving = pState->onGround && pInput->dx && pState->x != oldX;
 	pState->cam = logicCameraFor(pState->x);
 	++pState->frame;
 	return pState->x != oldX || pState->y != oldY || pState->cam != oldCam ||
-		pState->onGround != oldGround || pState->walkFrame != oldWalk;
+		pState->onGround != oldGround || pState->walkFrame != oldWalk ||
+		pState->eventStomp || pState->eventHit;
 }
 
 uint8_t logicHeroFrame(const tGameState *pState) {

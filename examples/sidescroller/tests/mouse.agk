@@ -1,5 +1,6 @@
 # Moving the mouse (port 1) must not move the player: only the joystick in
 # port 2 (ACE JOY1) counts. Reading JOY2 as well made the hero walk by itself.
+wait-serial "AGK t0"         # same game frame on every profile (see main.c)
 wait 5
 expect-serial "x=32 y=192"
 mouse 40 0

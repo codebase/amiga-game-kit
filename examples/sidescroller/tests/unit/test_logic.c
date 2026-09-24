@@ -217,7 +217,331 @@ static void testHeroFrames(void) {
 	CHECK(s.facingLeft == 1 && s.moving == 1);
 }
 
+// ----------------------------------------------------------------- enemies
+
+// Freeze every enemy except `keep` (GONE), so tests see one at a time.
+static void onlyEnemy(tGameState *s, uint8_t keep) {
+	for(uint8_t i = 0; i < ENEMY_COUNT; ++i) {
+		if(i != keep) s->pEnemies[i].state = ENEMY_GONE;
+	}
+}
+
+static void setEnemy(tEnemy *e, int16_t x, int16_t y, int8_t dir) {
+	logicEnemyPlace(e, x, y, dir);
+}
+
+// Park the hero far away (on the far right) so he touches nothing.
+static void parkHero(tGameState *s) {
+	s->x = LEVEL_W - PLAYER_W; s->y = START_Y; s->yFix = START_Y << FIX_SHIFT;
+	s->vy = 0; s->onGround = 1;
+}
+
+static void testEnemySpawns(void) {
+	tGameState s;
+	logicInit(&s);
+	for(uint8_t i = 0; i < ENEMY_COUNT; ++i) {
+		tEnemy *e = &s.pEnemies[i];
+		CHECK(e->state == ENEMY_WALK);
+		// standing on a floor tile, not inside anything
+		CHECK(logicTileAt((e->x + ENEMY_HB_L) >> TILE_SHIFT, (e->y + ENEMY_H) >> TILE_SHIFT) != TILE_EMPTY);
+		CHECK(logicTileAt((e->x + ENEMY_HB_R) >> TILE_SHIFT, (e->y + ENEMY_H) >> TILE_SHIFT) != TILE_EMPTY);
+		CHECK(logicTileAt((e->x + 8) >> TILE_SHIFT, e->y >> TILE_SHIFT) == TILE_EMPTY);
+		// far enough from the hero's start not to kill him on spawn
+		CHECK(e->x > START_X + 150 || e->y + ENEMY_H <= START_Y - 64);
+	}
+}
+
+// Walk one enemy for `frames` frames; return its x range.
+static void patrol(tGameState *s, uint8_t id, int frames, int16_t *pMin, int16_t *pMax, int *pTurns) {
+	int8_t dir = s->pEnemies[id].dir;
+	*pMin = *pMax = s->pEnemies[id].x;
+	*pTurns = 0;
+	for(int f = 0; f < frames; ++f) {
+		int16_t x0 = s->pEnemies[id].x;
+		step(s, 0, 0, 1);
+		int16_t x = s->pEnemies[id].x;
+		CHECK(x - x0 >= -1 && x - x0 <= 1);
+		if(x < *pMin) *pMin = x;
+		if(x > *pMax) *pMax = x;
+		if(s->pEnemies[id].dir != dir) { ++*pTurns; dir = s->pEnemies[id].dir; }
+	}
+}
+
+static void testEnemySpeed(void) {
+	tGameState s;
+	logicInit(&s);
+	parkHero(&s);
+	int16_t x0 = s.pEnemies[1].x;
+	step(&s, 0, 0, 40);
+	CHECK(s.pEnemies[1].x == x0 - 20); // 0.5 px/frame, walking left
+}
+
+static void testEnemyTurnsAtPlatformEdges(void) {
+	// Enemy 0 on the slab x 240..303: its feet (cols 2..13) never leave it.
+	tGameState s;
+	logicInit(&s);
+	parkHero(&s);
+	int16_t mn, mx; int turns;
+	patrol(&s, 0, 600, &mn, &mx, &turns);
+	CHECK(mn == 240 - ENEMY_HB_L);          // 238
+	CHECK(mx == 303 - ENEMY_HB_R);          // 290
+	CHECK(turns >= 4);
+	CHECK(s.pEnemies[0].y == 7 * TILE_SIZE - ENEMY_H);
+	// Enemy 3 on the narrow high slab 720..767
+	patrol(&s, 3, 400, &mn, &mx, &turns);
+	CHECK(mn == 720 - ENEMY_HB_L && mx == 767 - ENEMY_HB_R);
+}
+
+static void testEnemyTurnsAtPits(void) {
+	// Enemy 1 on the ground between pit 1 (352..399) and pit 2 (752..799).
+	tGameState s;
+	logicInit(&s);
+	parkHero(&s);
+	int16_t mn, mx; int turns;
+	patrol(&s, 1, 1600, &mn, &mx, &turns);
+	CHECK(mn == 400 - ENEMY_HB_L);
+	CHECK(mx == 751 - ENEMY_HB_R);
+	CHECK(turns >= 2);
+}
+
+static void testEnemyTurnsAtLevelEnds(void) {
+	tGameState s;
+	logicInit(&s);
+	onlyEnemy(&s, 5);
+	s.x = 200; // hero out of the way (enemy 5 is on the right)
+	setEnemy(&s.pEnemies[5], LEVEL_W - ENEMY_W - 3, START_Y, 1);
+	int16_t mn, mx; int turns;
+	patrol(&s, 5, 20, &mn, &mx, &turns);
+	CHECK(mx == LEVEL_W - ENEMY_W && turns == 1);
+	setEnemy(&s.pEnemies[5], 3, START_Y, -1);
+	s.x = 600;
+	patrol(&s, 5, 20, &mn, &mx, &turns);
+	CHECK(mn == 0 && turns == 1);
+}
+
+static void testEnemyFrames(void) {
+	tEnemy e;
+	setEnemy(&e, 100, 0, -1);
+	CHECK(logicEnemyFrame(&e) == ENEMY_FRAME_WALK + 1);   // (100 >> 2) & 1
+	e.x = 104;
+	CHECK(logicEnemyFrame(&e) == ENEMY_FRAME_WALK);
+	e.dir = 1;
+	CHECK(logicEnemyFrame(&e) == ENEMY_FRAME_WALK + ENEMY_FRAME_MIRROR);
+	e.state = ENEMY_SQUASHED;
+	CHECK(logicEnemyFrame(&e) == ENEMY_FRAME_SQUASHED + ENEMY_FRAME_MIRROR);
+	e.dir = -1;
+	CHECK(logicEnemyFrame(&e) == ENEMY_FRAME_SQUASHED);
+	// walking: both poses show within 8 px (16 frames)
+	tGameState s;
+	logicInit(&s);
+	parkHero(&s);
+	uint8_t seen[6] = {0};
+	for(int f = 0; f < 20; ++f) { step(&s, 0, 0, 1); seen[logicEnemyFrame(&s.pEnemies[1])] = 1; }
+	CHECK(seen[0] && seen[1] && !seen[2]);
+}
+
+// Hero directly above enemy 1, falling onto it.
+static void dropOnEnemy(tGameState *s, int16_t heightAbove) {
+	logicInit(s);
+	onlyEnemy(s, 1);
+	setEnemy(&s->pEnemies[1], 500, START_Y, -1);
+	s->x = 500; s->y = START_Y - heightAbove; s->yFix = s->y << FIX_SHIFT;
+	s->vy = 0; s->onGround = 0;
+}
+
+static void testStompBouncesAndSquashes(void) {
+	tGameState s;
+	dropOnEnemy(&s, 40);
+	int f = 0;
+	while(!s.stomps && f < 60) { step(&s, 0, 0, 1); ++f; }
+	CHECK(s.stomps == 1 && s.deaths == 0 && s.hits == 0);
+	CHECK(s.eventStomp == (1 << 1));
+	CHECK(s.pEnemies[1].state == ENEMY_SQUASHED);
+	CHECK(logicEnemyFrame(&s.pEnemies[1]) == ENEMY_FRAME_SQUASHED);
+	CHECK(s.vy == -BOUNCE_VEL && !s.onGround);
+	// feet landed in the cap window
+	CHECK(s.y + PLAYER_H - 1 >= START_Y + ENEMY_HB_T && s.y + PLAYER_H - 1 < START_Y + ENEMY_HB_T + STOMP_WINDOW);
+	int16_t yStomp = s.y, minY = s.y;
+	int16_t ex = s.pEnemies[1].x;
+	// squashed: stays put, SQUASH_TICKS frames, then gone
+	for(int t = 1; t < SQUASH_TICKS; ++t) {
+		step(&s, 0, 0, 1);
+		if(s.y < minY) minY = s.y;
+		CHECK(s.pEnemies[1].state == ENEMY_SQUASHED && s.pEnemies[1].x == ex);
+		CHECK(s.eventStomp == 0);
+	}
+	step(&s, 0, 0, 1);
+	CHECK(s.pEnemies[1].state == ENEMY_GONE);
+	int16_t bounce = yStomp - minY;
+	printf("stomp: bounce %d px\n", bounce);
+	CHECK(bounce >= 20 && bounce <= 32);   // a small hop, well under a jump (54)
+	// landing back where the enemy was: no collision with a squashed/gone enemy
+	step(&s, 0, 0, 40);
+	CHECK(s.onGround && s.y == START_Y && s.deaths == 0 && s.stomps == 1);
+}
+
+static void testStompWithJumpHeldBouncesHigh(void) {
+	tGameState s;
+	dropOnEnemy(&s, 40);
+	int f = 0;
+	while(!s.stomps && f < 60) { step(&s, 0, 1, 1); ++f; }
+	CHECK(s.stomps == 1 && s.vy == -JUMP_VEL);
+}
+
+static void testStompWindow(void) {
+	// One frame of a slow fall (vy 16 -> 22: 1 px). Feet end up at
+	// eT + 7 (last cap row in the window) -> stomp; eT + 8 -> hit.
+	int16_t eT = START_Y + ENEMY_HB_T;
+	for(int16_t d = 7; d <= 8; ++d) {
+		tGameState s;
+		dropOnEnemy(&s, 0);
+		s.y = eT + d - PLAYER_H; // feet 1 px above, moves 1 px down
+		s.yFix = s.y << FIX_SHIFT;
+		s.vy = 16;
+		step(&s, 0, 0, 1);
+		if(d == 7) CHECK(s.stomps == 1 && s.deaths == 0);
+		else CHECK(s.stomps == 0 && s.deaths == 1 && s.eventHit == 2);
+	}
+}
+
+static void testSideHitRespawns(void) {
+	tGameState s;
+	logicInit(&s);
+	onlyEnemy(&s, 1);
+	setEnemy(&s.pEnemies[1], 500, START_Y, -1);
+	s.x = 440; // on the ground, walking right into it
+	int f = 0;
+	while(!s.deaths && f < 60) { step(&s, 1, 0, 1); ++f; }
+	CHECK(s.deaths == 1 && s.hits == 1 && s.eventHit == 2 && s.stomps == 0);
+	CHECK(s.x == START_X && s.y == START_Y && s.onGround); // respawned
+	CHECK(s.pEnemies[1].state == ENEMY_WALK);              // enemies keep walking
+	int16_t ex = s.pEnemies[1].x;
+	step(&s, 0, 0, 2);
+	CHECK(s.eventHit == 0 && s.deaths == 1 && s.pEnemies[1].x == ex - 1);
+	// an enemy walking into a standing hero kills him too
+	logicInit(&s);
+	onlyEnemy(&s, 1);
+	setEnemy(&s.pEnemies[1], 480, START_Y, -1);
+	s.x = 460;
+	step(&s, 0, 0, 20);
+	CHECK(s.deaths == 1 && s.hits == 1);
+}
+
+static void testJumpingUpIntoEnemyKills(void) {
+	// Enemy 2 walks on the low one-way slab (y 144). Jumping up through the
+	// slab into it from below is a hit, not a stomp.
+	tGameState s;
+	logicInit(&s);
+	onlyEnemy(&s, 2);
+	setEnemy(&s.pEnemies[2], 510, 10 * TILE_SIZE - ENEMY_H, 1);
+	s.x = 510 + 8;
+	step(&s, 0, 1, 1);
+	step(&s, 0, 0, 30);
+	CHECK(s.deaths == 1 && s.stomps == 0 && s.eventHit == 0 && s.x == START_X);
+}
+
+static void testSquashedEnemyIsHarmless(void) {
+	tGameState s;
+	logicInit(&s);
+	onlyEnemy(&s, 1);
+	setEnemy(&s.pEnemies[1], 500, START_Y, -1);
+	s.pEnemies[1].state = ENEMY_SQUASHED;
+	s.pEnemies[1].timer = SQUASH_TICKS;
+	s.x = 470;
+	step(&s, 1, 0, 30); // runs right through it
+	CHECK(s.deaths == 0 && s.x == 530);
+}
+
+static void testEnemyPlan(void) {
+	tGameState s;
+	tEnemyPlan p;
+	logicInit(&s);
+	// camera 0: only enemy 0 (x 270) is on screen
+	logicEnemyPlan(&s, &p);
+	CHECK(p.count == 1 && p.pId[0] == 0 && p.skipped == 0);
+	// camera 400: enemies 1 (y 192) and 2 (y 144) -> sorted by y: 2 then 1
+	s.cam = 400;
+	logicEnemyPlan(&s, &p);
+	CHECK(p.count == 2 && p.pId[0] == 2 && p.pId[1] == 1 && p.skipped == 0);
+	// culling: x - cam in -15..319 is visible
+	s.cam = 270 + ENEMY_W - 1;
+	logicEnemyPlan(&s, &p);
+	CHECK(p.count >= 1 && p.pId[0] == 0);
+	s.cam = 270 + ENEMY_W;
+	logicEnemyPlan(&s, &p);
+	CHECK(p.count == 0 || p.pId[0] != 0);
+	// gone enemies are not shown; squashed ones are
+	s.cam = 400;
+	s.pEnemies[2].state = ENEMY_GONE;
+	s.pEnemies[1].state = ENEMY_SQUASHED;
+	logicEnemyPlan(&s, &p);
+	CHECK(p.count == 1 && p.pId[0] == 1);
+	// all spawn heights are multiplex-compatible (different floors)
+	logicInit(&s);
+	for(uint8_t i = 0; i < ENEMY_COUNT; ++i) {
+		for(uint8_t j = 0; j < ENEMY_COUNT; ++j) {
+			int16_t d = s.pEnemies[i].y - s.pEnemies[j].y;
+			CHECK(d == 0 || d >= ENEMY_MUX_GAP || d <= -ENEMY_MUX_GAP);
+		}
+	}
+}
+
+static void testEnemyPlanOverlap(void) {
+	// Three enemies on screen: A at y 100, B at y 110 (overlaps A), C at 150.
+	tGameState s;
+	tEnemyPlan p;
+	logicInit(&s);
+	for(uint8_t i = 0; i < ENEMY_COUNT; ++i) s.pEnemies[i].state = ENEMY_GONE;
+	s.cam = 0;
+	setEnemy(&s.pEnemies[4], 50, 110, 1);  // B (listed first: sort must reorder)
+	setEnemy(&s.pEnemies[2], 100, 100, 1); // A
+	setEnemy(&s.pEnemies[6], 150, 150, 1); // C
+	logicEnemySortY(&s);
+	s.frame = 0; // even: the upper one (A) wins
+	logicEnemyPlan(&s, &p);
+	CHECK(p.count == 2 && p.skipped == 1 && p.pId[0] == 2 && p.pId[1] == 6);
+	s.frame = 1; // odd: the lower one (B) wins
+	logicEnemyPlan(&s, &p);
+	CHECK(p.count == 2 && p.skipped == 1 && p.pId[0] == 4 && p.pId[1] == 6);
+	// Exactly ENEMY_MUX_GAP apart: both fit (VSTOP of A < VSTART of B)
+	s.pEnemies[4].y = 100 + ENEMY_MUX_GAP;
+	logicEnemySortY(&s);
+	logicEnemyPlan(&s, &p);
+	CHECK(p.count == 3 && p.skipped == 0);
+	s.pEnemies[4].y = 100 + ENEMY_MUX_GAP - 1; // one line closer: conflict
+	logicEnemySortY(&s);
+	logicEnemyPlan(&s, &p);
+	CHECK(p.count == 2 && p.skipped == 1);
+	// Invariant for any layout: shown list is sorted with gaps >= ENEMY_MUX_GAP
+	for(int16_t yb = 60; yb < 200; yb += 3) {
+		s.pEnemies[4].y = yb;
+		logicEnemySortY(&s);
+		for(uint16_t fr = 0; fr < 2; ++fr) {
+			s.frame = fr;
+			logicEnemyPlan(&s, &p);
+			CHECK(p.count + p.skipped == 3);
+			for(uint8_t k = 1; k < p.count; ++k) {
+				CHECK(s.pEnemies[p.pId[k]].y >= s.pEnemies[p.pId[k - 1]].y + ENEMY_MUX_GAP);
+			}
+		}
+	}
+}
+
 int main(void) {
+	testEnemySpawns();
+	testEnemySpeed();
+	testEnemyTurnsAtPlatformEdges();
+	testEnemyTurnsAtPits();
+	testEnemyTurnsAtLevelEnds();
+	testEnemyFrames();
+	testStompBouncesAndSquashes();
+	testStompWithJumpHeldBouncesHigh();
+	testStompWindow();
+	testSideHitRespawns();
+	testJumpingUpIntoEnemyKills();
+	testSquashedEnemyIsHarmless();
+	testEnemyPlan();
+	testEnemyPlanOverlap();
 	testHeroFrames();
 	testLevelShape();
 	testStartsOnGround();

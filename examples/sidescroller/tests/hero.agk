@@ -1,6 +1,7 @@
 # The hero (art/hero.txt) picks its frame from the game state: idle/breathe
 # (0/1), an 8-frame walk (2-9), jump (10), fall (11), and mirrored copies
 # (+12) when facing left.
+wait-serial "AGK t0"         # same game frame on every profile (see main.c)
 wait 40
 screenshot idle
 expect-serial "anim=1"                 # breathing while standing still

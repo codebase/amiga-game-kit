@@ -35,6 +35,8 @@
 #define FETCH_BYTES 42       // 21 words per line: 320 px + the extra scroll word
 #define BAND_WAIT_X 0xD8     // after the last fetch of the line (DDFSTOP 0xD0 + 8)
 
+#define SYNC_FRAME 10     // "AGK t0" (see the end of genericProcess)
+
 #define LEVEL_BPP 3
 #define BAND_BPP 3
 
@@ -53,6 +55,31 @@ static tBitMap *s_pHeroFrames[ART_HERO_FRAMES][ART_HERO_PARTS];
 static tSprite *s_pHero[ART_HERO_PARTS];
 static UBYTE s_ubShownHeroFrame;
 static tGameState s_sState;
+
+// Enemies: ALL of them share ONE attached sprite pair, channels 4 (colour
+// bits 0-1) + 5 (bits 2-3, ATTACH), by vertical multiplexing. Each frame we
+// write a sprite DMA chain per channel into chip RAM, top to bottom:
+//   POS, CTL, 16 x (DATA, DATB), POS, CTL, 16 x (DATA, DATB), ..., 0, 0
+// After a sprite's VSTOP line the DMA fetches the next POS/CTL pair, so the
+// next sprite must start at least one line below: logicEnemyPlan() decides
+// which enemies fit. The chains are double-buffered with the copper list:
+// copper buffer A's SPR4PT/SPR5PT MOVEs point at chain A, B's at chain B,
+// written once at startup - ACE's sprite manager never touches channels we
+// don't spriteAdd() (it only blanks all 8 once in spriteManagerCreate()).
+#define ENEMY_CHANNEL ART_ENEMY_CHANNEL      // 4, and 5 attached
+#define ENEMY_SPRITE_WORDS (2 + 2 * ART_ENEMY_H)
+#define ENEMY_CHAIN_WORDS (ENEMY_COUNT * ENEMY_SPRITE_WORDS + 2)
+#define SPRxCTL_ATTACH 0x0080
+static tBitMap *s_pEnemyFrames[ART_ENEMY_FRAMES][ART_ENEMY_PARTS];
+static const UWORD *s_pEnemyData[ART_ENEMY_FRAMES][ART_ENEMY_PARTS]; // 16 x (DATA, DATB)
+static UWORD *s_pEnemyChain[2][ART_ENEMY_PARTS];   // [copper buffer][part]
+static tCopBfr *s_pCopBfrA;                        // copper buffer that uses chain 0
+// Art frame whose data rows are in chain slot k, per buffer: the 16 data rows
+// are only rewritten when a slot's frame changes (walk pose every 8 frames,
+// a different enemy in the slot); otherwise just POS/CTL (enemies move).
+#define ENEMY_SLOT_EMPTY 0xFF
+static UBYTE s_pChainFrame[2][ENEMY_COUNT];
+static tEnemyPlan s_sEnemyPlan;
 
 // --------------------------------------------------------- copper list ---
 // Raw list, same layout in both buffers:
@@ -241,6 +268,94 @@ static void copperUpdate(WORD wCam) {
 	setPtrs(pList, s_sHillSlots.uwPtr, s_pHills, logicScrollByteOffset(s_uwHillOffs));
 }
 
+// --------------------------------------------------------------- enemies ---
+
+static void enemyChainsCreate(void) {
+	for(UBYTE f = 0; f < ART_ENEMY_FRAMES; ++f) {
+		for(UBYTE p = 0; p < ART_ENEMY_PARTS; ++p) {
+			// artEnemyCreate() gives a ready single-sprite bitmap: row 0 is the
+			// POS/CTL header, rows 1..16 are (DATA, DATB) words. We only copy
+			// the data rows into the chains.
+			s_pEnemyFrames[f][p] = artEnemyCreate(f, p);
+			s_pEnemyData[f][p] = (const UWORD *)s_pEnemyFrames[f][p]->Planes[0] + 2;
+		}
+	}
+	tCopList *pCopList = s_pView->pCopList;
+	s_pCopBfrA = pCopList->pBackBfr;
+	for(UBYTE b = 0; b < 2; ++b) {
+		for(UBYTE k = 0; k < ENEMY_COUNT; ++k) s_pChainFrame[b][k] = ENEMY_SLOT_EMPTY;
+	}
+	for(UBYTE b = 0; b < 2; ++b) {
+		tCopCmd *pList = (b == 0 ? pCopList->pBackBfr : pCopList->pFrontBfr)->pList;
+		for(UBYTE p = 0; p < ART_ENEMY_PARTS; ++p) {
+			// Cleared: starts as an empty chain (POS=CTL=0 ends the channel).
+			s_pEnemyChain[b][p] = memAllocChipClear(ENEMY_CHAIN_WORDS * sizeof(UWORD));
+			ULONG ulAddr = (ULONG)s_pEnemyChain[b][p];
+			// The sprite manager's raw slots: 2 MOVEs (SPRxPTH, SPRxPTL) per channel.
+			UWORD uwSlot = COP_SPRITES_POS + 2 * (ENEMY_CHANNEL + p);
+			copSetMoveVal(&pList[uwSlot].sMove, ulAddr >> 16);
+			copSetMoveVal(&pList[uwSlot + 1].sMove, ulAddr & 0xFFFF);
+		}
+	}
+}
+
+static void enemyChainsDestroy(void) {
+	for(UBYTE b = 0; b < 2; ++b) {
+		for(UBYTE p = 0; p < ART_ENEMY_PARTS; ++p) {
+			memFree(s_pEnemyChain[b][p], ENEMY_CHAIN_WORDS * sizeof(UWORD));
+		}
+	}
+	for(UBYTE f = 0; f < ART_ENEMY_FRAMES; ++f) {
+		for(UBYTE p = 0; p < ART_ENEMY_PARTS; ++p) {
+			bitmapDestroy(s_pEnemyFrames[f][p]);
+		}
+	}
+}
+
+// Fill the back buffer's chains from the plan (sorted by y, non-overlapping).
+// Slot k of a chain is always at word k * ENEMY_SPRITE_WORDS.
+static void enemyChainsBuild(void) {
+	UBYTE ubBfr = s_pView->pCopList->pBackBfr == s_pCopBfrA ? 0 : 1;
+	UWORD *pEven = s_pEnemyChain[ubBfr][0];
+	UWORD *pOdd = s_pEnemyChain[ubBfr][1];
+	UBYTE *pSlotFrame = s_pChainFrame[ubBfr];
+	logicEnemyPlan(&s_sState, &s_sEnemyPlan);
+	for(UBYTE i = 0; i < s_sEnemyPlan.count; ++i) {
+		const tEnemy *pE = &s_sState.pEnemies[s_sEnemyPlan.pId[i]];
+		UBYTE ubFrame = logicEnemyFrame(pE);
+		// Same coordinate mapping as ACE's spriteProcess(): beam = view origin + game px.
+		UWORD uwVStart = s_pView->ubPosY + pE->y;
+		UWORD uwVStop = uwVStart + ART_ENEMY_H;
+		UWORD uwHStart = s_pView->ubPosX - 1 + (pE->x - s_sState.cam);
+		UWORD uwPos = (uwVStart << 8) | ((uwHStart >> 1) & 0xFF);
+		UWORD uwCtl = (uwVStop << 8) |
+			((uwVStart >> 8) & 1) << 2 |  // VSTART bit 8
+			((uwVStop >> 8) & 1) << 1 |   // VSTOP bit 8
+			(uwHStart & 1);               // HSTART bit 0
+		pEven[0] = uwPos;
+		pEven[1] = uwCtl;
+		pOdd[0] = uwPos;
+		pOdd[1] = uwCtl | SPRxCTL_ATTACH;  // odd channel: attach to channel 4
+		if(pSlotFrame[i] != ubFrame) {
+			pSlotFrame[i] = ubFrame;
+			const ULONG *pSrcEven = (const ULONG *)s_pEnemyData[ubFrame][0];
+			const ULONG *pSrcOdd = (const ULONG *)s_pEnemyData[ubFrame][1];
+			ULONG *pDstEven = (ULONG *)&pEven[2], *pDstOdd = (ULONG *)&pOdd[2];
+			for(UBYTE r = ART_ENEMY_H; r--;) { // one (DATA, DATB) longword per row
+				*pDstEven++ = *pSrcEven++;
+				*pDstOdd++ = *pSrcOdd++;
+			}
+		}
+		pEven += ENEMY_SPRITE_WORDS;
+		pOdd += ENEMY_SPRITE_WORDS;
+	}
+	// End of chain: POS = CTL = 0 (the channel stays off for the rest of the
+	// frame). This overwrites the next slot's control words, not its data rows,
+	// so that slot's cached frame stays valid.
+	pEven[0] = 0; pEven[1] = 0;
+	pOdd[0] = 0; pOdd[1] = 0;
+}
+
 // ----------------------------------------------------------------- level ---
 
 static void drawLevel(void) {
@@ -318,11 +433,14 @@ void genericCreate(void) {
 		}
 	}
 	s_ubShownHeroFrame = 0;
+	enemyChainsCreate(); // after spriteManagerCreate(): it blanks all 8 channels
 
 	copperCreate();
 	copperUpdate(s_sState.cam);
-	copProcessBlocks();       // both buffers get the initial scroll values
+	enemyChainsBuild();
+	copProcessBlocks();       // both buffers get the initial scroll values and chains
 	copperUpdate(s_sState.cam);
+	enemyChainsBuild();
 
 	viewLoad(s_pView);
 	systemUnuse();
@@ -356,10 +474,32 @@ void genericProcess(void) {
 	}
 	s_ubShownHeroFrame = ubHeroFrame;
 
+	UBYTE ubShownBefore = s_sEnemyPlan.count, ubSkippedBefore = s_sEnemyPlan.skipped;
+	enemyChainsBuild();
+
 	copperUpdate(s_sState.cam);
 
+	// Enemy events for tests: one line each, before the state line
+	// ("AGK stomp id=1 x=446 y=192", "AGK hit id=1"): agkState() with a key
+	// that has a space in it builds the line in one host transfer.
+	if(s_sState.eventStomp) {
+		for(UBYTE i = 0; i < ENEMY_COUNT; ++i) {
+			if(s_sState.eventStomp & (1 << i)) {
+				agkState("stomp id", i);
+				agkState("x", s_sState.pEnemies[i].x);
+				agkState("y", s_sState.pEnemies[i].y);
+				agkEnd();
+			}
+		}
+	}
+	if(s_sState.eventHit) {
+		agkState("hit id", s_sState.eventHit - 1);
+		agkEnd();
+	}
+	UBYTE isMuxChanged = s_sEnemyPlan.count != ubShownBefore || s_sEnemyPlan.skipped != ubSkippedBefore;
+
 	// Report state for tests: on every change, plus a heartbeat.
-	if(isChanged || s_sState.frame % 50 == 0 || s_sState.frame <= 3) {
+	if(isChanged || isMuxChanged || s_sState.frame % 50 == 0 || s_sState.frame <= 3) {
 		agkState("frame", s_sState.frame);
 		agkState("x", s_sState.x);
 		agkState("y", s_sState.y);
@@ -373,6 +513,12 @@ void genericProcess(void) {
 		agkState("left", s_sState.facingLeft);
 		agkState("jumps", s_sState.jumps);
 		agkState("deaths", s_sState.deaths);
+		agkState("stomps", s_sState.stomps);
+		if(isMuxChanged || s_sState.frame % 50 == 0 || s_sState.frame <= 3) {
+			// Multiplexer, only when it changes (each field costs ~1.4% of a frame)
+			agkState("spr", s_sEnemyPlan.count);    // enemies in this frame's sprite chain
+			agkState("skip", s_sEnemyPlan.skipped); // visible but left out (overlap)
+		}
 		agkEnd();
 	}
 
@@ -388,6 +534,15 @@ void genericProcess(void) {
 		agkEnd();
 		agkReady();
 	}
+	// Test sync point. The harness starts a scenario 4-5 game frames after
+	// "AGK ready" depending on the machine profile (frame 6 on AROS, 7 on
+	// Kickstart), but the enemies walk from frame 0: a 1-frame difference
+	// moves them 0.5 px and the goldens differ per profile. Scenarios start
+	// with `wait-serial "AGK t0"`, which resumes at the start of frame
+	// SYNC_FRAME + 1 on every profile.
+	if(s_sState.frame == SYNC_FRAME) {
+		agkPrint("AGK t0\n");
+	}
 }
 
 void genericDestroy(void) {
@@ -395,6 +550,7 @@ void genericDestroy(void) {
 	systemUse();
 	systemSetDmaBit(DMAB_SPRITE, 0);
 	spriteManagerDestroy();
+	enemyChainsDestroy();
 	for(UBYTE f = 0; f < ART_HERO_FRAMES; ++f) {
 		for(UBYTE p = 0; p < ART_HERO_PARTS; ++p) {
 			bitmapDestroy(s_pHeroFrames[f][p]);

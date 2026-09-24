@@ -1,17 +1,30 @@
 # Run to the end of the level, jumping the three pits. The camera clamps at
 # 960 (level 1280 - screen 320); the player stops at the level edge (1264).
+# Two ground enemies patrol the route, so it stomps both (host-simulated
+# route; each stomp works over a range of timings, see README):
+# enemy 1 between pit 1 and pit 2, enemy 5 at the level end.
+wait-serial "AGK t0"         # same game frame on every profile (see main.c)
 press right 154
-press right+up 1
+press right+up 1           # pit 1
+press right 36
+press right+up 1           # hop towards enemy 1...
+press right 15
+wait 30                    # ...and drop onto it (then bounce)
+press right 140
+press right+up 1           # pit 2
+press right 130
+press right+up 1           # pit 3
+press right 110
+press right+up 1           # chase enemy 5 and land on it
+press right 26
+wait 20
 press right 100
-press right 99
-press right+up 1
-press right 100
-press right 27
-press right+up 1
-press right 150
 wait 3
 screenshot end
-expect-serial "x=1264 y=192 cam=960 mtn=240 hills=96 ground=1"
+expect-serial "AGK stomp id=1 x=\d+ y=192"
+expect-serial "AGK stomp id=5 x=\d+ y=192"
+expect-serial "x=1264 y=192 cam=960 mtn=240 hills=96 ground=1 .* stomps=2"
 expect-no-serial "deaths=[1-9]"
+expect-no-serial "AGK hit"
 # player at screen x = 1264 - 960 = 304
 expect-color end 312 190 0x723 near 2       # hero scarf

@@ -1,5 +1,6 @@
 # Jump through the one-way stone slab (row 10, x 128..191) and land on it,
 # then walk off its end and fall back to the ground.
+wait-serial "AGK t0"         # same game frame on every profile (see main.c)
 press right 56
 expect-serial "x=144 y=192 cam=0"
 press up 1

@@ -2,6 +2,7 @@
 # camera 160. The level (PF1) moves 160 px, the hills (PF2, cam/2) 80 px,
 # the mountains (PF2, cam/4) 40 px. Each feature is a vertical colour edge:
 # left pixel / right pixel, so a 1 px error fails.
+wait-serial "AGK t0"         # same game frame on every profile (see main.c)
 screenshot cam0
 expect-serial "x=32 y=192 cam=0 mtn=0 hills=0"
 # mountains edge at x=66|67, y=60
