@@ -1,0 +1,15 @@
+# The enemy BOB (art/enemy.png, 2 frames) alternates frames every 16 ticks.
+# Enemy origin: eframe1 at (110,150), eframe0 at (130,150).
+wait-serial "eframe=1"
+wait 2
+screenshot eframe1
+expect-color eframe1 121 158 0x200   # frame 1: pupils looking right/down
+expect-color eframe1 119 157 0xFF8   # ...so frame 0's pupil spot is eye yellow
+expect-color eframe1 120 165 0xD22   # frame 1 has no grass strip
+wait-serial "eframe=0"
+wait 2
+screenshot eframe0
+expect-color eframe0 139 157 0x200   # frame 0: pupils up/left
+expect-color eframe0 141 158 0xFF8
+expect-color eframe0 140 165 0x2A4   # frame 0: grass strip
+expect-color eframe0 100 165 0x113   # nothing left behind where it was

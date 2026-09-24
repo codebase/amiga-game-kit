@@ -7,6 +7,7 @@
     agk test [PROJECT] [--update]   run tests/*.agk, compare screenshots to goldens
     agk unit [PROJECT]              compile game logic for the host and run tests/unit/*.c
     agk new DIR                     start a new game from the template
+    agk art [PROJECT]               convert art/ (text or PNG) to sprites/BOBs + previews
 
 PROJECT is a directory with an agk.toml (default: current directory).
 """
@@ -56,7 +57,8 @@ def _newest_source(proj):
         for base, dirs, files in os.walk(root):
             dirs[:] = [d for d in dirs if d not in ("build", "tests", ".git")]  # prune in place
             for f in files:
-                if f.endswith((".c", ".h", ".s", ".asm", ".i", ".cmake", ".toml")) or f == "CMakeLists.txt":
+                if (f.endswith((".c", ".h", ".s", ".asm", ".i", ".cmake", ".toml", ".png"))
+                    or f == "CMakeLists.txt" or (os.path.basename(base) == "art" and f.endswith(".txt"))):
                     newest = max(newest, os.path.getmtime(os.path.join(base, f)))
     return newest
 
@@ -64,7 +66,16 @@ def _newest_source(proj):
 def need_adf(proj, build=True):
     """Make sure build/<name>.adf exists and is newer than the sources,
     rebuilding if needed so tests never run against stale code."""
-    stale = not os.path.exists(proj["adf"]) or os.path.getmtime(proj["adf"]) < _newest_source(proj)
+    # Regenerate art first (cheap; files are only rewritten when their content
+    # changes), so edited art or a newer converter counts as a source change.
+    if not _run_art(proj, quiet=True):
+        raise SystemExit(1)
+    newest = _newest_source(proj)
+    for gen in ("art.c", "art.h"):
+        p = os.path.join(proj["dir"], "build", "art", gen)
+        if os.path.exists(p):
+            newest = max(newest, os.path.getmtime(p))
+    stale = not os.path.exists(proj["adf"]) or os.path.getmtime(proj["adf"]) < newest
     if not stale:
         return
     if not build:
@@ -127,8 +138,39 @@ def _build_cmd(proj, extra=()):
     return [os.path.join(ROOT, "tools", "build"), proj["dir"], *(f"-D{k}={v}" for k, v in opts.items())]
 
 
+def _run_art(proj, quiet=False):
+    """Convert art/ (if any). Returns False on errors (already printed)."""
+    from . import art
+    try:
+        assets = art.build(proj["dir"])
+    except art.ArtError as e:
+        print(f"art error: {e}", file=sys.stderr)
+        return False
+    if assets is None:
+        return True
+    for a in assets:
+        if not quiet or a.warnings:
+            extra = (f"channel {a.channel}, colours {art._hex(a.sprite_colors)}" if a.kind == "sprite"
+                     else f"{a.depth} planes, {len(a.colors_used())} colours")
+            print(f"  art {a.name}: {a.kind} {a.w}x{a.h} x{len(a.frames)} frame(s), {extra}", file=sys.stderr)
+        for w in a.warnings:
+            print(f"    warning: {w}", file=sys.stderr)
+    if not quiet:
+        print(f"  previews: {rel(os.path.join(proj['dir'], 'build', 'art', 'preview'))}/", file=sys.stderr)
+    return True
+
+
+def cmd_art(args):
+    proj = load_project(args.project)
+    if not os.path.exists(os.path.join(proj["dir"], "art", "art.toml")):
+        raise SystemExit("no art/art.toml in this project - see: agk help-art")
+    return 0 if _run_art(proj) else 1
+
+
 def cmd_build(args):
     proj = load_project(args.project)
+    if not _run_art(proj, quiet=True):
+        return 1
     return subprocess.run(_build_cmd(proj, args.define or [])).returncode
 
 
@@ -154,8 +196,9 @@ def _report(res, as_json):
                 x0, y0, x1, y1 = g["bbox"]
                 gx0, gy0 = max(0, (x0 - SCREEN_X0) // 2), max(0, y0 - SCREEN_Y0)
                 gx1, gy1 = min(319, (x1 - SCREEN_X0) // 2), min(255, y1 - SCREEN_Y0)
-                print(f"    golden: DIFFERENT - {g['pixels']} px changed around game x={gx0}..{gx1} "
-                      f"y={gy0}..{gy1}, see {rel(g['diff'])}")
+                where = (f"around game x={gx0}..{gx1} y={gy0}..{gy1}" if gx0 <= gx1 and gy0 <= gy1
+                         else "outside the 320x256 playfield (in the border)")
+                print(f"    golden: DIFFERENT - {g['pixels']} px changed {where}, see {rel(g['diff'])}")
     for f in res["failures"]:
         print(f"  ! {f}")
     print(f"  serial: {rel(os.path.join(res['outdir'], 'serial.txt'))}")
@@ -181,8 +224,9 @@ def cmd_run(args):
     profile = args.profile or proj["profile"]
     # Separate from agk test's build/agk/<profile>/<test> so ad hoc runs don't clobber test output.
     outdir = os.path.abspath(args.out or os.path.join(proj["dir"], "build", "agk-run", profile, name))
-    res = runner.run(proj["adf"], profile, sc, outdir, proj["boot"], fresh=args.fresh, sync=proj["sync"])
-    _report(res, args.json)
+    with runner.outdir_lock(outdir):
+        res = runner.run(proj["adf"], profile, sc, outdir, proj["boot"], fresh=args.fresh, sync=proj["sync"])
+        _report(res, args.json)
     return 0 if res["ok"] else 1
 
 
@@ -257,12 +301,13 @@ def cmd_test(args):
                                 "failures": [f"{f}: {e}"], "screenshots": {}, "outdir": tdir})
                 continue
             outdir = os.path.join(proj["dir"], "build", "agk", profile, name)
-            res = runner.run(proj["adf"], profile, sc, outdir, proj["boot"], sync=proj["sync"])
-            if not res["failures"] or res["screenshots"]:
-                _check_goldens(res, os.path.join(tdir, "golden", name), profile, args.update, refreshed)
+            with runner.outdir_lock(outdir):
+                res = runner.run(proj["adf"], profile, sc, outdir, proj["boot"], sync=proj["sync"])
+                if not res["failures"] or res["screenshots"]:
+                    _check_goldens(res, os.path.join(tdir, "golden", name), profile, args.update, refreshed)
+                if not args.json:
+                    _report(res, False)
             results.append(res)
-            if not args.json:
-                _report(res, False)
     passed = sum(r["ok"] for r in results)
     if args.json:
         print(json.dumps(results, indent=2))
@@ -375,7 +420,11 @@ def main(argv=None):
     p.add_argument("--name", help="executable name (default: directory name)")
     p.add_argument("--template", default="game")
 
+    p = sub.add_parser("art", help="convert art/ to Amiga sprites/BOBs and write previews")
+    p.add_argument("project", nargs="?")
+
     sub.add_parser("help-scenario", help="print the scenario language reference")
+    sub.add_parser("help-art", help="print the art pipeline reference")
     sub.add_parser("help", help="show this help")
 
     args = ap.parse_args(argv)
@@ -385,9 +434,13 @@ def main(argv=None):
     if args.cmd == "help-scenario":
         print(scenario.__doc__)
         return 0
+    if args.cmd == "help-art":
+        from . import art
+        print(art.__doc__)
+        return 0
     try:
         return {"doctor": cmd_doctor, "build": cmd_build, "run": cmd_run, "test": cmd_test,
-                "unit": cmd_unit, "new": cmd_new}[args.cmd](args)
+                "unit": cmd_unit, "new": cmd_new, "art": cmd_art}[args.cmd](args)
     except runner.RunError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

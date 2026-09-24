@@ -66,6 +66,15 @@ Games link the AGK runtime (`runtime/`) and report what they're doing through
 - `agkState("score", 10); agkEnd();` prints `AGK score=10`, which tests match with `expect-serial`.
 - `agkDebugAsync(1)` (after `systemUnuse()`) makes output interrupt-driven, so it costs almost no frame time.
 
+## Art pipeline
+
+Draw graphics as text files or PNGs (hand-made, from a pixel-art tool or from
+an AI generator) in `art/`:
+- **`agk art`** converts them to Amiga hardware sprites and BOBs.
+- It **enforces the hardware's rules**, e.g. a sprite is 16 px wide with 3 colours, sprites on a channel pair share colours, and BOB colours must be in the palette. Problems come back as clear errors or warnings.
+- It writes zoomed **previews** of exactly what the Amiga will show.
+- Games call generated functions (`artPlayerCreate(frame)`, …). See `agk help-art` and `techniques/sprites`.
+
 ## Project structure
 
 `agk new` produces a game split so agents can test it quickly:
@@ -102,6 +111,8 @@ tools/        setup, build, selftest, agk (CLI), agk-mcp (MCP server)
 harness/agk/  the agk CLI: scenarios, emulator driver, images, profiles, MCP
 runtime/      C library games link (serial debug channel)
 templates/    project templates for agk new
+techniques/   small tested games, one technique each, with TECHNIQUE.md (bobs,
+              scrolling, copper, sprites/art) - measured costs and gotchas
 patches/      local patches to vAmiga and ACE (all intended for upstream)
 examples/     example games; each has agk.toml, src/, tests/*.agk, tests/golden/
 docs/         design notes and results

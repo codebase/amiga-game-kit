@@ -120,3 +120,82 @@ def diff(a: Image, b: Image):
             out[i:i + 3] = bytes((g, g, g))
     bbox = (x0, y0, x1, y1) if count else None
     return count, bbox, Image(bytes(out), a.width, a.height)
+
+
+def load_png_rgba(path):
+    """Decode any common non-interlaced PNG (grey, RGB, palette, grey+alpha,
+    RGBA; 8-bit, or 1/2/4-bit palette/grey) to (width, height, [(r,g,b,a)...]).
+    Art tools and AI generators produce all of these."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError(f"{path}: not a PNG")
+    pos, idat, plte, trns = 8, b"", b"", b""
+    width = height = depth = ctype = None
+    while pos < len(data):
+        length, tag = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + length]
+        if tag == b"IHDR":
+            width, height, depth, ctype, _, _, interlace = struct.unpack(">IIBBBBB", body)
+            if interlace:
+                raise ValueError(f"{path}: interlaced PNGs aren't supported - re-save without interlacing")
+        elif tag == b"PLTE":
+            plte = body
+        elif tag == b"tRNS":
+            trns = body
+        elif tag == b"IDAT":
+            idat += body
+        pos += 12 + length
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[ctype]
+    if depth == 16:
+        raise ValueError(f"{path}: 16-bit PNGs aren't supported - export 8-bit")
+    bits = channels * depth
+    bpp = max(1, bits // 8)                    # filter unit in bytes
+    stride = (width * bits + 7) // 8
+    raw = zlib.decompress(idat)
+    rows, prev = [], bytearray(stride)
+    for y in range(height):
+        ftype = raw[y * (stride + 1)]
+        line = bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        for i in range(stride):
+            a = line[i - bpp] if i >= bpp else 0
+            b = prev[i]
+            c = prev[i - bpp] if i >= bpp else 0
+            if ftype == 1:
+                line[i] = (line[i] + a) & 255
+            elif ftype == 2:
+                line[i] = (line[i] + b) & 255
+            elif ftype == 3:
+                line[i] = (line[i] + (a + b) // 2) & 255
+            elif ftype == 4:
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else (b if pb <= pc else c))) & 255
+        rows.append(bytes(line))
+        prev = line
+
+    def samples(line):
+        if depth == 8:
+            return list(line)
+        per = 8 // depth
+        mask = (1 << depth) - 1
+        return [(line[i // per] >> (8 - depth * (i % per + 1))) & mask for i in range(width * channels)]
+
+    pixels = []
+    for line in rows:
+        v = samples(line)
+        for x in range(width):
+            px = v[x * channels:(x + 1) * channels]
+            if ctype == 3:
+                i = px[0]
+                r, g, b = plte[i * 3:i * 3 + 3]
+                a = trns[i] if i < len(trns) else 255
+            elif ctype in (0, 4):
+                g0 = px[0] * 255 // ((1 << depth) - 1)
+                r = g = b = g0
+                a = px[1] if ctype == 4 else 255
+            else:
+                r, g, b = px[:3]
+                a = px[3] if ctype == 6 else 255
+            pixels.append((r, g, b, a))
+    return width, height, pixels

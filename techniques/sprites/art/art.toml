@@ -1,0 +1,13 @@
+# Assets for agk art. See: agk help-art
+[art]
+depth = 3                 # bitplanes of the game's display (BOBs use this)
+
+[player]
+source = "player.txt"     # text art, 4 frames
+kind = "sprite"
+channel = 0               # colours land in palette slots 17-19
+
+[enemy]
+source = "enemy.png"      # PNG sheet: 2 frames of 32x16 side by side
+kind = "bob"
+frame_width = 32

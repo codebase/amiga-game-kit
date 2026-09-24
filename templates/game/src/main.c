@@ -12,10 +12,10 @@
 #include <hardware/dmabits.h>
 #include <agk/debug.h>
 #include <agk/perf.h>
+#include "art.h"      // generated from art/ by agk (agk help-art)
 #include "logic.h"
 
-// Palette indices. Sprite channels 0/1 use colours 17-19.
-#define COLOR_BG 0
+// Palette indices, as in art/palette.txt
 #define COLOR_WALL 1
 #define COLOR_WALL_EDGE 2
 
@@ -25,20 +25,6 @@ static tSimpleBufferManager *s_pBuffer;
 static tBitMap *s_pPlayerBm;
 static tSprite *s_pPlayer;
 static tGameState s_sState;
-
-static void createPlayerBitmap(void) {
-	// Sprites are 16px wide, 2 bitplanes, interleaved, with an empty first and
-	// last line where the hardware keeps its control words.
-	s_pPlayerBm = bitmapCreate(16, PLAYER_H + 2, 2, BMF_CLEAR | BMF_INTERLEAVED);
-	UWORD uwWordsPerRow = s_pPlayerBm->BytesPerRow / 2;
-	for(UBYTE y = 0; y < PLAYER_H; ++y) {
-		// Planes[] is a byte pointer: index rows in words explicitly.
-		UWORD *pRow = (UWORD *)s_pPlayerBm->Planes[0] + (y + 1) * uwWordsPerRow;
-		UBYTE isEdge = (y == 0 || y == PLAYER_H - 1);
-		pRow[0] = isEdge ? 0xFFFF : 0x8001;                   // plane 0 -> colour 17
-		pRow[1] = (y >= 4 && y < 12) ? 0x0FF0 : 0;            // plane 1 -> colour 18
-	}
-}
 
 static void drawWalls(void) {
 	for(UBYTE i = 0; i < WALL_COUNT; ++i) {
@@ -67,26 +53,22 @@ void genericCreate(void) {
 	joyOpen();
 
 	s_pView = viewCreate(0, TAG_VIEW_GLOBAL_PALETTE, 1, TAG_DONE);
-	s_pVPort = vPortCreate(0, TAG_VPORT_VIEW, s_pView, TAG_VPORT_BPP, 2, TAG_DONE);
+	s_pVPort = vPortCreate(0, TAG_VPORT_VIEW, s_pView, TAG_VPORT_BPP, ART_DEPTH, TAG_DONE);
 	s_pBuffer = simpleBufferCreate(0,
 		TAG_SIMPLEBUFFER_VPORT, s_pVPort,
 		TAG_SIMPLEBUFFER_BITMAP_FLAGS, BMF_CLEAR,
 		TAG_DONE
 	);
-	s_pVPort->pPalette[COLOR_BG] = 0x113;
-	s_pVPort->pPalette[COLOR_WALL] = 0x468;
-	s_pVPort->pPalette[COLOR_WALL_EDGE] = 0x9BD;
-	s_pVPort->pPalette[17] = 0xFFF;
-	s_pVPort->pPalette[18] = 0xFA0;
-	s_pVPort->pPalette[19] = 0x000;
+	artPaletteApply(s_pVPort->pPalette);       // art/palette.txt
+	artPlayerApplyColors(s_pVPort->pPalette);  // art/player.txt -> colours 17-19
 
 	logicInit(&s_sState);
 	drawWalls();
 
-	createPlayerBitmap();
+	s_pPlayerBm = artPlayerCreate(0);  // frame 0 of art/player.txt
 	spriteManagerCreate(s_pView, 0, 0);
 	systemSetDmaBit(DMAB_SPRITE, 1);
-	s_pPlayer = spriteAdd(0, s_pPlayerBm);
+	s_pPlayer = spriteAdd(ART_PLAYER_CHANNEL, s_pPlayerBm);
 
 	viewLoad(s_pView);
 	systemUnuse();
@@ -110,7 +92,7 @@ void genericProcess(void) {
 	s_pPlayer->wY = s_sState.y;
 	spriteRequestMetadataUpdate(s_pPlayer);
 	spriteProcess(s_pPlayer);
-	spriteProcessChannel(0);
+	spriteProcessChannel(ART_PLAYER_CHANNEL);
 
 	// Report state for tests: on every change, plus a heartbeat.
 	if(isChanged || s_sState.frame % 50 == 0) {

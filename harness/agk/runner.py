@@ -1,5 +1,6 @@
 """Drive vAmiga headless: boot (or restore a cached boot snapshot), play a
 scenario, collect artifacts."""
+import fcntl
 import hashlib
 import os
 import re
@@ -46,7 +47,7 @@ def boot_key(adf, profile_name, rom, boot_text):
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()[:20]
 
 
-def _run_vamiga(lines, workdir, timeout=600):
+def _run_vamiga(lines, workdir, timeout=300):
     script = os.path.join(workdir, "run.retrosh")
     with open(script, "w") as f:
         f.write("\n".join(lines + ["shutdown"]) + "\n")
@@ -55,7 +56,11 @@ def _run_vamiga(lines, workdir, timeout=600):
         proc = subprocess.run([VAMIGA, "-v", script], capture_output=True, text=True,
                               errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
-        raise RunError(f"emulator did not finish within {timeout}s wall-clock")
+        raise RunError(
+            f"emulator stopped making progress ({timeout}s wall-clock). Usually the game crashed the CPU "
+            f"(stack overflow, infinite recursion, jump into garbage), which halts emulation so no wait "
+            f"ever finishes. Run the same thing with --fresh and print progress with agkPrint() to find "
+            f"where it stops. Script: {script}")
     out = [l[len(ECHO_PREFIX):] if l.startswith(ECHO_PREFIX) else l
            for l in proc.stdout.splitlines() if not SERIAL_ECHO.match(l)]
     with open(os.path.join(workdir, "emulator.log"), "w") as f:
@@ -85,7 +90,7 @@ def _emulator_error(out, line_to_source=None, script=None):
             src = line_to_source(int(m.group(1))) if line_to_source else None
             where = f"line {src}" if src else "emulator setup"
             return f"{where}: {out[i + 1]} (emulator command: {m.group(2)})"
-    return "emulator exited with an error (see emulator.log)"
+    return "emulator exited with an error"
 
 
 def _nearest_color(screen, x, y, want, radius=24):
@@ -125,11 +130,20 @@ def ensure_boot(adf, profile_name, boot_text, boot_timeout=DEFAULT_BOOT_TIMEOUT,
     appeared on serial. Cached per (adf, profile, rom, boot text, emulator)."""
     profile, rom, ext = profiles.resolve(profile_name)
     os.makedirs(CACHE, exist_ok=True)
-    snap = os.path.join(CACHE, boot_key(adf, profile_name, rom, boot_text) + ".vasnap")
+    key = boot_key(adf, profile_name, rom, boot_text)
+    snap = os.path.join(CACHE, key + ".vasnap")
+    # One boot per key at a time; parallel runs of the same build wait for it
+    # and then share the snapshot instead of clobbering each other's files.
+    with open(os.path.join(CACHE, key + ".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _ensure_boot_locked(adf, profile_name, profile, rom, ext, boot_text, boot_timeout,
+                                   snap, workdir or os.path.join(CACHE, "boot-" + key))
+
+
+def _ensure_boot_locked(adf, profile_name, profile, rom, ext, boot_text, boot_timeout, snap, workdir):
     if os.path.exists(snap):
         os.utime(snap)
         return snap, None
-    workdir = workdir or os.path.join(CACHE, "boot")
     os.makedirs(workdir, exist_ok=True)
     lines = _setup_lines(profile, rom, ext) + [
         f"regression run {os.path.abspath(adf)}",
@@ -138,20 +152,26 @@ def ensure_boot(adf, profile_name, boot_text, boot_timeout=DEFAULT_BOOT_TIMEOUT,
         f"agk serial {snap}.serial.txt",
         f"agk snapsave {snap}.tmp.vasnap",
     ]
-    code, out, secs = _run_vamiga(lines, workdir)
+    code, out, secs = _run_vamiga(lines, workdir, timeout=120)
     if code != 0 or not os.path.exists(f"{snap}.tmp.vasnap"):
-        raise RunError(f"boot failed ({profile_name}): {_emulator_error(out)}")
+        raise RunError(f"boot failed ({profile_name}): {_emulator_error(out)}\n"
+                       f"(emulator log: {os.path.join(workdir, 'emulator.log')})")
     os.replace(f"{snap}.tmp.vasnap", snap)
     _prune_cache()
     return snap, secs
 
 
-def _prune_cache(keep=24):
-    """Boot snapshots are ~17MB each; keep the most recently used ones."""
+def _prune_cache(keep=24, min_age=3600):
+    """Boot snapshots are ~17MB each; keep the most recently used ones, and
+    never delete one used in the last hour (another run may be using it)."""
     snaps = sorted((os.path.join(CACHE, f) for f in os.listdir(CACHE) if f.endswith(".vasnap")
                     and not f.endswith(".tmp.vasnap")), key=os.path.getmtime, reverse=True)
+    now = time.time()
     for old in snaps[keep:]:
-        for path in (old, f"{old}.serial.txt"):
+        if now - os.path.getmtime(old) < min_age:
+            continue
+        key = os.path.basename(old)[:-len(".vasnap")]
+        for path in (old, f"{old}.serial.txt", os.path.join(CACHE, key + ".lock")):
             if os.path.exists(path):
                 os.remove(path)
 
@@ -170,9 +190,28 @@ def _sync_lines(lines, sync):
     return out
 
 
+class outdir_lock:
+    """Hold while running into an output directory and reading its results:
+    two runs of the same test at once take turns instead of deleting each
+    other's files."""
+
+    def __init__(self, outdir):
+        self.path = os.path.join(outdir, ".lock")
+        os.makedirs(outdir, exist_ok=True)
+
+    def __enter__(self):
+        self.f = open(self.path, "w")
+        fcntl.flock(self.f, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        self.f.close()
+
+
 def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frames"):
-    """Play a parsed scenario. Returns a result dict (never raises for test failures)."""
-    os.makedirs(outdir, exist_ok=True)
+    """Play a parsed scenario. Returns a result dict (never raises for test
+    failures). Call inside `with outdir_lock(outdir):` if other processes may
+    use the same outdir."""
     for f in os.listdir(outdir):
         if f.endswith((".raw", ".png", ".bin", ".txt")):
             os.remove(os.path.join(outdir, f))
@@ -210,7 +249,11 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
         i = n - first
         return scenario.origins[i] if 0 <= i < len(scenario.origins) and scenario.origins[i] else None
     lines.append(f"agk serial {outdir}/serial.txt")
-    code, out, secs = _run_vamiga(lines, outdir)
+    try:
+        code, out, secs = _run_vamiga(lines, outdir)
+    except RunError as e:
+        result.update(ok=False, failures=[str(e)])
+        return result
     result["seconds"] = round(secs, 2)
 
     serial = ""
@@ -226,7 +269,8 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
 
     if code != 0:
         result["ok"] = False
-        result["failures"].append(_emulator_error(out, line_to_source, lines))
+        result["failures"].append(_emulator_error(out, line_to_source, lines)
+                                  + f" (emulator log: {os.path.join(outdir, 'emulator.log')})")
 
     for name in scenario.screenshots:
         raw = os.path.join(outdir, f"{name}.raw")

@@ -1,0 +1,22 @@
+# Walking cycles the 4 frames of art/player.txt; standing shows frame 0.
+# Player sprite origin in each shot (= the x,y on serial, from the frame the
+# display shows): stand (152,100), walk1 (166,100), walk3 (190,100), stopped (192,100).
+screenshot stand
+expect-color stand 156 112 0x113     # frame 0, row 12: legs together (col 4 empty)
+expect-color stand 161 111 0xFA0     # frame 0, row 11: right leg orange
+hold right
+wait-serial "walk=1"
+wait 2
+screenshot walk1
+expect-color walk1 170 112 0x000     # frame 1, row 12: left leg swung out
+expect-color walk1 175 111 0x000     # frame 1, row 11: outline where frame 0 has orange
+wait-serial "walk=3"
+wait 2
+screenshot walk3
+expect-color walk3 197 111 0xFA0     # frame 3, row 11: legs crossed
+expect-color walk3 195 111 0x113     # ...and nothing where frame 0 has outline
+release
+wait 3
+screenshot stopped
+expect-color stopped 197 111 0x000   # standing again: frame 0 outline back
+expect-serial "walk=2"

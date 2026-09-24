@@ -1,0 +1,24 @@
+# The player: a 16x16 hardware sprite. One character per pixel.
+# Hardware sprites: at most 3 colours + transparent (.), 16 px wide.
+# Add more 'frame' sections for animation (see techniques/sprites).
+colors
+  .  transparent
+  W  0xFFF
+  O  0xFA0
+frame
+WWWWWWWWWWWWWWWW
+W..............W
+W..............W
+W..............W
+W...OOOOOOOO...W
+W...OOOOOOOO...W
+W...OOOOOOOO...W
+W...OOOOOOOO...W
+W...OOOOOOOO...W
+W...OOOOOOOO...W
+W...OOOOOOOO...W
+W...OOOOOOOO...W
+W..............W
+W..............W
+W..............W
+WWWWWWWWWWWWWWWW

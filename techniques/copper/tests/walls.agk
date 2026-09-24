@@ -1,0 +1,9 @@
+# Walking right stops at the pillar; holding down slides along it.
+press right 60
+wait 2
+screenshot at_pillar
+expect-serial "x=224 y=100 blocked=1 bumps=1"
+press right+down 20
+wait 2
+screenshot slid_down
+expect-serial "x=224 y=140"

@@ -1,0 +1,11 @@
+expect-serial "AGK ready"
+expect-no-serial "ERR|STACK SMASHED"
+# Frame budget guard: busy movement must never drop a frame.
+# The raw-mode copper bar costs ~2% of a frame; the template alone ~10% while
+# moving; measured maxload here is 15. Block mode (one ACE copper block per
+# line, merged every frame) measured ~94% and drops frames - this catches it.
+press right+down 60
+press left 60
+press up+left 40
+expect-no-dropped-frames
+expect-max-load 30

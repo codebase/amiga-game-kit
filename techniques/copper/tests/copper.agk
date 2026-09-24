@@ -1,0 +1,51 @@
+# Copper effects, proven pixel by pixel. Column x=8 below the HUD has no walls
+# or sprite, so it shows COLOR00 exactly as the copper set it on each line.
+# Expected colours come from logic.c (logicLineColor with logicBarY(frame));
+# 'early' shows bar frame 13 (bar top y=49), 'late' frame 105 (bar top y=198).
+wait 10
+screenshot early
+
+# (a) Sky gradient: COLOR00 differs from band to band (a 2-bitplane screen,
+# 58 background colours).
+expect-color early 8 28 0x001
+expect-color early 8 100 0x44B
+expect-color early 8 150 0xB59
+expect-color early 8 210 0xFA5
+expect-color early 8 212 0xFA6
+expect-color early 8 255 0xFFB
+
+# (b) Palette split at y=24: the same registers, different colours.
+# COLOR00: HUD black above, sky below.
+expect-color early 200 10 0x000
+expect-color early 200 28 0x001
+# COLOR01 (box fill): HUD gold vs wall blue.
+expect-color early 12 10 0xFC0
+expect-color early 70 100 0x468
+# COLOR02 (box edge, HUD rule): HUD brown vs wall edge.
+expect-color early 8 10 0xA50
+expect-color early 200 23 0xA50
+expect-color early 64 100 0x9BD
+
+# (c) The raster bar moves: at 'early' it covers y=49..64.
+expect-color early 8 49 0x013
+expect-color early 8 56 0xEFF
+expect-color early 8 205 0xF95
+
+wait 92
+screenshot late
+# ...92 frames later it covers y=198..213: y=56 is sky again, y=205 is bar.
+expect-color late 8 56 0x125
+expect-color late 8 205 0xEFF
+# The bar crosses beam line 255 (y=211) -> 256 (y=212): one colour per line,
+# no line late or missing around the WAIT wrap.
+expect-color late 8 210 0x079
+expect-color late 8 211 0x057
+expect-color late 8 212 0x035
+expect-color late 8 213 0x013
+expect-color late 8 214 0xFA6
+# The bar is COLOR00, so it passes behind the walls: wall pixels unchanged.
+expect-color late 150 205 0x468
+# The HUD palette is restored at the top of every frame.
+expect-color late 12 10 0xFC0
+expect-color late 200 10 0x000
+expect-no-serial "ERR|STACK SMASHED"

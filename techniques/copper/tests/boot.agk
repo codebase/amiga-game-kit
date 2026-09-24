@@ -1,0 +1,4 @@
+# First frame: HUD band, sky gradient, raster bar, three walls, the player.
+screenshot start
+expect-serial "AGK ready"
+expect-no-serial "ERR|STACK SMASHED"

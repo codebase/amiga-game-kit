@@ -1,3 +1,44 @@
+diff --git a/src/ace/managers/copper.c b/src/ace/managers/copper.c
+index df1a938..88f8682 100644
+--- a/src/ace/managers/copper.c
++++ b/src/ace/managers/copper.c
+@@ -490,20 +490,28 @@ UBYTE copUpdateFromBlocks(void) {
+ 		}
+ 
+ 		// Update WAIT
+-		if(pBlock->uWaitPos.uwY >= 0xFF) {
++		if(pBlock->uWaitPos.uwY == 0xFF) {
++			// Line 255 itself fits in 8 bits: wait for the requested X on it.
++			// (Emitting only the WAIT(0xDF, 0xFF) wrap guard here made the
++			// block's MOVEs land at the end of line 255 - one line late.)
++			copSetWait(
++				(tCopWaitCmd*)&pBackBfr->pList[uwListPos],
++				pBlock->uWaitPos.uwX, 0xFF
++			);
++			++uwListPos;
++		}
++		else if(pBlock->uWaitPos.uwY > 0xFF) {
+ 			// FIXME: double WAIT only when previous line ended before some pos
+ 			if(!ubWasLimitY) {
+ 				copSetWait((tCopWaitCmd*)&pBackBfr->pList[uwListPos], 0xDF, 0xFF);
+ 				++uwListPos;
+ 				ubWasLimitY = 1;
+ 			}
+-			if(pBlock->uWaitPos.uwY > 0xFF) {
+-				copSetWait(
+-					(tCopWaitCmd*)&pBackBfr->pList[uwListPos],
+-					pBlock->uWaitPos.uwX, pBlock->uWaitPos.uwY & 0xFF
+-				);
+-				++uwListPos;
+-			}
++			copSetWait(
++				(tCopWaitCmd*)&pBackBfr->pList[uwListPos],
++				pBlock->uWaitPos.uwX, pBlock->uWaitPos.uwY & 0xFF
++			);
++			++uwListPos;
+ 		}
+ 		else {
+ 			copSetWait(
 diff --git a/src/ace/managers/system.c b/src/ace/managers/system.c
 index c1089b8..3f8ff5c 100644
 --- a/src/ace/managers/system.c

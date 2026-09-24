@@ -66,6 +66,22 @@ profiles. Colours are exact: Amiga colour `0xRGB` appears as
 Put new rules in `logic.c` and write a unit test first. Keep `main.c` a thin
 layer that maps state to hardware.
 
+## Art: sprites and BOBs from files
+
+Graphics live in `art/`, not in C:
+- `art/palette.txt` is the game palette.
+- `art/art.toml` lists the assets.
+- `art/player.txt` is the player as text art, one character per pixel.
+
+PNGs work too, from any tool or AI generator.
+
+- **`agk art`** converts everything. It prints what it did and any rule problems, and writes previews to `build/art/preview/`. **Look at the preview** after every art change: it's exactly what the Amiga will show.
+- `agk build` and `agk test` regenerate art automatically. C code includes `art.h` and calls, e.g., `artPlayerCreate(frame)`, `artPlayerApplyColors(palette)` and `artPaletteApply(palette)`.
+- The rules are enforced for you:
+  - sprites are 16 px wide, 3 colours plus transparent, and sprites sharing a channel pair share colours
+  - BOB colours must be in `palette.txt`
+- `agk help-art` has the formats. `{{kit}}/techniques/sprites` shows animated sprites and BOB frames end to end.
+
 ## Telling the harness what happens: serial debug
 
 `#include <agk/debug.h>`, then:
@@ -117,7 +133,9 @@ Baseline: the template uses about 4% idle and about 9% while moving.
 - A sprite bitmap is 2-bitplane, interleaved, with an extra empty line at the top and bottom for the hardware control words.
 - Moving objects wider than 16 px or with more colours are BOBs, drawn with the blitter (ACE `bob` manager, `docs/programming/using_bobs.md`).
 - The template's `simpleBufferCreate` is **single-buffered**, so `pBack == pFront`. Draw or erase static things once. If you add double buffering (`TAG_SIMPLEBUFFER_IS_DBLBUF`), every change must be made in both buffers, or the old image flickers back every other frame.
-- The copper changes registers at chosen scanlines: colour bars, palette splits, scroll. ACE: `copBlockCreate` / `copMove`.
+- The copper changes registers at chosen scanlines: colour bars, palette splits, scroll.
+  - ACE **block** mode (`copBlockCreate`/`copMove`) re-merges every block whenever anything changes. That's fine for a few static blocks, but a per-line effect updated every frame costs about 90% of a frame.
+  - Use **raw** mode for anything big or animated; `{{kit}}/techniques/copper` shows how.
 - ACE copper lists are double-buffered, so a change appears a frame or two later. A screenshot can show the state from up to 2 frames before the serial log.
 - ACE build options (BOB wrapping, scroll buffer margins, ACE_DEBUG…) go in `agk.toml` `[cmake]`. `CMakeLists.txt` lists them.
 
@@ -133,6 +151,8 @@ profile and comes with a `TECHNIQUE.md` covering the recipe, the gotchas and
 measured frame cost:
 - `bobs`: blitter objects, i.e. masked, double-buffered, background restore, no trails. Read it before drawing anything with the blitter; ACE's own BOB guide has a wrong signature.
 - `scrolling`: tile-map scrolling with ACE's tile buffer, a camera that follows the player, and measured costs per depth and speed. ACE's `tilebuffer.md` has several errors; this guide lists them.
+- `copper`: a sky gradient (58 colours on a 4-colour screen), a HUD palette split and a moving raster bar, in raw and block mode with measured costs.
+- `sprites`: the art pipeline end to end. Text art becomes an animated sprite, and a PNG sheet becomes an animated BOB.
 
 `{{kit}}/docs/references.md` lists open-source Amiga games and what each is
 good for studying, with licences.

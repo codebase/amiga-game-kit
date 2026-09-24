@@ -1,0 +1,9 @@
+# The game palette: index, 12-bit colour, name. 3 bitplanes -> 8 colours.
+0  0x113  background
+1  0x468  wall
+2  0x9BD  wall edge
+3  0xD22  enemy body
+4  0xFF8  enemy eyes
+5  0x200  enemy dark
+6  0x2A4  grass
+7  0xFFF  white
