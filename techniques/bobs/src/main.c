@@ -113,14 +113,15 @@ static void drawWalls(tBitMap *pBm) {
 }
 
 static void readInput(tInput *pInput) {
-	// Joystick in port 2 (the game port). Also accept port 1 so either works.
+	// Joystick in port 2, the game port. In ACE that is JOY1 (JOY2 is port 1,
+	// the mouse port: reading it turns mouse movement into phantom input).
 	pInput->dx = 0;
 	pInput->dy = 0;
-	if(joyCheck(JOY1 + JOY_LEFT) || joyCheck(JOY2 + JOY_LEFT)) pInput->dx = -1;
-	if(joyCheck(JOY1 + JOY_RIGHT) || joyCheck(JOY2 + JOY_RIGHT)) pInput->dx = 1;
-	if(joyCheck(JOY1 + JOY_UP) || joyCheck(JOY2 + JOY_UP)) pInput->dy = -1;
-	if(joyCheck(JOY1 + JOY_DOWN) || joyCheck(JOY2 + JOY_DOWN)) pInput->dy = 1;
-	pInput->fire = joyCheck(JOY1 + JOY_FIRE) || joyCheck(JOY2 + JOY_FIRE);
+	if(joyCheck(JOY1 + JOY_LEFT)) pInput->dx = -1;
+	if(joyCheck(JOY1 + JOY_RIGHT)) pInput->dx = 1;
+	if(joyCheck(JOY1 + JOY_UP)) pInput->dy = -1;
+	if(joyCheck(JOY1 + JOY_DOWN)) pInput->dy = 1;
+	pInput->fire = joyCheck(JOY1 + JOY_FIRE);
 }
 
 void genericCreate(void) {

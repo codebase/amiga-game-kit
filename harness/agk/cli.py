@@ -228,11 +228,39 @@ def cmd_art_export(args):
         raise SystemExit(f"{rel(src)} not found")
     if os.path.exists(dst) and not args.force:
         raise SystemExit(f"{rel(dst)} exists - use --force to overwrite")
-    n, warnings = art.export_text(src, dst, args.colors, args.frame_width)
+    n, warnings = art.export_text(src, dst, args.colors, args.frame_width, args.frame_height)
     print(f"wrote {rel(dst)} ({n} colours)")
     for w in warnings:
         print(f"  warning: {w}")
     print(f'next: point art.toml at it (source = "{args.name}.txt") and edit the pixels')
+    return 0
+
+
+def cmd_art_animate(args):
+    from . import rd
+    proj = load_project(args.project)
+    art_dir = os.path.join(proj["dir"], "art")
+    out = os.path.join(art_dir, f"{args.name}_{args.action}.png")
+    try:
+        if args.resume:
+            png, cost, left = rd.wait_task(args.resume)
+        else:
+            src = os.path.join(art_dir, f"{args.name}.png")
+            if not os.path.exists(src):
+                raise SystemExit(f"{rel(src)} not found - the start frame")
+            w, h, _ = __import__("agk.image", fromlist=["x"]).load_png_rgba(src)
+            print(f"animating {rel(src)} ({args.action}, {args.frames} frames) - this takes several minutes")
+            png, cost, left = rd.animate(open(src, "rb").read(), args.action, w, h, args.frames,
+                                         dry_run=args.dry_run)
+    except rd.GenError as e:
+        raise SystemExit(f"art-animate: {e}")
+    if args.dry_run:
+        print(f"would cost ${cost} (balance ${left}); nothing generated")
+        return 0
+    with open(out, "wb") as f:
+        f.write(png)
+    print(f"saved {rel(out)} (${cost}, balance ${left}) - a sprite sheet; use it with frame_width, "
+          f"or agk art-export to edit the frames by hand")
     return 0
 
 
@@ -492,11 +520,20 @@ def main(argv=None):
     p = sub.add_parser("art", help="convert art/ to Amiga sprites/BOBs and write previews")
     p.add_argument("project", nargs="?")
 
+    p = sub.add_parser("art-animate", help="animate art/NAME.png (walking, idle, jump...) with Retro Diffusion")
+    p.add_argument("name", nargs="?")
+    p.add_argument("--project", default=None)
+    p.add_argument("--action", default="walking", choices=["walking", "idle", "jump", "crouch", "attack", "destroy"])
+    p.add_argument("--frames", type=int, default=8, choices=[4, 6, 8, 10, 12, 16])
+    p.add_argument("--resume", metavar="TASK_ID", help="collect a generation that timed out (no new charge)")
+    p.add_argument("--dry-run", action="store_true", help="free price check")
+
     p = sub.add_parser("art-export", help="turn art/NAME.png into editable text art art/NAME.txt")
     p.add_argument("name")
     p.add_argument("--project", default=None)
     p.add_argument("--colors", type=int, default=15, help="max colours (15 = attached sprite, 3 = sprite)")
     p.add_argument("--frame-width", type=int)
+    p.add_argument("--frame-height", type=int, help="for grid sheets (e.g. 4x2 frames): the frame height")
     p.add_argument("--force", action="store_true")
 
     p = sub.add_parser("art-gen", help="generate pixel art with Retro Diffusion into art/ (needs RD_API_KEY)",
@@ -540,7 +577,7 @@ def main(argv=None):
     try:
         return {"doctor": cmd_doctor, "build": cmd_build, "run": cmd_run, "test": cmd_test,
                 "unit": cmd_unit, "new": cmd_new, "art": cmd_art, "art-gen": cmd_art_gen,
-                "art-export": cmd_art_export}[args.cmd](args)
+                "art-export": cmd_art_export, "art-animate": cmd_art_animate}[args.cmd](args)
     except runner.RunError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

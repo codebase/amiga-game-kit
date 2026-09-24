@@ -5,6 +5,8 @@
 
 static UBYTE s_isLineOpen;
 static UBYTE s_isReady;
+static UBYTE s_isReadyPending;
+static UBYTE s_isTicking;   // the game calls agkTick() (via agkPerfBegin) every frame
 
 #ifdef AGK_CHANNEL_HOST
 //------------------------------------------------------------------ host channel
@@ -25,6 +27,12 @@ void agkDebugFlush(void) {
 }
 
 void agkTick(void) {
+	s_isTicking = 1;
+	if(s_isReadyPending) {
+		// Announce "ready" exactly at a frame start (see agkReady)
+		s_isReadyPending = 0;
+		agkPrint("AGK ready\n");
+	}
 	NOOP = 0xA6E1;
 }
 
@@ -85,6 +93,11 @@ void agkDebugInit(void) {
 }
 
 void agkTick(void) {
+	s_isTicking = 1;
+	if(s_isReadyPending) {
+		s_isReadyPending = 0;
+		agkPrint("AGK ready\n");
+	}
 }
 
 void agkDebugAsync(UBYTE isOn) {
@@ -189,8 +202,18 @@ void agkPrintNum(LONG lValue) {
 }
 
 void agkReady(void) {
-	agkPrint("AGK ready\n");
+	// Games that tick (agkPerfBegin) announce ready at the start of the next
+	// frame instead of now. The harness snapshots "ready" at the next video
+	// frame boundary, and a frame start sits at a fixed beam line just before
+	// it - so scenario time 0 is always the same game frame, however long this
+	// frame's work took. Without ticks, print immediately.
 	s_isReady = 1;
+	if(s_isTicking) {
+		s_isReadyPending = 1;
+	}
+	else {
+		agkPrint("AGK ready\n");
+	}
 }
 
 UBYTE agkIsReady(void) {

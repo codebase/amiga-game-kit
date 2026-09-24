@@ -102,12 +102,12 @@ void genericProcess(void) {
 		gameExit();
 	}
 
-	// Accept either port so harness input mapping can't trip us up.
+	// Joystick in port 2 = ACE JOY1 (JOY2 is the mouse port: don't read it).
 	WORD wDx = 0, wDy = 0;
-	if(joyCheck(JOY1 + JOY_LEFT) || joyCheck(JOY2 + JOY_LEFT)) wDx -= SPEED;
-	if(joyCheck(JOY1 + JOY_RIGHT) || joyCheck(JOY2 + JOY_RIGHT)) wDx += SPEED;
-	if(joyCheck(JOY1 + JOY_UP) || joyCheck(JOY2 + JOY_UP)) wDy -= SPEED;
-	if(joyCheck(JOY1 + JOY_DOWN) || joyCheck(JOY2 + JOY_DOWN)) wDy += SPEED;
+	if(joyCheck(JOY1 + JOY_LEFT)) wDx -= SPEED;
+	if(joyCheck(JOY1 + JOY_RIGHT)) wDx += SPEED;
+	if(joyCheck(JOY1 + JOY_UP)) wDy -= SPEED;
+	if(joyCheck(JOY1 + JOY_DOWN)) wDy += SPEED;
 	s_wX += wDx;
 	s_wY += wDy;
 	if(s_wX < 0) s_wX = 0;

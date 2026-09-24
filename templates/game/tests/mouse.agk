@@ -1,0 +1,10 @@
+# Moving the mouse (port 1) must not move the player: games read only the
+# joystick in port 2 (ACE JOY1). Reading JOY2 too turns mouse movement into
+# phantom joystick input.
+wait 3
+mouse 40 0
+wait 10
+mouse -60 30
+wait 10
+expect-no-serial "\bx=(?!152 )\d+"
+expect-no-serial "\by=(?!100 )\d+"

@@ -26,10 +26,10 @@ index 1b7087b..a316d29 100644
      }
      
 diff --git a/Core/Misc/RetroShell/Console.cpp b/Core/Misc/RetroShell/Console.cpp
-index b661c82..15c6ca4 100644
+index b661c82..abb3d19 100644
 --- a/Core/Misc/RetroShell/Console.cpp
 +++ b/Core/Misc/RetroShell/Console.cpp
-@@ -1185,16 +1185,141 @@ Console::initCommonCommands(RSCommand &root)
+@@ -1185,16 +1185,156 @@ Console::initCommonCommands(RSCommand &root)
              .flags  = vAmigaDOS ? rs::disabled : rs::hidden,
              .args   = {
                  { .name = { "seconds", "Delay" } },
@@ -115,6 +115,21 @@ index b661c82..15c6ca4 100644
 +            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
 +
 +                shell.tickSync = parseBool(args.at("mode"));
++            }
++        });
++
++        root.add({
++
++            .tokens = { "agk", "mouse" },
++            .chelp  = { "Move the mouse in port 1 by dx,dy (relative), each given +10000 (RetroShell reads '-' as a flag)" },
++            .args   = {
++                { .name = { "dx", "Horizontal delta" } },
++                { .name = { "dy", "Vertical delta" } }
++            },
++            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
++
++                emulator.put(Command(Cmd::MOUSE_MOVE_REL, CoordCmd {
++                    .port = 0, .x = double(parseNum(args.at("dx")) - 10000), .y = double(parseNum(args.at("dy")) - 10000) }));
 +            }
 +        });
 +

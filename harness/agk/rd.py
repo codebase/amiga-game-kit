@@ -123,3 +123,51 @@ def sprite_colors_from(project_dir, spec):
     if not os.path.exists(pal):
         return []
     return [c for _, c in sorted(parse_palette(pal).items())]
+
+
+ANIMATIONS = ("walking", "idle", "jump", "crouch", "attack", "destroy")
+
+
+def animate(input_png_bytes, action, width, height, frames=8, dry_run=False, prompt=None):
+    """Animate a start frame (Retro Diffusion advanced animation). Returns
+    (spritesheet PNG bytes or None, cost, balance). The start frame must be
+    32-256 px, a multiple of 8, without transparency."""
+    import subprocess
+    if action not in ANIMATIONS:
+        raise GenError(f"action must be one of {', '.join(ANIMATIONS)}")
+    # Flatten transparency onto white (the API wants RGB without alpha)
+    from .image import load_png_rgba, Image as _Img
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".png") as t:
+        t.write(input_png_bytes); t.flush()
+        w, h, px = load_png_rgba(t.name)
+    rgb = bytearray()
+    for r, g, b, a in px:
+        k = a / 255
+        rgb += bytes((round(r * k + 255 * (1 - k)), round(g * k + 255 * (1 - k)), round(b * k + 255 * (1 - k))))
+    flat = base64.b64encode(_Img(bytes(rgb), w, h).to_png()).decode()
+    body = {"prompt": prompt or action, "prompt_style": f"rd_advanced_animation__{action}",
+            "width": width, "height": height, "num_images": 1, "input_image": flat,
+            "frames_duration": frames, "return_spritesheet": True, "remove_bg": True}
+    if dry_run:
+        body["check_cost"] = True
+        r = _request("POST", "/inferences", body)
+        return None, r.get("balance_cost"), r.get("remaining_balance")
+    accepted = _request("POST", "/inferences", body, {"Idempotency-Key": str(uuid.uuid4())})
+    return wait_task(accepted["task_id"])
+
+
+def wait_task(task_id, minutes=20):
+    """Poll a task (animations take several minutes). Never resubmit a paid
+    request - if this times out, call wait_task again with the same id."""
+    for _ in range(minutes * 6):
+        task = _request("GET", f"/inferences/tasks/{task_id}")
+        if task["status"] in ("pending", "running", "accepted"):
+            time.sleep(10)
+            continue
+        if task["status"] == "failed":
+            raise GenError(f"generation failed (refunded): {task.get('error')}")
+        res = task["result"]
+        imgs = res.get("base64_images", [])
+        return (base64.b64decode(imgs[0]) if imgs else None, res.get("balance_cost"), res.get("remaining_balance"))
+    raise GenError(f"still running after {minutes} minutes - resume with: agk art-animate --resume {task_id}")

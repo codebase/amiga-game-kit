@@ -23,8 +23,9 @@ depth = 3
 palette = "auto"          # own palette -> colours 1-7 of the front playfield
 
 [hero]                    # 32x32, 15 colours: two attached sprite pairs (channels 0-3)
-source = "hero.txt"       # AI base (hero.png) animated by hand as text art
+source = "hero.txt"       # AI side-view base + AI walk cycle + hand-made poses (see file)
 kind = "sprite"
 attached = true
 channel = 0
 mirror = true             # + left-facing copies of every frame
+

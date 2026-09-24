@@ -1,0 +1,12 @@
+# Moving the mouse (port 1) must not move the player: only the joystick in
+# port 2 (ACE JOY1) counts. Reading JOY2 as well made the hero walk by itself.
+wait 5
+expect-serial "x=32 y=192"
+mouse 40 0
+wait 10
+mouse 60 -30
+wait 10
+mouse -80 50
+wait 10
+expect-no-serial "\bx=(?!32 )\d+"
+expect-no-serial "anim=[2-5]"

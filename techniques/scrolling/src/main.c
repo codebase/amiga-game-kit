@@ -132,9 +132,9 @@ static void createPlayerBitmap(void) {
 
 static void readInput(tInput *pInput) {
 	pInput->dx = 0;
-	if(joyCheck(JOY1 + JOY_LEFT) || joyCheck(JOY2 + JOY_LEFT)) pInput->dx = -1;
-	if(joyCheck(JOY1 + JOY_RIGHT) || joyCheck(JOY2 + JOY_RIGHT)) pInput->dx = 1;
-	pInput->fire = joyCheck(JOY1 + JOY_FIRE) || joyCheck(JOY2 + JOY_FIRE);
+	if(joyCheck(JOY1 + JOY_LEFT)) pInput->dx = -1;
+	if(joyCheck(JOY1 + JOY_RIGHT)) pInput->dx = 1;
+	pInput->fire = joyCheck(JOY1 + JOY_FIRE);
 }
 
 static void redrawAll(void);

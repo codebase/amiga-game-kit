@@ -311,13 +311,15 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
                     result["failures"].append(f"line {lineno}: a frame used {worst}% of the frame time, limit {limit}%")
         result["perf"] = reports
 
-    for shot, x, y, want, lineno in scenario.colors:
+    for shot, x, y, want, lineno, near in scenario.colors:
         info = result["screenshots"].get(shot)
         if not info:
             continue  # missing screenshot is already reported
         screen = Image.load_png(info["screen_png"])
         r, g, b = screen.pixel(x, y)
         got = (r >> 4, g >> 4, b >> 4)
+        if got != want and near and _nearest_color(screen, x, y, want, near).startswith("; nearest"):
+            got = want  # found within the allowed radius
         if got != want:
             result["ok"] = False
             hint = _nearest_color(screen, x, y, want)

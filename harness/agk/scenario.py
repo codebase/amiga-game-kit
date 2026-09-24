@@ -22,6 +22,9 @@ Commands:
                                     game frame; with frame sync, the game may run one more frame first.
     press INPUT [N]                 hold INPUT for N frames (default 1), then release it
     hold INPUT / release [INPUT]    hold until released; bare 'release' releases everything
+    mouse DX DY                     move the mouse in port 1 (games should ignore it:
+                                    a test that it doesn't move the player catches
+                                    code that reads the mouse port as a joystick)
     key CODE                        tap a raw Amiga keycode (e.g. 0x45 = Esc); vAmiga holds it
                                     for 0.5s (25 frames) in the background - use 'wait' to let it act
     screenshot NAME                 capture the current frame
@@ -29,8 +32,10 @@ Commands:
     regs NAME [cpu|agnus|copper|denise|paula|blitter|ciaa|ciab]...   save register view to NAME.txt
     expect-serial "REGEX"           serial log must match (checked after the run)
     expect-no-serial "REGEX"        serial log must not match
-    expect-color SHOT X Y 0xRGB     pixel X,Y (game coordinates, 320x256) of screenshot SHOT
-                                    must be the 12-bit Amiga colour 0xRGB (e.g. 0xFA0)
+    expect-color SHOT X Y 0xRGB [near R]
+                                    pixel X,Y (game coordinates, 320x256) of screenshot SHOT
+                                    must be the 12-bit Amiga colour 0xRGB (e.g. 0xFA0); with
+                                    "near R" it may be anywhere within R px (animated sprites)
     expect-no-dropped-frames        the game never missed a frame (needs agk/perf.h in the game)
     expect-max-load PERCENT         no frame used more than PERCENT of the frame time (agk/perf.h)
 
@@ -168,6 +173,15 @@ def parse(text, name="scenario"):
                 sc.lines.append(f"joystick2 {DIRECTIONS[i][1]}")
                 held.discard(i)
 
+        elif cmd == "mouse":
+            if len(args) != 2:
+                raise ScenarioError(f"line {lineno}: usage: mouse DX DY")
+            try:
+                dx, dy = int(args[0], 0), int(args[1], 0)
+            except ValueError:
+                raise ScenarioError(f"line {lineno}: DX and DY must be numbers")
+            sc.lines.append(f"agk mouse {dx + 10000} {dy + 10000}")  # offset: no "-" args
+
         elif cmd == "key":
             if len(args) != 1:
                 raise ScenarioError(f"line {lineno}: usage: key CODE")
@@ -230,15 +244,19 @@ def parse(text, name="scenario"):
             sc.perf.append(("maxload", pct, lineno))
 
         elif cmd == "expect-color":
+            near = 0
+            if len(args) == 6 and args[4] == "near":
+                near = _int(args[5], lineno, "near radius")
+                args = args[:4]
             if len(args) != 4:
-                raise ScenarioError(f"line {lineno}: usage: expect-color SHOT X Y 0xRGB")
+                raise ScenarioError(f"line {lineno}: usage: expect-color SHOT X Y 0xRGB [near R]")
             x, y = _int(args[1], lineno, "x"), _int(args[2], lineno, "y")
             if x >= 320 or y >= 256:
                 raise ScenarioError(f"line {lineno}: x,y must be inside the 320x256 playfield")
             rgb = _int(args[3], lineno, "colour")
             if rgb > 0xFFF:
                 raise ScenarioError(f"line {lineno}: colour must be 12-bit, 0x000-0xFFF")
-            sc.colors.append((args[0], x, y, ((rgb >> 8) & 15, (rgb >> 4) & 15, rgb & 15), lineno))
+            sc.colors.append((args[0], x, y, ((rgb >> 8) & 15, (rgb >> 4) & 15, rgb & 15), lineno, near))
 
         else:
             raise ScenarioError(f"line {lineno}: unknown command '{cmd}'")
@@ -247,7 +265,7 @@ def parse(text, name="scenario"):
     for i in sorted(held):   # leave the joystick centred at the end
         sc.lines.append(f"joystick2 {DIRECTIONS[i][1]}")
     sc.origins += [0] * (len(sc.lines) - len(sc.origins))
-    for shot, *_rest, lineno in sc.colors:
+    for shot, *_rest, lineno, _near in sc.colors:
         if shot not in sc.screenshots:
             raise ScenarioError(f"line {lineno}: expect-color refers to unknown screenshot '{shot}'")
     return sc

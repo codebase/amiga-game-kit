@@ -599,11 +599,11 @@ def _write_c(assets, palette, depth, out_dir):
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
 
-def export_text(png_path, txt_path, max_colors=15, frame_width=None):
+def export_text(png_path, txt_path, max_colors=15, frame_width=None, frame_height=None):
     """PNG -> editable text art: colours rounded to 12-bit (reduced to
     max_colors if needed), one letter per colour ordered dark to light,
     '.' = transparent. Returns (colour count, warnings)."""
-    w, h, frames = load_png_art(png_path, frame_width)
+    w, h, frames = load_png_art(png_path, frame_width, frame_height)
     counts = {}
     for fr in frames:
         for row in fr:

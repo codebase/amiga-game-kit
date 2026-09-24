@@ -47,8 +47,8 @@
 #define MAX_FALL_VEL 112     // 7 px/frame: < TILE_SIZE, and we step pixel by pixel anyway
 
 // Walk animation: art/player.txt frames 0..3, frame 0 = standing
-#define WALK_FRAMES 4
-#define WALK_FRAME_TICKS 6
+#define WALK_FRAMES 8
+#define WALK_FRAME_TICKS 4
 
 // Parallax bands (back playfield, PF2). Game y of each band's first line.
 #define MOUNTAINS_Y 39
@@ -92,9 +92,9 @@ typedef struct {
 // Hero animation frames (art/hero.txt); left-facing = + ART_HERO_MIRROR
 #define HERO_IDLE 0
 #define HERO_BREATHE 1
-#define HERO_WALK 2        // 2..5
-#define HERO_JUMP 6
-#define HERO_FALL 7
+#define HERO_WALK 2        // 2..9 (8-frame walk cycle)
+#define HERO_JUMP 10
+#define HERO_FALL 11
 #define HERO_BREATHE_SHIFT 5  // idle <-> breathe every 32 frames
 
 /** Which hero frame (0..7, right-facing) shows this state. */

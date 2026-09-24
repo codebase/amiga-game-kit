@@ -261,12 +261,12 @@ static void drawLevel(void) {
 }
 
 static void readInput(tInput *pInput) {
-	// Joystick in port 2 (the game port). Also accept port 1 so either works.
+	// Joystick in port 2, the game port. In ACE that is JOY1 (JOY2 is port 1,
+	// the mouse port: reading it turns mouse movement into phantom input).
 	pInput->dx = 0;
-	if(joyCheck(JOY1 + JOY_LEFT) || joyCheck(JOY2 + JOY_LEFT)) pInput->dx = -1;
-	if(joyCheck(JOY1 + JOY_RIGHT) || joyCheck(JOY2 + JOY_RIGHT)) pInput->dx = 1;
-	pInput->jump = joyCheck(JOY1 + JOY_FIRE) || joyCheck(JOY2 + JOY_FIRE) ||
-		joyCheck(JOY1 + JOY_UP) || joyCheck(JOY2 + JOY_UP);
+	if(joyCheck(JOY1 + JOY_LEFT)) pInput->dx = -1;
+	if(joyCheck(JOY1 + JOY_RIGHT)) pInput->dx = 1;
+	pInput->jump = joyCheck(JOY1 + JOY_FIRE) || joyCheck(JOY1 + JOY_UP);
 }
 
 void genericCreate(void) {

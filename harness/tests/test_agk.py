@@ -43,7 +43,9 @@ class ScenarioTests(unittest.TestCase):
 
     def test_expect_color(self):
         sc = scenario.parse("screenshot a\nexpect-color a 10 20 0xFA0")
-        self.assertEqual(sc.colors, [("a", 10, 20, (15, 10, 0), 2)])
+        self.assertEqual(sc.colors, [("a", 10, 20, (15, 10, 0), 2, 0)])
+        sc = scenario.parse("screenshot a\nexpect-color a 10 20 0xFA0 near 3")
+        self.assertEqual(sc.colors[0][-1], 3)
         for bad, msg in [("screenshot a\nexpect-color b 1 1 0x000", "unknown screenshot"),
                          ("screenshot a\nexpect-color a 320 1 0x000", "inside the 320x256"),
                          ("screenshot a\nexpect-color a 1 1 0x1000", "12-bit")]:
