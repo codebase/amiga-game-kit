@@ -26,6 +26,26 @@ Licences were checked with the GitHub API on 2026-09-24.
 | [Planet Rocklobster](https://github.com/AxisOxy/Planet-Rocklobster) (Oxyron) | 68k asm | **Unlicense** | Copper, blitter and effect tricks at the edge of OCS; reusable |
 | [System Zoetrope](https://github.com/astrofra/system-zoetrope-amiga-demo) (Mandarine) | **C** | **MIT** | Demo effects in C that stay system-friendly: close to AGK's style, and reusable |
 
+## Technique write-ups (articles, no code)
+
+These are copyrighted articles: link to them and learn from them, and describe
+what you take in your own words.
+
+| resource | what it explains |
+|---|---|
+| [codetapper: Amiga Sprite Tricks](https://codetapper.com/amiga/sprite-tricks/) | How 14 shipped games bent the sprite and copper hardware, with a per-game breakdown. See the list below. |
+| [Lou's Pseudo 3d Page](http://www.extentofthejam.com/pseudo/) | Road-rendering techniques for racing games (Lotus and Outrun style): per-line road segments, curves, hills, sprite scaling. |
+
+The codetapper breakdowns, by technique:
+- **Horizontal sprite reuse:** the copper repositions a sprite later on the same line, so 8 sprites cover a screen-wide repeating pattern. Examples: R-Type 2 (18 sprites across 288 px), Jim Power, Risky Woods.
+- **Sprites as a parallax layer** behind or between playfields: Videokid, Brian the Lion, Agony (dual playfield + sprites = 3 layers).
+- **Vertical multiplexing:** chained control words let a few channels show many objects down the screen, e.g. Saint Dragon (4 sprites → 20+ bullets).
+- **Sprite HUD / score panel,** leaving the playfield alone: Rod-Land (all 8 sprites as a 16-colour panel), Parasol Stars (with beam racing).
+- **Sprites animating faster than the bitmap:** Stunt Car Racer's tyres. Shadow of the Beast plays priority tricks between playfields.
+
+AGK's planned `techniques/` for these: `copper` (the basis for all of them), then
+horizontal sprite reuse, vertical multiplexing, and a sprite HUD.
+
 ## How to use this with AGK
 
 1. Find the technique in `techniques/` first. Those examples are tested, measured, and written for ACE and AGK.
