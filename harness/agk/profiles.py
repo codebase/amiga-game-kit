@@ -37,7 +37,7 @@ PROFILES = {p.name: p for p in [
             "A500_ECS_1MB", "kick31-40063-a500"),
     Profile("a500-aros", "A500, OCS, 1MB + 2MB fast, AROS ROM (free, for CI)",
             "A500_OCS_1MB", "aros", ["mem set FAST_RAM 2048"]),
-    Profile("a1200", "A1200, AGA, 2MB, Kickstart 3.1 (experimental)",
+    Profile("a1200", "A1200, AGA, 2MB, Kickstart 3.1 (experimental; AGA colours differ slightly, needs own goldens)",
             "A1200_2MB", "kick31-40068-a1200", ["cpu set OVERCLOCKING 0"]),
 ]}
 

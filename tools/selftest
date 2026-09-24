@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# End-to-end check of the kit itself:
+#   harness unit tests -> examples/hello tests -> new project from template
+#   (unit, build, record goldens, re-test against them).
+#   tools/selftest [PROFILE...]     (default: all profiles each project lists)
+set -euo pipefail
+
+KIT="$(cd "$(dirname "$0")/.." && pwd)"
+AGK="$KIT/tools/agk"
+PROFILES=()
+for p in "$@"; do PROFILES+=(-p "$p"); done
+
+step() { printf '\n== %s\n' "$*"; }
+
+step "harness unit tests"
+PYTHONPATH="$KIT/harness" python3 -m unittest discover -s "$KIT/harness/tests" -q
+
+step "doctor"
+"$AGK" doctor
+
+step "examples/hello"
+"$AGK" build "$KIT/examples/hello"
+"$AGK" test "$KIT/examples/hello" ${PROFILES[@]+"${PROFILES[@]}"}
+
+step "new project from template"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+"$AGK" new "$TMP/selftest_game"
+"$AGK" unit "$TMP/selftest_game"
+"$AGK" build "$TMP/selftest_game"
+"$AGK" test "$TMP/selftest_game" --update ${PROFILES[@]+"${PROFILES[@]}"} >/dev/null
+"$AGK" test "$TMP/selftest_game" ${PROFILES[@]+"${PROFILES[@]}"}
+
+step "all good"

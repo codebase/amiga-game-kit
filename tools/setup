@@ -24,7 +24,7 @@ fetch https://github.com/AmigaPorts/ACE.git "$TP/ACE" "$ACE_REV"
 # Local patches (all intended for upstream):
 #   vamiga-agk.patch    wait N frames, waitserial, agk screenshot/serial/snapsave/snapload,
 #                       frame-skip reset fix
-#   ace-ks13-pal.patch  detect PAL from Agnus on Kickstart 1.x
+#   ace-agk.patch       PAL detection on Kickstart 1.x, TBE (serial) interrupt dispatch
 apply_patch() { # repo patch
   if git -C "$1" apply --check "$ROOT/patches/$2" 2>/dev/null; then
     git -C "$1" apply "$ROOT/patches/$2"
@@ -33,7 +33,7 @@ apply_patch() { # repo patch
   fi
 }
 apply_patch "$TP/vAmiga" vamiga-agk.patch
-apply_patch "$TP/ACE" ace-ks13-pal.patch
+apply_patch "$TP/ACE" ace-agk.patch
 
 CMAKE_ARGS=(-DCMAKE_BUILD_TYPE=Release)
 if [ "$(uname)" = Darwin ] && command -v brew >/dev/null && [ -d "$(brew --prefix llvm 2>/dev/null)" ]; then

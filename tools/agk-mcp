@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# MCP server (stdio) for AI agents. Claude Code: claude mcp add amiga -- /path/to/tools/agk-mcp
+ROOT="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." && pwd)"
+PYTHONPATH="$ROOT/harness${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m agk.mcp "$@"

@@ -6,6 +6,10 @@ import zlib
 # Pixels are hires-wide (lores pixels appear 2 wide) and 1 line tall.
 WIDTH, HEIGHT = 716, 285
 
+# Where a standard PAL lores playfield (DIWSTRT $2C81, 320x256) lands in that
+# cutout: game pixel (x, y) is image pixel (2x + 62, y + 18).
+SCREEN_X0, SCREEN_Y0, SCREEN_W, SCREEN_H = 62, 18, 320, 256
+
 
 class Image:
     def __init__(self, rgb: bytes, width=WIDTH, height=HEIGHT):
@@ -33,6 +37,16 @@ class Image:
                 + chunk(b"IHDR", struct.pack(">IIBBBBB", self.width, self.height, 8, 2, 0, 0, 0))
                 + chunk(b"IDAT", zlib.compress(rows, 9))
                 + chunk(b"IEND", b""))
+
+    def screen(self):
+        """The 320x256 lores playfield, one image pixel per game pixel."""
+        out = bytearray()
+        for y in range(SCREEN_H):
+            row = (SCREEN_Y0 + y) * self.width
+            for x in range(SCREEN_W):
+                i = (row + SCREEN_X0 + 2 * x) * 3
+                out += self.rgb[i:i + 3]
+        return Image(bytes(out), SCREEN_W, SCREEN_H)
 
     def save_png(self, path):
         with open(path, "wb") as f:

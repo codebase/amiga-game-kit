@@ -161,8 +161,10 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False):
         if os.path.exists(raw):
             img = Image.from_raw_file(raw)
             img.save_png(os.path.join(outdir, f"{name}.png"))
+            img.screen().save_png(os.path.join(outdir, f"{name}.screen.png"))
             os.remove(raw)
             result["screenshots"][name] = {"png": os.path.join(outdir, f"{name}.png"),
+                                           "screen_png": os.path.join(outdir, f"{name}.screen.png"),
                                            "sha256": hashlib.sha256(img.rgb).hexdigest()}
         elif code == 0:
             result["ok"] = False

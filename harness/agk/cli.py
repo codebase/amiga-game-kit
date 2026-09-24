@@ -4,19 +4,22 @@
     agk build [PROJECT]             compile + make bootable ADF
     agk run [PROJECT] [-s STEP]...  boot, play steps, save screenshots + serial
     agk test [PROJECT] [--update]   run tests/*.agk, compare screenshots to goldens
+    agk unit [PROJECT]              compile game logic for the host and run tests/unit/*.c
+    agk new DIR                     start a new game from the template
 
 PROJECT is a directory with an agk.toml (default: current directory).
 """
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tomllib
 
 from . import profiles, runner, scenario
-from .image import Image, diff
+from .image import SCREEN_X0, SCREEN_Y0, Image, diff
 from .paths import ROOT, VAMIGA
 
 DEFAULT_RUN_STEPS = ["screenshot screen"]
@@ -37,6 +40,7 @@ def load_project(path):
         "profiles": cfg.get("test_profiles", [cfg.get("profile", "a500")]),
         "boot": cfg.get("boot", "AGK ready"),
         "adf": os.path.join(path, "build", f"{name}.adf"),
+        "unit_sources": cfg.get("unit_sources", []),
     }
 
 
@@ -46,7 +50,8 @@ def need_adf(proj):
 
 
 def rel(p):
-    return os.path.relpath(p)
+    r = os.path.relpath(p)
+    return os.path.abspath(p) if r.startswith(os.pardir + os.sep + os.pardir) else r
 
 
 # ---------------------------------------------------------------- commands
@@ -87,10 +92,7 @@ def cmd_doctor(args):
 
 def cmd_build(args):
     proj = load_project(args.project)
-    rc = subprocess.run([os.path.join(ROOT, "tools", "build"), proj["dir"]]).returncode
-    if rc == 0:
-        print(f"built {rel(proj['adf'])}")
-    return rc
+    return subprocess.run([os.path.join(ROOT, "tools", "build"), proj["dir"]]).returncode
 
 
 def _report(res, as_json):
@@ -101,7 +103,8 @@ def _report(res, as_json):
     boot = f", boot {res['boot_seconds']:.1f}s (cached next time)" if res.get("boot_seconds") else ""
     print(f"{status} {res['scenario']} [{res['profile']}] {res.get('seconds', 0):.1f}s{boot}")
     for name, shot in res["screenshots"].items():
-        print(f"  screenshot {name}: {rel(shot['png'])}")
+        print(f"  screenshot {name}: {rel(shot['screen_png'])} (320x256, game coordinates)"
+              f" | full frame: {rel(shot['png'])}")
         if "golden" in shot:
             g = shot["golden"]
             if g["status"] == "match":
@@ -111,7 +114,11 @@ def _report(res, as_json):
             elif g["status"] == "updated":
                 print(f"    golden: updated {rel(g['path'])}")
             else:
-                print(f"    golden: DIFFERENT - {g['pixels']} px in box {g['bbox']}, see {rel(g['diff'])}")
+                x0, y0, x1, y1 = g["bbox"]
+                gx0, gy0 = max(0, (x0 - SCREEN_X0) // 2), max(0, y0 - SCREEN_Y0)
+                gx1, gy1 = (x1 - SCREEN_X0) // 2, y1 - SCREEN_Y0
+                print(f"    golden: DIFFERENT - {g['pixels']} px changed around game x={gx0}..{gx1} "
+                      f"y={gy0}..{gy1}, see {rel(g['diff'])}")
     for f in res["failures"]:
         print(f"  ! {f}")
     print(f"  serial: {rel(os.path.join(res['outdir'], 'serial.txt'))}")
@@ -213,6 +220,68 @@ def cmd_test(args):
     return 0 if passed == len(results) else 1
 
 
+def cmd_new(args):
+    dest = os.path.abspath(args.dir)
+    name = args.name or os.path.basename(dest)
+    if not re.match(r"^[a-z][a-z0-9_]*$", name):
+        raise SystemExit(f"name '{name}' must be lowercase letters, digits, _ (it becomes the executable name)")
+    if os.path.exists(dest) and os.listdir(dest):
+        raise SystemExit(f"{dest} exists and is not empty")
+    template = os.path.join(ROOT, "templates", args.template)
+    if not os.path.isdir(template):
+        raise SystemExit(f"no template '{args.template}' (have: {', '.join(sorted(os.listdir(os.path.join(ROOT, 'templates'))))})")
+    for base, dirs, files in os.walk(template):
+        dirs[:] = [d for d in dirs if d != "build"]
+        rel_dir = os.path.relpath(base, template)
+        os.makedirs(os.path.join(dest, rel_dir), exist_ok=True)
+        for f in files:
+            src = os.path.join(base, f)
+            dst = os.path.join(dest, rel_dir, f)
+            try:
+                text = open(src).read()
+            except UnicodeDecodeError:
+                shutil.copyfile(src, dst)
+                continue
+            with open(dst, "w") as out:
+                out.write(text.replace("{{name}}", name).replace("{{kit}}", ROOT))
+    print(f"created {rel(dest)} from template '{args.template}'")
+    print(f"next: agk build {rel(dest)} && agk test {rel(dest)} --update")
+    return 0
+
+
+def cmd_unit(args):
+    proj = load_project(args.project)
+    udir = os.path.join(proj["dir"], "tests", "unit")
+    tests = sorted(f for f in os.listdir(udir) if f.endswith(".c")) if os.path.isdir(udir) else []
+    if not tests:
+        raise SystemExit(f"no unit tests in {rel(udir)}")
+    cc = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+    if not cc:
+        raise SystemExit("no host C compiler found (set CC)")
+    srcs = [os.path.join(proj["dir"], s) for s in proj["unit_sources"]]
+    bindir = os.path.join(proj["dir"], "build", "unit")
+    os.makedirs(bindir, exist_ok=True)
+    failed = 0
+    for t in tests:
+        exe = os.path.join(bindir, os.path.splitext(t)[0])
+        cmd = [cc, "-std=c11", "-Wall", "-Wextra", "-g", "-fsanitize=address,undefined",
+               "-I", os.path.join(proj["dir"], "src"), *srcs, os.path.join(udir, t), "-o", exe]
+        cp = subprocess.run(cmd, capture_output=True, text=True)
+        if cp.returncode != 0:
+            print(f"FAIL {t}: does not compile on the host (unit_sources must not use Amiga headers)")
+            print(cp.stderr.strip())
+            failed += 1
+            continue
+        rp = subprocess.run([exe], capture_output=True, text=True, timeout=60)
+        print(f"{'PASS' if rp.returncode == 0 else 'FAIL'} {t}")
+        out = (rp.stdout + rp.stderr).strip()
+        if out and (rp.returncode != 0 or args.verbose):
+            print("  " + out.replace("\n", "\n  "))
+        failed += rp.returncode != 0
+    print(f"\n{len(tests) - failed}/{len(tests)} passed")
+    return 1 if failed else 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="agk", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -241,6 +310,15 @@ def main(argv=None):
     p.add_argument("--update", action="store_true", help="accept current screenshots as goldens")
     p.add_argument("--json", action="store_true")
 
+    p = sub.add_parser("unit", help="compile game logic for the host and run tests/unit/*.c")
+    p.add_argument("project", nargs="?")
+    p.add_argument("-v", "--verbose", action="store_true")
+
+    p = sub.add_parser("new", help="create a new game project from a template")
+    p.add_argument("dir")
+    p.add_argument("--name", help="executable name (default: directory name)")
+    p.add_argument("--template", default="game")
+
     sub.add_parser("help-scenario", help="print the scenario language reference")
 
     args = ap.parse_args(argv)
@@ -248,7 +326,8 @@ def main(argv=None):
         print(scenario.__doc__)
         return 0
     try:
-        return {"doctor": cmd_doctor, "build": cmd_build, "run": cmd_run, "test": cmd_test}[args.cmd](args)
+        return {"doctor": cmd_doctor, "build": cmd_build, "run": cmd_run, "test": cmd_test,
+                "unit": cmd_unit, "new": cmd_new}[args.cmd](args)
     except runner.RunError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

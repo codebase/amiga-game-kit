@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "amiga": {
+      "command": "{{kit}}/tools/agk-mcp",
+      "args": []
+    }
+  }
+}

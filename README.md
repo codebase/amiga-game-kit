@@ -23,13 +23,22 @@ PASS move [a500] 0.4s
 tools/setup                    # fetch pinned ACE + vAmiga, apply patches, build emulator, pull toolchain
 export PATH="$PWD/tools:$PATH"
 agk doctor                     # check Docker, emulator, ROMs, profiles
-agk build examples/hello       # C + ACE -> build/hello.adf (bootable floppy), compiled in Docker
-agk run examples/hello -s "press right 20" -s "screenshot moved"
-agk test examples/hello        # run tests/*.agk on every profile, compare with golden images
+
+agk new ~/games/mygame         # start a game from the template (AGENTS.md, tests, .mcp.json included)
+cd ~/games/mygame
+agk unit                       # game rules compiled for the host: milliseconds
+agk build                      # C + ACE -> build/mygame.adf (bootable floppy), compiled in Docker
+agk test --update              # record the first golden screenshots
+agk run -s "press right 20" -s "screenshot moved"   # try things; prints the PNG paths
 ```
 
-Requirements: Docker, git, cmake, Python 3.11+, and a C++20 compiler (on macOS:
-`brew install llvm`, because Apple's clang 15 is too old for vAmiga).
+Then open the project in Claude Code (or any agent). It picks up `AGENTS.md`
+and the `amiga` MCP server from `.mcp.json`, whose tools return screenshots as
+images.
+
+Requirements: Docker, git, cmake, Python 3.11+, a host C compiler, and a C++20
+compiler for vAmiga (on macOS: `brew install llvm`, because Apple's clang 15 is
+too old).
 
 ## How a run works
 
@@ -50,12 +59,26 @@ The scenario language is documented in `agk help-scenario`.
 
 ## Games talk to the harness over serial
 
-A game reports what it's doing by writing lines to the serial port. See
-`examples/hello/src/dbg.c`: about 30 lines that poll SERDAT directly, with no
-OS needed. Conventions:
+Games link the AGK runtime (`runtime/`) and report what they're doing through
+`#include <agk/debug.h>`:
 
-- `AGK ready`: print this once the first real frame is on screen. The harness waits for it.
-- `AGK <key>=<value> ...`: state that tests can assert on with `expect-serial`.
+- `agkReady()` prints `AGK ready`: call it once the first real frame is on screen. The harness waits for it.
+- `agkState("score", 10); agkEnd();` prints `AGK score=10`, which tests match with `expect-serial`.
+- `agkDebugAsync(1)` (after `systemUnuse()`) makes output interrupt-driven, so it costs almost no frame time.
+
+## Project structure
+
+`agk new` produces a game split so agents can test it quickly:
+- `src/logic.c` holds the rules in portable C and is unit-tested on the host by `agk unit`.
+- `src/main.c` is the Amiga side (ACE display, sprites, blitter, joystick).
+- `tests/*.agk` are emulator scenarios with golden screenshots.
+
+## MCP server
+
+`tools/agk-mcp` is a stdio MCP server with `agk_build`, `agk_run`, `agk_test`,
+`agk_unit`, `agk_doctor` and `agk_scenario_help`. New projects already include
+it in `.mcp.json`. To add it elsewhere:
+`claude mcp add amiga -- /path/to/amiga-game-kit/tools/agk-mcp`.
 
 ## Profiles
 
@@ -64,7 +87,7 @@ OS needed. Conventions:
 | `a500` (default) | A500, OCS, 512K chip + 512K slow | Kickstart 1.3 |
 | `a500-ks31` | A500, ECS, 1MB | Kickstart 3.1 |
 | `a500-aros` | A500, OCS, 1MB + 2MB fast | AROS (free, no Kickstart needed) |
-| `a1200` | A1200, AGA, 2MB (experimental) | Kickstart 3.1 |
+| `a1200` | A1200, AGA, 2MB (experimental: logic matches, AGA colour output differs slightly so it gets its own goldens) | Kickstart 3.1 |
 
 **Kickstart ROMs are copyrighted and are never committed, bundled or downloaded
 by AGK.** Put your own licensed ROMs in `roms/` (gitignored), or point
@@ -75,8 +98,10 @@ for CI.
 ## Layout
 
 ```
-tools/        setup, build, agk (CLI entry point)
-harness/agk/  the agk CLI: scenarios, emulator driver, images, profiles
+tools/        setup, build, selftest, agk (CLI), agk-mcp (MCP server)
+harness/agk/  the agk CLI: scenarios, emulator driver, images, profiles, MCP
+runtime/      C library games link (serial debug channel)
+templates/    project templates for agk new
 patches/      local patches to vAmiga and ACE (all intended for upstream)
 examples/     example games; each has agk.toml, src/, tests/*.agk, tests/golden/
 docs/         design notes and results

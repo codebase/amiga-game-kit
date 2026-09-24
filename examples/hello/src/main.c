@@ -12,7 +12,7 @@
 #include <hardware/dmabits.h>
 #include <exec/execbase.h>
 #include <graphics/gfxbase.h>
-#include "dbg.h"
+#include <agk/debug.h>
 
 extern struct ExecBase *SysBase;
 extern struct GfxBase *GfxBase;
@@ -48,15 +48,12 @@ static void createSpriteBitmap(void) {
 }
 
 void genericCreate(void) {
-	dbgInit();
-	dbgPuts("AGK boot hello\n");
-	dbgPuts("AGK info vblankfreq=");
-	dbgPutNum(SysBase->VBlankFrequency);
-	dbgPuts(" gfxpal=");
-	dbgPutNum((GfxBase->DisplayFlags & PAL) ? 1 : 0);
-	dbgPuts(" acepal=");
-	dbgPutNum(systemIsPal());
-	dbgPuts("\n");
+	agkDebugInit();
+	agkPrint("AGK boot hello\n");
+	agkState("vblankfreq", SysBase->VBlankFrequency);
+	agkState("gfxpal", (GfxBase->DisplayFlags & PAL) ? 1 : 0);
+	agkState("acepal", systemIsPal());
+	agkEnd();
 
 	keyCreate();
 	joyOpen();
@@ -127,13 +124,10 @@ void genericProcess(void) {
 	// Machine-readable state line whenever the sprite moves (and every
 	// 50 frames as a heartbeat) so tests can assert on game state.
 	if(wDx || wDy || s_uwFrame % 50 == 0) {
-		dbgPuts("AGK frame=");
-		dbgPutNum(s_uwFrame);
-		dbgPuts(" x=");
-		dbgPutNum(s_wX);
-		dbgPuts(" y=");
-		dbgPutNum(s_wY);
-		dbgPuts("\n");
+		agkState("frame", s_uwFrame);
+		agkState("x", s_wX);
+		agkState("y", s_wY);
+		agkEnd();
 	}
 	++s_uwFrame;
 
@@ -143,7 +137,7 @@ void genericProcess(void) {
 	// Copper lists are double-buffered: after two frames the display shows
 	// our first real frame. Only then tell the harness we're ready.
 	if(s_uwFrame == 2) {
-		dbgPuts("AGK ready\n");
+		agkReady();
 	}
 }
 

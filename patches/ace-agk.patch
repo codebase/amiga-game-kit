@@ -1,0 +1,36 @@
+diff --git a/src/ace/managers/system.c b/src/ace/managers/system.c
+index c1089b8..3f8ff5c 100644
+--- a/src/ace/managers/system.c
++++ b/src/ace/managers/system.c
+@@ -171,6 +171,18 @@ FN_HOTSPOT
+ void HWINTERRUPT int1Handler(void) {
+ 	logPushInt();
+ 	// Soft / diskBlk / TBE (RS232 TX end)
++	UWORD uwIntReq = g_pCustom->intreqr;
++	if(uwIntReq & INTF_TBE) {
++		// Acknowledge first: the handler may refill SERDAT, which can raise TBE
++		// again right away, and that request must not be cleared.
++		g_pCustom->intreq = INTF_TBE;
++		g_pCustom->intreq = INTF_TBE;
++		if(s_pAceInterrupts[INTB_TBE].pHandler) {
++			s_pAceInterrupts[INTB_TBE].pHandler(
++				g_pCustom, s_pAceInterrupts[INTB_TBE].pData
++			);
++		}
++	}
+ 	logPopInt();
+ }
+ 
+@@ -1326,6 +1338,12 @@ UBYTE systemGetVerticalBlankFrequency(void){
+ }
+ 
+ UBYTE systemIsPal(void) {
++	if(SysBase->LibNode.lib_Version < 36) {
++		// Kickstart 1.x doesn't reliably report 50Hz in VBlankFrequency on PAL
++		// machines. Ask Agnus instead: VPOSR bit 12 is set on NTSC chips
++		// (8370/8372). Original A1000 Agnus (8361/8367) reports 0 either way.
++		return (g_pCustom->vposr & 0x1000) ? 0 : 1;
++	}
+ 
+ 	UBYTE ubVBlankFreq = systemGetVerticalBlankFrequency();
+ 	if (ubVBlankFreq == 60) {

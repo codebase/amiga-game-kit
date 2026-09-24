@@ -1,0 +1,4 @@
+# First frame: three walls and the player in the middle.
+screenshot start
+expect-serial "AGK ready"
+expect-no-serial "ERR|STACK SMASHED"
