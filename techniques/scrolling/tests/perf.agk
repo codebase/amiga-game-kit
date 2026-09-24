@@ -1,0 +1,15 @@
+# Frame budget while scrolling continuously. "AGK perf" lines print every 50
+# frames; the phases below are long enough that most 50-frame windows are
+# purely one kind of work (see TECHNIQUE.md, "What it costs"):
+#   ~150 frames idle, camera still
+#   400 frames running right, 2 px/frame: the camera starts following at
+#       x=153 (frame 60) and scrolls until it stops at 640 (frame 380)
+#   300 frames walking left, 1 px/frame: camera scrolls back from 640 to 380
+wait 148
+press right+fire 400
+press left 300
+wait 2
+expect-serial "x=532 cam=380"
+expect-no-dropped-frames
+expect-max-load 60
+expect-no-serial "ERR|STACK SMASHED"

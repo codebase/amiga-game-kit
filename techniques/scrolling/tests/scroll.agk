@@ -1,0 +1,69 @@
+# Scroll through the level and prove the picture is where the camera says it
+# is, to the pixel. Markers: signs with a 1-px white left edge at tile
+# columns 10 (red), 30 (green), 58 (blue), row 13 (board at y 208..215).
+wait 2
+
+# --- mid-level at an ODD camera X (fine scroll = 9, not a multiple of 2) ---
+# Run 200 frames (2 px/frame) -> x 432, camera 280; walk 1 frame -> 433 / 281.
+press right+fire 200
+press right 1
+wait 3
+screenshot mid
+expect-serial "x=433 cam=281"
+# Green sign: world x 480 -> screen 480 - 281 = 199.
+expect-color mid 198 210 0x6AE
+expect-color mid 199 210 0xFFF
+expect-color mid 200 210 0x2D2
+expect-color mid 214 210 0x2D2
+expect-color mid 215 210 0x6AE
+# Column at tile 27: world 432..447 -> screen 151..166 (light left, dark right).
+expect-color mid 150 190 0x6AE
+expect-color mid 151 190 0x999
+expect-color mid 153 190 0xAAB
+expect-color mid 165 190 0x666
+expect-color mid 167 190 0x6AE
+# Brick platform tiles 20..24 row 8: world 320..399 -> screen 39..118, y 128.
+expect-color mid 38 136 0x6AE
+expect-color mid 39 136 0x999
+expect-color mid 40 138 0xC62
+expect-color mid 118 138 0xC62
+expect-color mid 119 138 0x6AE
+# Screen edges show real tiles, not garbage from the buffer margins.
+expect-color mid 0 225 0x3B3
+expect-color mid 319 225 0x3B3
+expect-color mid 0 60 0x6AE
+expect-color mid 319 60 0x6AE
+# The player stays centred while the camera follows.
+expect-color mid 152 208 0xFFF
+
+# --- right edge: the camera stops at 640, the player walks on to 944 ---
+press right+fire 300
+wait 3
+screenshot right_edge
+expect-serial "x=944 cam=640"
+# Blue sign: world 928 -> screen 288. (The player sprite covers 304..319.)
+expect-color right_edge 287 210 0x6AE
+expect-color right_edge 288 210 0xFFF
+expect-color right_edge 289 210 0x22E
+expect-color right_edge 303 210 0x22E
+# Column at tile 54: world 864 -> screen 224.
+expect-color right_edge 223 190 0x6AE
+expect-color right_edge 224 190 0x999
+expect-color right_edge 239 190 0x666
+expect-color right_edge 240 190 0x6AE
+# Last level pixel column (world 959) is the last screen column.
+expect-color right_edge 319 225 0x3B3
+expect-color right_edge 319 250 0x853
+expect-color right_edge 304 208 0xFFF
+
+# --- all the way back: tiles scrolled out and back in are redrawn exactly ---
+press left+fire 400
+wait 3
+screenshot back_to_start
+expect-serial "x=144 cam=0"
+# (The player sprite covers 144..159, so check the sign from its edge on.)
+expect-color back_to_start 160 210 0xFFF
+expect-color back_to_start 161 210 0xE22
+expect-color back_to_start 176 210 0x6AE
+expect-color back_to_start 0 225 0x3B3
+expect-no-serial "ERR|STACK SMASHED"

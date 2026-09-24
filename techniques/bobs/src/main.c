@@ -171,7 +171,7 @@ void genericCreate(void) {
 
 	viewLoad(s_pView);
 	systemUnuse();
-	agkDebugAsync(1); // from here on, debug output doesn't cost frame time
+	agkDebugAsync(1); // serial channel only: interrupt-driven from here on
 }
 
 void genericProcess(void) {

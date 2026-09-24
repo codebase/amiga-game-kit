@@ -1,0 +1,52 @@
+# Screenshots taken WHILE scrolling (no stop first): the picture must be a
+# clean, pixel-exact view of the level at some camera X, with no half-drawn
+# tile columns at the screen edges. The display is 2 frames behind the logic
+# (double-buffered copper list + scroll buffer), so the camera in the picture
+# is the one from 2 frames earlier. Tick sync makes that exact on every run.
+wait 2
+
+# Running 2 px/frame for 150 frames: logic camera 180, picture shows 176.
+hold right+fire
+wait 150
+screenshot running
+release
+# Brick platform, tiles 20..24 of row 8: world 320..399 -> screen 144..223.
+expect-color running 143 132 0x6AE
+expect-color running 144 132 0x999
+expect-color running 145 132 0xC62
+expect-color running 223 132 0xC62
+expect-color running 224 132 0x6AE
+# Column at tile 15: world 240..255 -> screen 64..79.
+expect-color running 63 200 0x6AE
+expect-color running 64 200 0x999
+expect-color running 79 200 0x666
+expect-color running 80 200 0x6AE
+# Both screen edges: real sky and ground, no margin garbage.
+expect-color running 0 60 0x6AE
+expect-color running 319 60 0x6AE
+expect-color running 0 225 0x3B3
+expect-color running 319 225 0x3B3
+
+# Walking 1 px/frame for 45 more frames: logic camera 225, picture shows 223.
+hold right
+wait 45
+screenshot walking
+release
+# Column at tile 27: world 432 -> screen 209..224.
+expect-color walking 208 200 0x6AE
+expect-color walking 209 200 0x999
+expect-color walking 224 200 0x666
+expect-color walking 225 200 0x6AE
+# Brick platform: world 320..399 -> screen 97..176.
+expect-color walking 96 132 0x6AE
+expect-color walking 97 132 0x999
+expect-color walking 176 132 0xC62
+expect-color walking 177 132 0x6AE
+# Column at tile 15: world 240..255 -> screen 17..32.
+expect-color walking 16 200 0x6AE
+expect-color walking 17 200 0x999
+expect-color walking 32 200 0x666
+expect-color walking 33 200 0x6AE
+expect-color walking 0 60 0x6AE
+expect-color walking 319 60 0x6AE
+expect-no-serial "ERR|STACK SMASHED"

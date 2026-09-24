@@ -43,13 +43,16 @@ def load_project(path):
         "adf": os.path.join(path, "build", f"{name}.adf"),
         "unit_sources": cfg.get("unit_sources", []),
         "sync": cfg.get("sync", "frames"),
+        "cmake": {k: ("ON" if v is True else "OFF" if v is False else str(v))
+                  for k, v in cfg.get("cmake", {}).items()},
     }
 
 
 def _newest_source(proj):
     newest = 0.0
     # The kit's runtime library is compiled into every game too.
-    for root in (proj["dir"], os.path.join(ROOT, "runtime")):
+    for root in (proj["dir"], os.path.join(ROOT, "runtime"),
+                 os.path.join(ROOT, "third_party", "ACE", "src"), os.path.join(ROOT, "third_party", "ACE", "include")):
         for base, dirs, files in os.walk(root):
             dirs[:] = [d for d in dirs if d not in ("build", "tests", ".git")]  # prune in place
             for f in files:
@@ -67,7 +70,7 @@ def need_adf(proj, build=True):
     if not build:
         raise SystemExit(f"{rel(proj['adf'])} is missing or older than the sources - run: agk build")
     print("sources changed since the last build - building first", file=sys.stderr)
-    rc = subprocess.run([os.path.join(ROOT, "tools", "build"), proj["dir"]], stdout=sys.stderr).returncode
+    rc = subprocess.run(_build_cmd(proj), stdout=sys.stderr).returncode
     if rc != 0:
         raise SystemExit(rc)
 
@@ -113,9 +116,20 @@ def cmd_doctor(args):
     return 0 if ok else 1
 
 
+def _build_cmd(proj, extra=()):
+    """tools/build with -D options from agk.toml [cmake] plus command-line ones.
+    (-D is the reliable way: a plain set() in CMakeLists loses to ACE's cache
+    defaults on the first configure.)"""
+    opts = dict(proj["cmake"])
+    for d in extra:
+        k, _, v = d.partition("=")
+        opts[k] = v
+    return [os.path.join(ROOT, "tools", "build"), proj["dir"], *(f"-D{k}={v}" for k, v in opts.items())]
+
+
 def cmd_build(args):
     proj = load_project(args.project)
-    return subprocess.run([os.path.join(ROOT, "tools", "build"), proj["dir"]]).returncode
+    return subprocess.run(_build_cmd(proj, args.define or [])).returncode
 
 
 def _report(res, as_json):
@@ -328,6 +342,9 @@ def main(argv=None):
 
     p = sub.add_parser("build", help="compile the project into build/<name>.adf")
     p.add_argument("project", nargs="?")
+    p.add_argument("-D", dest="define", action="append", metavar="NAME=VALUE",
+                   help="CMake option, e.g. -D ACE_DEBUG=ON. It stays in build/'s cache until changed or "
+                        "build/ is deleted; put permanent ones in agk.toml [cmake]")
 
     p = sub.add_parser("run", help="boot the game, play steps, capture results",
                        description="Steps use the scenario language, e.g. -s 'press right 20' -s 'screenshot moved'. "

@@ -64,8 +64,8 @@ All of this is in `src/main.c`.
 - **The picture lags the logic by one frame.** You draw into the back buffer, and it's shown on the next frame. When a test takes a screenshot, the serial log may already report the next position.
 - **Build options** change the API:
   - `ACE_BOB_PRISTINE_BUFFER` makes BOBs restore from a clean copy of the background, and `bobManagerCreate()` then takes an extra argument.
-  - `ACE_BOB_WRAP_Y` is off by default.
-  - Set them in `CMakeLists.txt` before `add_subdirectory(ace)`.
+  - `ACE_BOB_WRAP_Y` is **on** by default. Turning it off is faster for simple (non-scrolling) buffers.
+  - Set them in `agk.toml` under `[cmake]`, not with `set()` in CMakeLists. ACE declares them as cache variables, so a plain `set()` is ignored on the first configure.
 - **Changing a static background:** with double buffering you must change it in *both* buffers, and after `bobEnd`. Otherwise a BOB restore can bring back stale pixels.
 
 ## What it costs

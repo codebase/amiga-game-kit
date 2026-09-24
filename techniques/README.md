@@ -13,7 +13,7 @@ Agents: copy the pattern from here rather than from memory. It's known to work.
 | technique | what it shows | status |
 |---|---|---|
 | [bobs](bobs/TECHNIQUE.md) | Blitter objects: masked, double-buffered, background restore, no trails | ✅ tested, 18/18 |
-| scrolling | Tile-map scrolling that blits only the newly exposed edge (ACE tilebuffer) | planned |
+| [scrolling](scrolling/TECHNIQUE.md) | Tile-map scrolling, 3 screens wide, camera follows the player; pixel-exact at odd offsets (ACE tilebuffer). Found and fixed an ACE fast-RAM bug | ✅ tested, 12/12 |
 | copper | Per-line colour changes, gradients, palette splits | planned |
 | copper → sprite tricks | Horizontal sprite reuse (R-Type 2 style repeating backgrounds), vertical multiplexing (many bullets from few channels), sprite HUD, sprite parallax layer. See [codetapper's breakdowns](https://codetapper.com/amiga/sprite-tricks/) | planned |
 | hot paths | C first, then a proven hot spot in asm, checked against the C version | planned |

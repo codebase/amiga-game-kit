@@ -34,3 +34,20 @@ index c1089b8..3f8ff5c 100644
  
  	UBYTE ubVBlankFreq = systemGetVerticalBlankFrequency();
  	if (ubVBlankFreq == 60) {
+diff --git a/src/ace/managers/viewport/tilebuffer.c b/src/ace/managers/viewport/tilebuffer.c
+index 6a32c4e..c54f3f0 100644
+--- a/src/ace/managers/viewport/tilebuffer.c
++++ b/src/ace/managers/viewport/tilebuffer.c
+@@ -11,7 +11,11 @@
+ 
+ #define TILEBUFFER_MAX_TILESET_SIZE (1 << (8 * sizeof(tTileBufferTileIndex)))
+ 
+-#if !defined(ACE_DEBUG)
++// Skipping blitWait() between tile blits is only safe when the CPU is stalled
++// by the blitter, i.e. when tileBufferRedrawBack() runs from chip RAM - which
++// is only forced for Bartman's GCC (CHIP_CODE below). With code in fast RAM
++// (e.g. A500 + fast RAM, any 020+), skipping the waits corrupts tiles.
++#if !defined(ACE_DEBUG) && defined(BARTMAN_GCC)
+ #define TILEBUFFER_REDRAW_HOG 1
+ #else
+ #define TILEBUFFER_REDRAW_HOG 0

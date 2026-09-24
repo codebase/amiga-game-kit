@@ -118,7 +118,8 @@ Baseline: the template uses about 4% idle and about 9% while moving.
 - Moving objects wider than 16 px or with more colours are BOBs, drawn with the blitter (ACE `bob` manager, `docs/programming/using_bobs.md`).
 - The template's `simpleBufferCreate` is **single-buffered**, so `pBack == pFront`. Draw or erase static things once. If you add double buffering (`TAG_SIMPLEBUFFER_IS_DBLBUF`), every change must be made in both buffers, or the old image flickers back every other frame.
 - The copper changes registers at chosen scanlines: colour bars, palette splits, scroll. ACE: `copBlockCreate` / `copMove`.
-- ACE copper lists are double-buffered, so a change appears a frame or two later.
+- ACE copper lists are double-buffered, so a change appears a frame or two later. A screenshot can show the state from up to 2 frames before the serial log.
+- ACE build options (BOB wrapping, scroll buffer margins, ACE_DEBUG…) go in `agk.toml` `[cmake]`. `CMakeLists.txt` lists them.
 
 **OS**
 - After `systemUnuse()` the game owns the hardware: don't call AmigaOS (DOS, Intuition, graphics.library).
@@ -131,6 +132,7 @@ Baseline: the template uses about 4% idle and about 9% while moving.
 profile and comes with a `TECHNIQUE.md` covering the recipe, the gotchas and
 measured frame cost:
 - `bobs`: blitter objects, i.e. masked, double-buffered, background restore, no trails. Read it before drawing anything with the blitter; ACE's own BOB guide has a wrong signature.
+- `scrolling`: tile-map scrolling with ACE's tile buffer, a camera that follows the player, and measured costs per depth and speed. ACE's `tilebuffer.md` has several errors; this guide lists them.
 
 `{{kit}}/docs/references.md` lists open-source Amiga games and what each is
 good for studying, with licences.

@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 # Build a project into an Amiga executable and a bootable ADF, inside Docker.
-#   tools/build [PROJECT_DIR]      (default: current directory)
+#   tools/build [PROJECT_DIR] [-DNAME=VALUE ...]   (default: current directory)
+# Extra -D options go to CMake (agk build fills them from agk.toml [cmake]).
 # Output: PROJECT/build/<name> and PROJECT/build/<name>.adf, where <name> is
 # the directory name (or `name` from agk.toml).
 set -euo pipefail
 
 KIT="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT="$(cd "${1:-.}" && pwd)"
+shift || true
+EXTRA=""
+for a in "$@"; do
+  case "$a" in -D*) EXTRA="$EXTRA '$a'" ;; *) echo "unexpected argument: $a" >&2; exit 2 ;; esac
+done
 NAME="$(basename "$PROJECT")"
 if [ -f "$PROJECT/agk.toml" ]; then
   N="$(sed -n 's/^name *= *"\(.*\)"/\1/p' "$PROJECT/agk.toml" | head -1)"
@@ -27,7 +33,7 @@ docker run --rm -u "$(id -u):$(id -g)" \
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_TOOLCHAIN_FILE=/opt/m68k-amigaos/lib/m68k-amigaos.cmake \
     -DM68K_CPU=68000 -DM68K_FPU=soft -DM68K_CRT=nix13 \
-    -DACE_DIR=/kit/third_party/ACE -DAGK_KIT=/kit >/dev/null
+    -DACE_DIR=/kit/third_party/ACE -DAGK_KIT=/kit $EXTRA >/dev/null
   cmake --build build -j
   m68k-amigaos-strip build/$NAME 2>/dev/null || true
 

@@ -1,0 +1,19 @@
+# First frame: the left edge of the level, camera at 0.
+wait 2
+screenshot start
+expect-serial "AGK ready"
+expect-serial "x=32 cam=0"
+expect-no-serial "ERR|STACK SMASHED"
+# Red sign (tile column 10 = world x 160) at screen x 160: its 1-px white
+# left edge, sky just left of it, red board right of it and at its last pixel.
+expect-color start 159 210 0x6AE
+expect-color start 160 210 0xFFF
+expect-color start 161 210 0xE22
+expect-color start 175 210 0xE22
+expect-color start 176 210 0x6AE
+# Ground across the whole width, including both screen edges.
+expect-color start 0 225 0x3B3
+expect-color start 319 225 0x3B3
+expect-color start 0 250 0x853
+# Player sprite at world x 32, y 208 (top-left pixel is colour 17).
+expect-color start 32 208 0xFFF

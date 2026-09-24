@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14.0)
-project(bobs LANGUAGES C)
+project(scrolling LANGUAGES C)
 
 if(NOT AMIGA)
 	message(SEND_ERROR "This project only compiles for Amiga - use 'agk build'")
@@ -32,5 +32,5 @@ include_directories(${ACE_DIR}/include)
 add_subdirectory(${AGK_KIT}/runtime agk)
 
 file(GLOB_RECURSE SOURCES src/*.c)
-add_executable(bobs ${SOURCES})
-target_link_libraries(bobs ace agk)
+add_executable(scrolling ${SOURCES})
+target_link_libraries(scrolling ace agk)
