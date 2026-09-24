@@ -11,6 +11,7 @@ agk unit        # game rules only, on the host, in milliseconds - run after edit
 agk build       # cross-compile in Docker -> build/{{name}}.adf (a bootable floppy)
 agk test        # boot on every profile, play tests/*.agk, compare screenshots to goldens
 agk run -s "press right 20" -s "screenshot moved"   # try something ad hoc
+agk play        # let the human play it in FS-UAE (arrow keys + Space)
 agk help        # all commands;  agk help-scenario  # the test/run step language
 ```
 

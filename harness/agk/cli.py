@@ -5,6 +5,7 @@
     agk run [PROJECT] [-s STEP]...  boot, play steps, save screenshots + serial
     agk run tests/NAME.agk          run one scenario file (same as -f)
     agk test [PROJECT] [--update]   run tests/*.agk, compare screenshots to goldens
+    agk play [PROJECT]              play it in FS-UAE (arrow keys + Space)
     agk unit [PROJECT]              compile game logic for the host and run tests/unit/*.c
     agk new DIR                     start a new game from the template
     agk art [PROJECT]               convert art/ (text or PNG) to sprites/BOBs + previews
@@ -264,6 +265,45 @@ def cmd_art_animate(args):
     return 0
 
 
+def cmd_play(args):
+    """Play the game in FS-UAE (a normal, windowed Amiga emulator)."""
+    proj = load_project(args.project)
+    need_adf(proj)
+    profile_name = args.profile or proj["profile"]
+    profile, rom, ext = profiles.resolve(profile_name)
+    model = {"A500_OCS_1MB": "A500", "A500_ECS_1MB": "A500+", "A1200_2MB": "A1200"}.get(profile.scheme, "A500")
+    lines = ["[fs-uae]",
+             f"# Written by agk play for {proj['name']} ({profile_name}).",
+             f"amiga_model = {model}",
+             f"kickstart_file = {rom}",
+             f"floppy_drive_0 = {proj['adf']}",
+             "floppy_drive_speed = 0",           # turbo loading
+             "joystick_port_0 = mouse",
+             "joystick_port_1 = keyboard",      # arrow keys = joystick in port 2
+             "keyboard_key_space = action_joy_1_fire_button",
+             "window_width = 960", "window_height = 768"]
+    if ext:
+        lines.append(f"kickstart_ext_file = {ext}")
+    if "FAST_RAM" in " ".join(profile.config):
+        lines.append("fast_memory = 2048")
+    if profile.scheme == "A500_OCS_1MB":
+        lines += ["chip_memory = 512", "slow_memory = 512"]
+    cfg = os.path.join(proj["dir"], "build", f"{proj['name']}.fs-uae")
+    with open(cfg, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"wrote {rel(cfg)}")
+    print("controls: arrow keys = joystick (port 2), Space = fire; F12 = FS-UAE menu")
+    if sys.platform == "darwin":
+        if not os.path.exists("/Applications/FS-UAE.app"):
+            raise SystemExit("FS-UAE not found - install it with: brew install --cask fs-uae-emulator")
+        return subprocess.run(["open", "-a", "FS-UAE", cfg]).returncode
+    exe = shutil.which("fs-uae")
+    if not exe:
+        raise SystemExit("FS-UAE not found - install it (https://fs-uae.net), then run: fs-uae " + cfg)
+    subprocess.Popen([exe, cfg])
+    return 0
+
+
 def cmd_build(args):
     proj = load_project(args.project)
     if not _run_art(proj, quiet=True):
@@ -500,6 +540,10 @@ def main(argv=None):
     p.add_argument("--no-build", action="store_true", help="don't rebuild when sources are newer than the ADF")
     p.add_argument("--json", action="store_true")
 
+    p = sub.add_parser("play", help="play the game in FS-UAE (arrow keys + Space)")
+    p.add_argument("project", nargs="?")
+    p.add_argument("-p", "--profile")
+
     p = sub.add_parser("test", help="run tests/*.agk and compare screenshots with goldens")
     p.add_argument("project", nargs="?")
     p.add_argument("-p", "--profile", action="append", help="profile(s) to test (default: agk.toml test_profiles)")
@@ -577,7 +621,8 @@ def main(argv=None):
     try:
         return {"doctor": cmd_doctor, "build": cmd_build, "run": cmd_run, "test": cmd_test,
                 "unit": cmd_unit, "new": cmd_new, "art": cmd_art, "art-gen": cmd_art_gen,
-                "art-export": cmd_art_export, "art-animate": cmd_art_animate}[args.cmd](args)
+                "art-export": cmd_art_export, "art-animate": cmd_art_animate,
+                "play": cmd_play}[args.cmd](args)
     except runner.RunError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

@@ -43,7 +43,12 @@ agk unit                       # game rules compiled for the host: milliseconds
 agk build                      # C + ACE -> build/mygame.adf (bootable floppy), compiled in Docker
 agk test --update              # record the first golden screenshots
 agk run -s "press right 20" -s "screenshot moved"   # try things; prints the PNG paths
+agk play                       # play it yourself in FS-UAE: arrow keys + Space
 ```
+
+`agk play` needs FS-UAE (`brew install --cask fs-uae-emulator` on macOS). It
+writes an FS-UAE config for the game's profile (ROM, memory, the game disk,
+keyboard as the joystick in port 2) and opens it.
 
 Then open the project in Claude Code (or any agent). It picks up `AGENTS.md`
 and the `amiga` MCP server from `.mcp.json`, whose tools return screenshots as
