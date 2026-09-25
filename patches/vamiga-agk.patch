@@ -191,19 +191,30 @@ index b661c82..abb3d19 100644
              
              .tokens = { "shutdown" },
 diff --git a/Core/Misc/RetroShell/RetroShell.cpp b/Core/Misc/RetroShell/RetroShell.cpp
-index fc6320d..e510ceb 100644
+index fc6320d..6671936 100644
 --- a/Core/Misc/RetroShell/RetroShell.cpp
 +++ b/Core/Misc/RetroShell/RetroShell.cpp
-@@ -374,9 +374,108 @@ RetroShell::setStream(std::ostream &os)
+@@ -374,9 +374,119 @@ RetroShell::setStream(std::ostream &os)
      console.setStream(os);
  }
  
++void
++RetroShell::scheduleNextFrameStart()
++{
++    // Poll at frame boundaries (v=0, h=0), not "one frame from now": then when
++    // a check sees new serial output doesn't depend on when the wait began
++    // (which varies with boot timing, e.g. between Kickstart and AROS).
++    auto toNext = agnus.pos.diff(0, 0);
++    if (toNext <= 0) toNext = agnus.pos.cyclesPerFrame();
++    scheduleWakeup(DMA_CYCLES(toNext));
++}
++
 +void
 +RetroShell::awaitSerial(const string &pattern, isize frames)
 +{
 +    awaitPattern = pattern;
 +    awaitFrames = frames;
-+    scheduleWakeup(DMA_CYCLES(agnus.pos.cyclesPerFrame()));
++    scheduleNextFrameStart();
 +}
 +
 +void
@@ -211,7 +222,7 @@ index fc6320d..e510ceb 100644
 +{
 +    awaitTickTarget = serialPort.agkTicks + ticks;
 +    awaitFrames = timeoutFrames;
-+    scheduleWakeup(DMA_CYCLES(agnus.pos.cyclesPerFrame()));
++    scheduleNextFrameStart();
 +}
 +
 +void
@@ -250,7 +261,7 @@ index fc6320d..e510ceb 100644
 +        // Fallback timer while waiting for ticks: only detects a stuck game
 +        if (--awaitFrames > 0) {
 +
-+            scheduleWakeup(DMA_CYCLES(agnus.pos.cyclesPerFrame()));
++            scheduleNextFrameStart();
 +            return;
 +        }
 +        *this << "waitticks: timeout - the game stopped marking frames (crashed, hung, or not calling agkPerfBegin)\n";
@@ -277,7 +288,7 @@ index fc6320d..e510ceb 100644
 +            if (--awaitFrames > 0) {
 +
 +                // Not there yet: check again one frame later
-+                scheduleWakeup(DMA_CYCLES(agnus.pos.cyclesPerFrame()));
++                scheduleNextFrameStart();
 +                return;
 +            }
 +
@@ -304,10 +315,10 @@ index fc6320d..e510ceb 100644
      cancelWakeup();
  }
 diff --git a/Core/Misc/RetroShell/RetroShell.h b/Core/Misc/RetroShell/RetroShell.h
-index 3d7c834..5b77865 100644
+index 3d7c834..ac922c8 100644
 --- a/Core/Misc/RetroShell/RetroShell.h
 +++ b/Core/Misc/RetroShell/RetroShell.h
-@@ -133,6 +133,22 @@ public:
+@@ -133,6 +133,23 @@ public:
       */
      void scheduleWakeup(Cycle delay);
      void cancelWakeup();
@@ -318,6 +329,7 @@ index 3d7c834..5b77865 100644
 +    isize awaitFrames = 0;
 +    usize awaitOffset = 0;
 +    void awaitSerial(const string &pattern, isize frames);
++    void scheduleNextFrameStart();
 +
 +    // AGK tick sync: the game marks the start of each frame of its main loop
 +    // (a NOOP write). In tick mode, waits count game frames and resume the
