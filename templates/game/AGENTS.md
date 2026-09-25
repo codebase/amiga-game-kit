@@ -107,6 +107,14 @@ has both formats.
   late: `{{kit}}/examples/sidescroller` starts it a little earlier (see
   FRAME_START_LINES in its main.c).
 
+## Videos
+
+`agk record SCENARIO.agk -o game.mp4 [--gif game.gif --gif-seconds 10]` plays
+a scenario in the emulator and encodes every frame plus the sound into an
+MP4 (needs ffmpeg). Frames are captured during `wait` and `press`, not during
+`wait-serial`. Good for showing the game off, and for looking at motion that
+single screenshots miss.
+
 ## Telling the harness what happens: serial debug
 
 `#include <agk/debug.h>`, then:

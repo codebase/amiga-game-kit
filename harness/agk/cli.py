@@ -420,6 +420,35 @@ def cmd_run(args):
     return 0 if res["ok"] else 1
 
 
+def cmd_record(args):
+    from . import record
+    path = args.scenario
+    proj = load_project(args.project or os.path.dirname(os.path.dirname(os.path.abspath(path))))
+    need_adf(proj, not args.no_build)
+    name = os.path.splitext(os.path.basename(path))[0]
+    try:
+        sc, frames = record.video_scenario(scenario.parse(open(path).read(), name))
+    except (scenario.ScenarioError, record.RecordError) as e:
+        raise SystemExit(f"scenario error: {e}")
+    profile = args.profile or proj["profile"]
+    outdir = os.path.abspath(os.path.join(proj["dir"], "build", "agk-record", profile, name))
+    mp4 = os.path.abspath(args.out or os.path.join(proj["dir"], "build", f"{name}.mp4"))
+    print(f"recording {frames} frames ({frames / record.FPS:.1f} s)...", file=sys.stderr)
+    with runner.outdir_lock(outdir):
+        res = runner.run(proj["adf"], profile, sc, outdir, proj["boot"], sync=proj["sync"])
+        if not res["ok"]:
+            _report(res, False)
+            return 1
+        try:
+            record.encode(outdir, frames, mp4, gif=args.gif, gif_seconds=args.gif_seconds)
+        except record.RecordError as e:
+            raise SystemExit(f"record: {e}")
+    print(f"wrote {rel(mp4)} ({os.path.getsize(mp4) // 1024} KB)")
+    if args.gif:
+        print(f"wrote {rel(args.gif)} ({os.path.getsize(args.gif) // 1024} KB)")
+    return 0
+
+
 def _check_goldens(res, golden_dir, profile, update, refreshed):
     """Goldens live in tests/golden/<test>/<shot>.png, shared by all profiles.
     A profile that legitimately renders differently gets an override in
@@ -593,6 +622,17 @@ def main(argv=None):
     p.add_argument("--no-build", action="store_true", help="don't rebuild when sources are newer than the ADF")
     p.add_argument("--json", action="store_true")
 
+    p = sub.add_parser("record", help="record a scenario as an MP4 with sound (and a GIF)",
+                       description="Plays SCENARIO.agk in the emulator, captures every frame and Paula's "
+                                   "output, and encodes them with ffmpeg.")
+    p.add_argument("scenario", help="scenario file, e.g. demo/showcase.agk")
+    p.add_argument("project", nargs="?")
+    p.add_argument("-o", "--out", help="MP4 path (default build/SCENARIO.mp4)")
+    p.add_argument("--gif", help="also write a silent GIF (640x512, 25 fps)")
+    p.add_argument("--gif-seconds", type=float, help="only the first N seconds in the GIF")
+    p.add_argument("-p", "--profile")
+    p.add_argument("--no-build", action="store_true")
+
     p = sub.add_parser("play", help="play the game in FS-UAE (arrow keys + Space)")
     p.add_argument("project", nargs="?")
     p.add_argument("-p", "--profile")
@@ -691,7 +731,8 @@ def main(argv=None):
         return {"doctor": cmd_doctor, "build": cmd_build, "run": cmd_run, "test": cmd_test,
                 "unit": cmd_unit, "new": cmd_new, "art": cmd_art, "art-gen": cmd_art_gen,
                 "art-export": cmd_art_export, "art-animate": cmd_art_animate,
-                "play": cmd_play, "art-clean": cmd_art_clean, "sound": cmd_sound}[args.cmd](args)
+                "play": cmd_play, "art-clean": cmd_art_clean, "sound": cmd_sound,
+                "record": cmd_record}[args.cmd](args)
     except runner.RunError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

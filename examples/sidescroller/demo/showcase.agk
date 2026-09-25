@@ -1,0 +1,49 @@
+# Showcase for `agk record` (the README video): the farright.agk route - run,
+# jump the three pits, stomp all three mushrooms - with hops while the last
+# one walks up, then back left into pit 3 (the falling whistle) and a respawn.
+#   agk record demo/showcase.agk -o showcase.mp4 --gif showcase.gif
+# Host-simulated route: inputs are timed to the enemies, so don't add waits
+# before the end.
+wait-serial "AGK t0"
+press right 50              # hop onto mushroom 0...
+press right+up 1
+press right 30
+wait 30
+press right 70              # pit 1
+press right+up 1
+press right 40
+press right 112             # hop onto mushroom 1
+press right+up 1
+press right 23
+wait 40
+press right 23              # pit 2
+press right+up 1
+press right 40
+press right 83              # pit 3
+press right+up 1
+press right 30
+press up 1                  # hop while mushroom 2 walks up (it patrols under the low slab)
+wait 44
+press up 1
+wait 44
+press up 1
+wait 44
+press up 1
+wait 44
+press up 1
+wait 44
+press up 1
+wait 44
+press up 1
+wait 44
+wait 1
+press right+up 1
+press right 13
+wait 50
+press right 120
+wait 20
+press left 125              # back into pit 3
+wait 60                     # whistle, respawn at the start
+expect-serial "stomps=3"
+expect-serial "AGK sfx fall"
+expect-serial "deaths=1"

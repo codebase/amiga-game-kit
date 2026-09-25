@@ -19,7 +19,10 @@ PASS move [a500] 0.4s
 
 ## Example: `examples/sidescroller`
 
-![sidescroller](docs/img/sidescroller.png)
+[![sidescroller](docs/img/sidescroller.gif)](docs/media/sidescroller.mp4)
+
+▶ [Watch it with sound](docs/media/sidescroller.mp4): 25 s, recorded straight from the
+emulator with `agk record` (the GIF above is silent).
 
 A dual-playfield parallax platformer, built by an AI agent with the kit:
 - The mountains and hills are AI-generated with `agk art-gen` (Retro Diffusion, about $0.08 in total), then tidied with `agk art-clean`.
@@ -116,6 +119,11 @@ prioritised sound effects on the channels music doesn't reserve):
   recording is bit-identical between runs.
 
 `agk help-sound` has the formats.
+
+**Videos:** `agk record demo/showcase.agk -o game.mp4 --gif game.gif` plays a
+scenario in the emulator, captures every frame and Paula's output, and encodes
+an MP4 with sound (4x, square pixels) and a silent GIF with ffmpeg. The video
+above is `examples/sidescroller/demo/showcase.agk`.
 
 ## Project structure
 

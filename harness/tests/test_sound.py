@@ -144,6 +144,24 @@ class BuildTests(unittest.TestCase):
             sound.build(d)
 
 
+class RecordTests(unittest.TestCase):
+    def test_every_frame_is_captured(self):
+        from agk import record
+        sc = scenario.parse('wait-serial "go"\npress right 3\nwait 2\nscreenshot s')
+        vsc, n = record.video_scenario(sc)
+        self.assertEqual(n, 5)
+        shots = [l for l in vsc.lines if l.startswith("agk screenshot") and "video_" in l]
+        self.assertEqual(len(shots), 5)
+        self.assertEqual(vsc.lines.index("agk audio mark _video"), 3)   # waitserial, realign, joystick
+        self.assertEqual(len(vsc.lines), len(vsc.origins))
+        self.assertEqual(vsc.screenshots, ["s"])
+
+    def test_nothing_to_record(self):
+        from agk import record
+        with self.assertRaises(record.RecordError):
+            record.video_scenario(scenario.parse('wait-serial "go"'))
+
+
 class ScenarioAudioTests(unittest.TestCase):
     def test_marks_and_checks(self):
         sc = scenario.parse("mark a\nwait 5\nmark b\nexpect-sound a b\nexpect-silence b end")
