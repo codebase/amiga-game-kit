@@ -17,10 +17,11 @@ expect-serial "AGK stomp id=1 x=\d+ y=192"
 expect-serial "stomps=0\n(AGK stomp id=1 .*\n)AGK frame=\d+ x=446 y=182 .* ground=0 vy=-72 .* deaths=0 stomps=1"
 expect-no-serial "deaths=[1-9]"
 expect-no-serial "AGK hit"
-# squashed frame (only it has red in rows 11-12: y 203-204), under the hero
-# enemy at x 443, camera 294: screen x 149
-expect-color squashed 151 203 0xD43
-expect-color squashed 155 204 0xD43
-# 0.5 s later it's gone: the hills show where it lay
-expect-color gone 151 204 0x273
-expect-color gone 155 204 0x153
+# squashed frame (only it has red in rows 11-12: y 207-208, drawn 4 px into
+# the grass top face), under the hero; enemy at x 443, camera 294: screen x 149
+expect-color squashed 151 207 0xD43
+expect-color squashed 155 208 0xD43
+# 0.5 s later it's gone: hills (row 207) and the grass top face (row 208)
+# show where it lay
+expect-color gone 151 207 0x153
+expect-color gone 151 208 0x8D3

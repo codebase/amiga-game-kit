@@ -34,7 +34,7 @@ expect-color cam160 240 112 0x8CE
 # the first pit is on screen: COLOR00 below the bands (pit colour)
 expect-color cam160 200 240 0x102
 # player is centred: screen x = 312 - 160 = 152
-expect-color cam160 160 190 0x723 near 2  # hero scarf
+expect-color cam160 160 194 0x723 near 2  # hero scarf
 
 # Far right: camera clamps at 960 (level 1280 - 320); hills offset wraps
 # (960/2 = 480 -> 96), mountains 960/4 = 240.

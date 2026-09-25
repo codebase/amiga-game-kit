@@ -27,4 +27,4 @@ expect-serial "x=1264 y=192 cam=960 mtn=240 hills=96 ground=1 .* stomps=2"
 expect-no-serial "deaths=[1-9]"
 expect-no-serial "AGK hit"
 # player at screen x = 1264 - 960 = 304
-expect-color end 312 190 0x723 near 2       # hero scarf
+expect-color end 312 194 0x723 near 2       # hero scarf

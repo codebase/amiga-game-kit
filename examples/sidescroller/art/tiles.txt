@@ -1,5 +1,7 @@
 # Level tiles for the front playfield (PF1): 16x16, stacked vertically.
 # frame 1 = grass top, 2 = dirt, 3 = stone slab (one-way platform).
+# Top faces (grass rows 0-5, slab rows 0-3) are drawn as if seen from slightly
+# above; characters are drawn a few px down into them so they stand ON something.
 # '.' = transparent (colour 0): the parallax background shows through.
 colors
   .  transparent
@@ -11,13 +13,15 @@ colors
   S  0xCCB
   s  0x887
 frame
-.G...G..G....G..
-GG.GGGG.GG..GGG.
-GGGGGGGGGGGGGGGG
-GGgGGGGgGGGGgGGG
-gGggGgGggGgGGgGg
+.G..G.....G..G..
+GGGGGGG.GGGGGGGG
+GGGgGGGGGGgGGGGG
+GGGGGGGGGGGGGgGG
+GgGGGGgGGGGGGGGG
+GGGGGGGGgGGGGGGG
 gggggggggggggggg
-DgDgggDgDggDggDg
+gGgggGggGgggGggg
+DgDgDgDDgDDgDgDD
 DDDdDDDDDDdDDDDD
 DDDDDDdDDDDDDdDD
 DdDDDDDDKDDDDDDD
@@ -25,8 +29,6 @@ DDDDDdDDDDDDdDDD
 DDKDDDDDDDdDDDDD
 DDDDdDDDDDDDDDDK
 DdDDDDDKDDDdDDDD
-DDDDDDDDDDDDDDDD
-DDDDdDDDdDDDDDdD
 frame
 DDDdDDDDDDdDDDDD
 DDDDDDdDDDDDDdDD
@@ -46,15 +48,15 @@ DdDDDDDDDdDDDDDD
 DDDDKDDDDDDDDDDD
 frame
 SSSSSSSSSSSSSSSS
-SSSSSSSsSSSSSSSs
-SsssssssKSssssss
-SsssssssKSssssss
-SsssssssKSssssss
+SSsSSSSSSSSsSSSS
+SSSSSSsSSSSSSSsS
+SsSSSSSSSSsSSSSS
 KKKKKKKKKKKKKKKK
-SSSSSSSSSSSSSsSS
-SsssKSssssssssKS
-SsssKSssssssssKS
-SsssKSssssssssKS
+ssssKssssssssKss
+ssssKssssssssKss
+KKKKKKKKKKKKKKKK
+ssssssssKsssssss
+ssssssssKsssssss
 KKKKKKKKKKKKKKKK
 .KKKKKKKKKKKKKK.
 ................

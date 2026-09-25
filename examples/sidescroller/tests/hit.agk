@@ -11,4 +11,4 @@ screenshot respawned
 expect-serial "AGK hit id=1\nAGK frame=\d+ x=32 y=192 cam=0 .* deaths=1 stomps=0"
 expect-no-serial "AGK stomp"
 # the hero is back at the start (screen x 32)
-expect-color respawned 40 190 0x723 near 2   # hero scarf
+expect-color respawned 40 194 0x723 near 2   # hero scarf

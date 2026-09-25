@@ -12,17 +12,17 @@ screenshot turned
 expect-serial "spr=1 skip=0"
 expect-no-serial "deaths=[1-9]"
 # red cap (0xD43), sprite x ~260, facing left
-expect-color walk1 270 101 0xD43 near 2
+expect-color walk1 270 105 0xD43 near 2
 expect-color walk1 250 100 0xAEF              # sky: no enemy here yet
 # 20 px further left 40 frames later: the old spot is sky/snow again
 expect-color walk2 250 100 0xD43 near 2
 expect-color walk2 272 100 0xFFF
 expect-color walk2 276 101 0x8CE
 # turned at x 238 and walked back: the same x as walk1, but the mirrored
-# (right-facing) frame. Cap row y=101: the white spot moved from x 266-267
+# (right-facing) frame. Cap row y=105 (enemies stand 4 px into the tile top face): the white spot moved from x 266-267
 # (facing left) to x 269-270 (facing right).
-expect-color walk1 266 101 0xFFF
-expect-color walk1 269 101 0xD43
-expect-color turned 266 101 0xD43
-expect-color turned 269 101 0xFFF
+expect-color walk1 266 105 0xFFF
+expect-color walk1 269 105 0xD43
+expect-color turned 266 105 0xD43
+expect-color turned 269 105 0xFFF
 expect-color turned 250 100 0xAEF

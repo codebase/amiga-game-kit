@@ -17,12 +17,12 @@ expect-color start 210 100 0xA67
 # The one-line gap at y=135 (PF2 blank while the hills palette loads) = haze
 expect-color start 5 135 0xBDE
 # PF1 transparency shows PF2: between grass blades (y=208) the hills show
-expect-color start 40 208 0x8D3
-expect-color start 41 208 0x022
+expect-color start 81 208 0x8D3
+expect-color start 82 208 0x273
 # PF1 and PF2 both transparent: under the stone slab, haze COLOR00 (behind hills)
 expect-color start 150 174 0x9CD
 # Level (PF1) in front of PF2: the slab, dirt
 expect-color start 240 112 0xCCB
-expect-color start 60 220 0x964
+expect-color start 60 219 0x964
 # Player sprite in front of everything: top of the head
-expect-color start 40 190 0x723 near 2   # hero scarf
+expect-color start 40 194 0x723 near 2   # hero scarf

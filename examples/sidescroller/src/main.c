@@ -50,7 +50,7 @@ static UWORD *s_pBlankRow;       // PF2 above/below the bands: 42 zero bytes, mo
 // Hero: 32x32, 15 colours = 2 columns x attached pair = 4 hardware sprites
 // (channels 0-3). One bitmap per frame and part; frames 8.. face left.
 #define HERO_X_OFS 8    // art is 32 wide around the 16 px hitbox
-#define HERO_Y_OFS 15   // feet (row 30 of the art) on the hitbox bottom
+#define HERO_Y_OFS 11   // feet (row 30 of the art) 4 px into the tile top face (depth)
 static tBitMap *s_pHeroFrames[ART_HERO_FRAMES][ART_HERO_PARTS];
 static tSprite *s_pHero[ART_HERO_PARTS];
 static UBYTE s_ubShownHeroFrame;
@@ -68,6 +68,7 @@ static tGameState s_sState;
 // don't spriteAdd() (it only blanks all 8 once in spriteManagerCreate()).
 #define ENEMY_CHANNEL ART_ENEMY_CHANNEL      // 4, and 5 attached
 #define ENEMY_SPRITE_WORDS (2 + 2 * ART_ENEMY_H)
+#define ENEMY_SINK 4   // drawn 4 px down into the tile top face, like the hero (depth)
 #define ENEMY_CHAIN_WORDS (ENEMY_COUNT * ENEMY_SPRITE_WORDS + 2)
 #define SPRxCTL_ATTACH 0x0080
 static tBitMap *s_pEnemyFrames[ART_ENEMY_FRAMES][ART_ENEMY_PARTS];
@@ -324,7 +325,7 @@ static void enemyChainsBuild(void) {
 		const tEnemy *pE = &s_sState.pEnemies[s_sEnemyPlan.pId[i]];
 		UBYTE ubFrame = logicEnemyFrame(pE);
 		// Same coordinate mapping as ACE's spriteProcess(): beam = view origin + game px.
-		UWORD uwVStart = s_pView->ubPosY + pE->y;
+		UWORD uwVStart = s_pView->ubPosY + pE->y + ENEMY_SINK; // stand in the top face
 		UWORD uwVStop = uwVStart + ART_ENEMY_H;
 		UWORD uwHStart = s_pView->ubPosX - 1 + (pE->x - s_sState.cam);
 		UWORD uwPos = (uwVStart << 8) | ((uwHStart >> 1) & 0xFF);
