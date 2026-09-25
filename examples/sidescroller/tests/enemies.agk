@@ -1,28 +1,25 @@
-# Enemy 0 walks on the first stone slab (x 240..303, feet on y 111), drawn
-# with the multiplexed sprite pair (channels 4+5, attached, 15 colours).
-# It walks left at 0.5 px/frame, turns at the slab's left end (sprite x 238)
-# and comes back facing right.
+# Enemy 0 patrols the first stretch of ground (x 170..264, feet on y 207),
+# drawn with the multiplexed sprite pair (channels 4+5, attached, 15 colours).
+# It walks left at 0.5 px/frame, turns at x 170 and comes back facing right.
+# The hero stands still at the start, out of its reach.
 wait-serial "AGK t0"         # same game frame on every profile (see main.c)
 wait 10
 screenshot walk1
 wait 40
 screenshot walk2
-wait 50
+wait 200
 screenshot turned
 expect-serial "spr=1 skip=0"
 expect-no-serial "deaths=[1-9]"
-# red cap (0xD43), sprite x ~260, facing left
-expect-color walk1 270 105 0xD43 near 2
-expect-color walk1 250 100 0xB67              # sky: no enemy here yet
-# 20 px further left 40 frames later: the old spot is sky again
-expect-color walk2 250 100 0xD43 near 2
-expect-color walk2 272 100 0xB67
-expect-color walk2 276 101 0xA67
-# turned at x 238 and walked back: the same x as walk1, but the mirrored
-# (right-facing) frame. Cap row y=105 (enemies stand 4 px into the tile top face): the white spot moved from x 266-267
-# (facing left) to x 269-270 (facing right).
-expect-color walk1 266 105 0xFFF
-expect-color walk1 269 105 0xD43
-expect-color turned 266 105 0xD43
-expect-color turned 269 105 0xFFF
-expect-color turned 250 100 0xB67
+# red cap (0xD43), sprite x ~234, facing left, drawn 4 px into the grass top face
+expect-color walk1 238 201 0xD43
+# 20 px further left 40 frames later: the old spot shows the hills again
+expect-color walk2 218 201 0xD43
+expect-color walk2 238 201 0x273
+# turned at x 170 and walked back: about the same x as walk1, but the mirrored
+# (right-facing) frame. Cap row y=202: the white spot moved from x 234-235
+# (facing left) to x 233-234 (facing right).
+expect-color walk1 235 202 0xFFF
+expect-color walk1 233 202 0xD43
+expect-color turned 235 202 0xD43
+expect-color turned 233 202 0xFFF

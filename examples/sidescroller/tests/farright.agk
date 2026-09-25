@@ -1,29 +1,36 @@
-# Run to the end of the level, jumping the three pits. The camera clamps at
-# 960 (level 1280 - screen 320); the player stops at the level edge (1264).
-# Two ground enemies patrol the route, so it stomps both (host-simulated
-# route; each stomp works over a range of timings, see README):
-# enemy 1 between pit 1 and pit 2, enemy 5 at the level end.
+# Run to the end of the level, jumping the three pits and stomping all three
+# mushrooms (host-simulated route; each stomp works over a range of timings).
+# The camera clamps at 960 (level 1280 - screen 320); the player stops at the
+# level edge (1264).
 wait-serial "AGK t0"         # same game frame on every profile (see main.c)
-press right 154
+press right 50
+press right+up 1           # hop onto enemy 0...
+press right 30
+wait 30                    # ...bounce off it
+press right 70
 press right+up 1           # pit 1
-press right 36
-press right+up 1           # hop towards enemy 1...
-press right 15
-wait 30                    # ...and drop onto it (then bounce)
-press right 140
+press right 40
+press right 112
+press right+up 1           # hop onto enemy 1
+press right 23
+wait 40
+press right 23
 press right+up 1           # pit 2
-press right 130
+press right 40
+press right 83
 press right+up 1           # pit 3
-press right 110
-press right+up 1           # chase enemy 5 and land on it
-press right 26
-wait 20
-press right 100
+press right 30
+wait 316                   # wait for enemy 2 (it patrols under the low slab)
+press right+up 1           # short hop onto it
+press right 13
+wait 50
+press right 120
 wait 3
 screenshot end
+expect-serial "AGK stomp id=0 x=\d+ y=192"
 expect-serial "AGK stomp id=1 x=\d+ y=192"
-expect-serial "AGK stomp id=5 x=\d+ y=192"
-expect-serial "x=1264 y=192 cam=960 mtn=240 hills=96 ground=1 .* stomps=2"
+expect-serial "AGK stomp id=2 x=\d+ y=192"
+expect-serial "x=1264 y=192 cam=960 mtn=240 hills=96 ground=1 .* stomps=3"
 expect-no-serial "deaths=[1-9]"
 expect-no-serial "AGK hit"
 # player at screen x = 1264 - 960 = 304

@@ -95,7 +95,7 @@ static tEnemyPlan s_sEnemyPlan;
 
 #define COP_SPRITES_POS 0
 #define COP_TOP_POS 16
-#define COP_RAW_COUNT 480
+#define COP_RAW_COUNT 560
 
 typedef struct {
 	UWORD uwCon1;          // index of the MOVE BPLCON1
@@ -107,6 +107,7 @@ static UWORD s_uwCopUsed;
 
 static UWORD s_pSkyColors[SKY_BANDS];
 static UWORD s_pHazeColors[HAZE_BANDS];
+static UWORD s_pPitColors[PIT_BANDS];
 
 typedef struct {
 	tCopCmd *pList;
@@ -220,7 +221,10 @@ static void copperWriteList(tCopCmd *pList, UWORD uwBeamTop) {
 	cwMove(&sW, &g_pCustom->bpl2mod, (UWORD)-FETCH_BYTES);
 	cwPlanePtrs(&sW, 1, pBlank);
 	cwWait(&sW, BANDS_END, 0);
-	cwMove(&sW, &g_pCustom->color[0], PIT_COLOR);
+	cwMove(&sW, &g_pCustom->color[0], s_pPitColors[0]);
+	for(UBYTE i = 1; i < PIT_BANDS; ++i) {
+		cwBackground(&sW, BANDS_END + i, s_pPitColors[i], s_pPitColors[i - 1]);
+	}
 
 	s_uwCopUsed = sW.uwPos;
 	if(s_uwCopUsed > COP_RAW_COUNT) {
@@ -236,6 +240,7 @@ static void copperWriteList(tCopCmd *pList, UWORD uwBeamTop) {
 static void copperCreate(void) {
 	for(UBYTE i = 0; i < SKY_BANDS; ++i) s_pSkyColors[i] = logicSkyColor(i);
 	for(UBYTE i = 0; i < HAZE_BANDS; ++i) s_pHazeColors[i] = logicHazeColor(i);
+	for(UBYTE i = 0; i < PIT_BANDS; ++i) s_pPitColors[i] = logicPitColor(i);
 	tCopList *pCopList = s_pView->pCopList;
 	copperWriteList(pCopList->pBackBfr->pList, s_pView->ubPosY);
 	copperWriteList(pCopList->pFrontBfr->pList, s_pView->ubPosY);
@@ -369,7 +374,7 @@ static void drawLevel(void) {
 			UBYTE ubTile = logicTileAt(tx, ty);
 			if(ubTile != TILE_EMPTY) {
 				blitCopyAligned(
-					s_pTiles, 0, (ubTile - 1) * TILE_SIZE,
+					s_pTiles, 0, logicTileArtFrame(tx, ty) * TILE_SIZE,
 					s_pLevel, tx * TILE_SIZE, ty * TILE_SIZE, TILE_SIZE, TILE_SIZE
 				);
 			}

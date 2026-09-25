@@ -16,7 +16,7 @@ expect-serial "x=144 y=144 cam=0 mtn=0 hills=0 ground=1 vy=0 walk=0 anim=[01] le
 expect-color landed 152 146 0x723 near 2   # hero scarf
 # walk off the right end of the slab: falls, lands on the ground
 press right 30
-wait 30
+wait 12                     # landed; enemy 0 is walking towards him
 screenshot fell
 expect-serial "x=204 y=192 cam=52 mtn=13 hills=26 ground=1"
 expect-color fell 100 160 0xCCB

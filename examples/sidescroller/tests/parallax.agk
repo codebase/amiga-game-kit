@@ -5,34 +5,40 @@
 wait-serial "AGK t0"         # same game frame on every profile (see main.c)
 screenshot cam0
 expect-serial "x=32 y=192 cam=0 mtn=0 hills=0"
-# mountains edge at x=82|83, y=100 (right side of a peak | sky)
-expect-color cam0 82 100 0x47A
-expect-color cam0 83 100 0xB67
-# hills edge at x=115|116, y=178
-expect-color cam0 115 178 0x6B3
-expect-color cam0 116 178 0x273
+# mountains edge at x=74|75, y=100 (right side of a peak | sky)
+expect-color cam0 74 100 0x47A
+expect-color cam0 75 100 0xB67
+# hills edge at x=107|108, y=178
+expect-color cam0 107 178 0x022
+expect-color cam0 108 178 0x273
 # level: left end of the stone slab (row 7) at x=240, y=112
 expect-color cam0 239 112 0xC87
 expect-color cam0 240 112 0xCCB
 
-press right 140
+# (stomping enemy 0 on the way, as in stomp.agk)
+press right 50
+press right+up 1
+press right 30
+wait 30
+press right 59
 wait 3
 screenshot cam160
 expect-serial "x=312 y=192 cam=160 mtn=40 hills=80 ground=1"
-# mountains edge moved by 160/4 = 40 px: now at x=42|43
-expect-color cam160 42 100 0x47A
-expect-color cam160 43 100 0xB67
-expect-color cam160 82 100 0xB67
-# hills edge moved by 160/2 = 80 px: now at x=35|36
-expect-color cam160 35 178 0x6B3
-expect-color cam160 36 178 0x273
-expect-color cam160 116 178 0x9BC
+# mountains edge moved by 160/4 = 40 px: now at x=34|35
+expect-color cam160 34 100 0x47A
+expect-color cam160 35 100 0xB67
+expect-color cam160 74 100 0xB67
+# hills edge moved by 160/2 = 80 px: now at x=27|28
+expect-color cam160 27 178 0x022
+expect-color cam160 28 178 0x273
+expect-color cam160 107 178 0x9BC
 # level edge moved by 160 px: now at x=79|80
 expect-color cam160 79 112 0xC87
 expect-color cam160 80 112 0xCCB
 expect-color cam160 240 112 0xC87
-# the first pit is on screen: COLOR00 below the bands (pit colour)
-expect-color cam160 200 240 0x102
+# the first pit is on screen: COLOR00 below the bands, dark earth fading to black
+expect-color cam160 200 211 0x432
+expect-color cam160 200 250 0x000
 # player is centred: screen x = 312 - 160 = 152
 expect-color cam160 160 194 0x723 near 2  # hero scarf
 

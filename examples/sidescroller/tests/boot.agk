@@ -2,7 +2,7 @@
 wait-serial "AGK t0"         # same game frame on every profile (see main.c)
 screenshot start
 expect-serial "AGK ready"
-expect-serial "copper_used=\d+ copper_max=480"
+expect-serial "copper_used=\d+ copper_max=560"
 expect-serial "x=32 y=192 cam=0 mtn=0 hills=0 ground=1"
 expect-serial "stomps=0 spr=1 skip=0"             # enemy 0 on the first slab is on screen
 expect-no-serial "ERR|STACK SMASHED"
@@ -21,7 +21,7 @@ expect-color start 5 135 0xBCE
 expect-color start 81 208 0x8D3
 expect-color start 82 208 0x273
 # PF1 and PF2 both transparent: under the stone slab, haze COLOR00 (behind hills)
-expect-color start 150 174 0x9BD
+expect-color start 150 174 0x9BC
 # Level (PF1) in front of PF2: the slab, dirt
 expect-color start 240 112 0xCCB
 expect-color start 60 219 0x964

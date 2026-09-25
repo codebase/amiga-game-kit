@@ -1,29 +1,36 @@
 # Frame budget guard. The whole level: run, jump the three pits, stomp the
-# two ground enemies (same route as farright.agk), with up to three enemies
-# multiplexed on the one sprite pair at once, then run back left and jump
+# three mushrooms (same route as farright.agk), then run back left and jump
 # pit 3 the other way.
 wait-serial "AGK t0"         # same game frame on every profile (see main.c)
-press right 154
-press right+up 1
-press right 36
-press right+up 1
-press right 15
-wait 30
-press right 140
-press right+up 1
-press right 130
-press right+up 1
-press right 110
-press right+up 1
-press right 26
-wait 20
-press right 100
+press right 50
+press right+up 1           # hop onto enemy 0...
+press right 30
+wait 30                    # ...bounce off it
+press right 70
+press right+up 1           # pit 1
+press right 40
+press right 112
+press right+up 1           # hop onto enemy 1
+press right 23
+wait 40
+press right 23
+press right+up 1           # pit 2
+press right 40
+press right 83
+press right+up 1           # pit 3
+press right 30
+wait 316                   # wait for enemy 2 (it patrols under the low slab)
+press right+up 1           # short hop onto it
+press right 13
+wait 50
+press right 120
 press left 100
 press left+up 1
 press left 60
-expect-serial "stomps=2"
-expect-serial "spr=3 skip=0"
+expect-serial "stomps=3"
+expect-serial "spr=1 skip=0"
 expect-no-serial "deaths=[1-9]"
+expect-no-serial "skip=[1-9]"
 expect-no-dropped-frames
 # Measured on a500 (see README "Measured costs"): load ~35%, maxload 43-46%.
 # Most of it is the 14-value serial state line printed every frame (~20%).

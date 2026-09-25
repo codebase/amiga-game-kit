@@ -34,6 +34,18 @@ uint8_t logicTileAt(int16_t tx, int16_t ty) {
 	}
 }
 
+#define TILE_FRAME_EDGE_R 3 // grass with a pit on the right; +1 pit on the left, +2 dirt
+uint8_t logicTileArtFrame(int16_t tx, int16_t ty) {
+	uint8_t t = logicTileAt(tx, ty);
+	if(t == TILE_GRASS || t == TILE_DIRT) {
+		uint8_t ubDirt = t == TILE_DIRT ? 2 : 0;
+		// the level ends are not pit edges
+		if(tx < LEVEL_TILES_W - 1 && logicTileAt(tx + 1, ty) == TILE_EMPTY) return TILE_FRAME_EDGE_R + ubDirt;
+		if(tx > 0 && logicTileAt(tx - 1, ty) == TILE_EMPTY) return TILE_FRAME_EDGE_R + 1 + ubDirt;
+	}
+	return t - 1;
+}
+
 static uint8_t isSolidPx(int16_t px, int16_t py) {
 	if(py < 0) return 0;
 	uint8_t t = logicTileAt(px >> TILE_SHIFT, py >> TILE_SHIFT);
@@ -90,22 +102,19 @@ uint8_t logicScrollDelay(uint16_t scrollX) {
 
 // ----------------------------------------------------------------- enemies
 
-// Where the enemies start: x, the tile row of the floor they walk on, and the
-// initial direction. Their heights on screen (y = 48, 96, 144, 192) are all at
-// least ENEMY_MUX_GAP apart, so enemies on different floors never compete for
-// the multiplexed sprite; two ground enemies (1, 5) are 300+ px apart.
+// Where the enemies start, their initial direction and their patrol range.
+// All of them walk on the ground (y 192), and they share ONE multiplexed
+// sprite pair, which can't show two enemies on the same lines: so the ranges
+// are at least SCREEN_W + ENEMY_W (336) px apart and two are never on screen
+// together (unit-tested).
 static const struct {
 	int16_t x;
-	uint8_t floorRow;
 	int8_t dir;
+	int16_t xMin, xMax;
 } s_pEnemySpawns[ENEMY_COUNT] = {
-	{ 270,  7, -1}, // 0: first slab on screen (240..303), y 96
-	{ 560, 13, -1}, // 1: ground between pit 1 and pit 2 (400..751), y 192
-	{ 510, 10,  1}, // 2: low slab (480..559), y 144
-	{ 736,  4, -1}, // 3: high slab (720..767), y 48
-	{ 930,  7,  1}, // 4: middle slab (912..975), y 96
-	{1150, 13, -1}, // 5: last stretch of ground (1040..1279), y 192
-	{1180, 10,  1}, // 6: last low slab (1152..1215), y 144
+	{ 240, -1,  170,  264}, // 0: first stretch of ground (0..351)
+	{ 700, -1,  600,  735}, // 1: between pit 1 and pit 2 (400..751)
+	{1150, -1, 1071, 1264}, // 2: last stretch of ground (1040..1279), to the level end
 };
 
 // Can an enemy at x,y take one pixel step in dir? Not past the level ends,
@@ -140,8 +149,11 @@ void logicEnemyPlace(tEnemy *pEnemy, int16_t x, int16_t y, int8_t dir) {
 
 static void enemiesInit(tGameState *pState) {
 	for(uint8_t i = 0; i < ENEMY_COUNT; ++i) {
-		logicEnemyPlace(&pState->pEnemies[i], s_pEnemySpawns[i].x,
-			s_pEnemySpawns[i].floorRow * TILE_SIZE - ENEMY_H, s_pEnemySpawns[i].dir);
+		tEnemy *pE = &pState->pEnemies[i];
+		logicEnemyPlace(pE, s_pEnemySpawns[i].x, START_Y, s_pEnemySpawns[i].dir);
+		// never beyond the floor, and never closer to the next enemy than a screen
+		if(pE->xMin < s_pEnemySpawns[i].xMin) pE->xMin = s_pEnemySpawns[i].xMin;
+		if(pE->xMax > s_pEnemySpawns[i].xMax) pE->xMax = s_pEnemySpawns[i].xMax;
 	}
 	logicEnemySortY(pState);
 }
@@ -438,4 +450,16 @@ uint16_t logicSkyColor(uint8_t i) {
 uint16_t logicHazeColor(uint8_t i) {
 	// Starts at the mist the mountains fade into (art-clean --fade-bottom 10:0xBCE)
 	return lerpColorDither(0xBCE, 0x7AB, i, HAZE_BANDS - 1, i);
+}
+
+uint16_t logicPitColor(uint8_t i) {
+	// Earth into black. A plain lerp would dither R, G and B on different
+	// lines (tinted stripes), so step through a hand-picked ramp of browns and
+	// dither between neighbouring entries instead: PIT_RAMP_LINES lines each.
+	static const uint16_t pRamp[] = {0x432, 0x321, 0x210, 0x100, 0x000};
+	static const uint8_t pThreshold[4] = {0, 2, 1, 3};
+	uint8_t k = i / PIT_RAMP_LINES;
+	if(k >= sizeof(pRamp) / sizeof(pRamp[0]) - 1) return 0x000;
+	uint8_t q = (i % PIT_RAMP_LINES) * 4 / PIT_RAMP_LINES; // 0..3: how far towards the next
+	return q > pThreshold[i & 3] ? pRamp[k + 1] : pRamp[k];
 }

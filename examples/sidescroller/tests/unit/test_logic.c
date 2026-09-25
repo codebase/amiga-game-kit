@@ -13,8 +13,14 @@ static void step(tGameState *s, int8_t dx, uint8_t jump, int frames) {
 	for(int i = 0; i < frames; ++i) logicUpdate(s, &in);
 }
 
-static void place(tGameState *s, int16_t x, int16_t y) {
+// Hero tests: the level without its enemies (mushroom 0 patrols near the start).
+static void initNoEnemies(tGameState *s) {
 	logicInit(s);
+	for(uint8_t i = 0; i < ENEMY_COUNT; ++i) s->pEnemies[i].state = ENEMY_GONE;
+}
+
+static void place(tGameState *s, int16_t x, int16_t y) {
+	initNoEnemies(s);
 	s->x = x; s->y = y; s->yFix = y << FIX_SHIFT; s->vy = 0; s->onGround = 0;
 	step(s, 0, 0, 1); // settle
 }
@@ -24,13 +30,18 @@ static void testLevelShape(void) {
 	CHECK(logicTileAt(0, 14) == TILE_DIRT);
 	CHECK(logicTileAt(22, 13) == TILE_EMPTY); // first pit
 	CHECK(logicTileAt(8, 10) == TILE_STONE);
+	// art: cliff faces at the pit edges only (not at the level ends)
+	CHECK(logicTileArtFrame(5, 13) == 0 && logicTileArtFrame(5, 14) == 1 && logicTileArtFrame(8, 10) == 2);
+	CHECK(logicTileArtFrame(21, 13) == 3 && logicTileArtFrame(25, 13) == 4); // pit 1: 22..24
+	CHECK(logicTileArtFrame(21, 15) == 5 && logicTileArtFrame(25, 15) == 6);
+	CHECK(logicTileArtFrame(0, 13) == 0 && logicTileArtFrame(79, 14) == 1);
 	CHECK(logicTileAt(-1, 13) == TILE_EMPTY && logicTileAt(80, 13) == TILE_EMPTY);
 	CHECK(logicTileAt(5, -1) == TILE_EMPTY && logicTileAt(5, 16) == TILE_EMPTY);
 }
 
 static void testStartsOnGround(void) {
 	tGameState s;
-	logicInit(&s);
+	initNoEnemies(&s);
 	CHECK(s.x == START_X && s.y == START_Y && s.onGround);
 	step(&s, 0, 0, 10);
 	CHECK(s.y == START_Y && s.onGround && s.walkFrame == 0);
@@ -38,7 +49,7 @@ static void testStartsOnGround(void) {
 
 static void testRunsTwoPixelsPerFrame(void) {
 	tGameState s;
-	logicInit(&s);
+	initNoEnemies(&s);
 	step(&s, 1, 0, 10);
 	CHECK(s.x == START_X + 20);
 	CHECK(s.onGround);
@@ -47,7 +58,7 @@ static void testRunsTwoPixelsPerFrame(void) {
 
 static void testWalkAnimation(void) {
 	tGameState s;
-	logicInit(&s);
+	initNoEnemies(&s);
 	uint8_t seen[WALK_FRAMES] = {0};
 	for(int i = 0; i < 4 * WALK_FRAME_TICKS * WALK_FRAMES; ++i) {
 		step(&s, 1, 0, 1);
@@ -60,7 +71,7 @@ static void testWalkAnimation(void) {
 
 static void testJumpArc(void) {
 	tGameState s;
-	logicInit(&s);
+	initNoEnemies(&s);
 	step(&s, 0, 1, 1);
 	CHECK(!s.onGround && s.jumps == 1);
 	int16_t minY = s.y;
@@ -79,7 +90,7 @@ static void testJumpArc(void) {
 
 static void testJumpNeedsRelease(void) {
 	tGameState s;
-	logicInit(&s);
+	initNoEnemies(&s);
 	step(&s, 0, 1, 100); // hold jump through one full arc and beyond
 	CHECK(s.jumps == 1);
 	CHECK(s.onGround);
@@ -92,7 +103,7 @@ static void testLandsOnPlatformFromBelow(void) {
 	// Stone slab at row 10, columns 8..11 (x 128..191): jump through it from
 	// below (one-way) and land on its top, y = 160 - 16.
 	tGameState s;
-	logicInit(&s);
+	initNoEnemies(&s);
 	s.x = 144;
 	step(&s, 0, 1, 1);
 	step(&s, 0, 0, 60);
@@ -129,7 +140,7 @@ static void testSolidGroundFromSide(void) {
 
 static void testPitRespawns(void) {
 	tGameState s;
-	logicInit(&s);
+	initNoEnemies(&s);
 	step(&s, 1, 0, 200); // runs into the first pit
 	CHECK(s.deaths >= 1);
 	CHECK(s.x <= 22 * TILE_SIZE); // respawned, running again from the start
@@ -137,7 +148,7 @@ static void testPitRespawns(void) {
 
 static void testLevelEdges(void) {
 	tGameState s;
-	logicInit(&s);
+	initNoEnemies(&s);
 	step(&s, -1, 0, 50);
 	CHECK(s.x == 0);
 	place(&s, LEVEL_W - PLAYER_W - 4, START_Y);
@@ -154,7 +165,7 @@ static void testCameraClamp(void) {
 	CHECK(logicCameraFor(LEVEL_W - PLAYER_W) == CAM_MAX);
 	CHECK(CAM_MAX == 960);
 	tGameState s;
-	logicInit(&s);
+	initNoEnemies(&s);
 	step(&s, 1, 0, 80);  // x = 192
 	CHECK(s.cam == s.x + 8 - 160);
 }
@@ -194,12 +205,18 @@ static void testGradients(void) {
 			CHECK(d >= -1 && d <= 1); // smooth: one step per channel at most
 		}
 	}
+	CHECK(logicPitColor(0) == 0x432 && logicPitColor(PIT_BANDS - 1) == 0x000);
+	for(uint8_t i = 1; i < PIT_BANDS; ++i) {
+		uint16_t a = logicPitColor(i - 1), b = logicPitColor(i);
+		CHECK(((b >> 8) & 15) <= ((a >> 8) & 15) + 1); // no bright stripes: never lighter by more than a step
+		CHECK(((b >> 4) & 15) <= ((b >> 8) & 15) && (b & 15) <= ((b >> 4) & 15) + 1); // stays brown (R >= G >= B-ish)
+	}
 	CHECK(logicHazeColor(0) == 0xBCE && logicHazeColor(HAZE_BANDS - 1) == 0x7AB);
 }
 
 static void testHeroFrames(void) {
 	tGameState s;
-	logicInit(&s);
+	initNoEnemies(&s);
 	CHECK(logicHeroFrame(&s) == HERO_IDLE);
 	s.frame = 1 << HERO_BREATHE_SHIFT;
 	CHECK(logicHeroFrame(&s) == HERO_BREATHE);
@@ -212,7 +229,7 @@ static void testHeroFrames(void) {
 	s.vy = 10;
 	CHECK(logicHeroFrame(&s) == HERO_FALL);
 	tInput in = {.dx = -1};
-	logicInit(&s);
+	initNoEnemies(&s);
 	logicUpdate(&s, &in);
 	CHECK(s.facingLeft == 1 && s.moving == 1);
 }
@@ -230,9 +247,9 @@ static void setEnemy(tEnemy *e, int16_t x, int16_t y, int8_t dir) {
 	logicEnemyPlace(e, x, y, dir);
 }
 
-// Park the hero far away (on the far right) so he touches nothing.
+// Park the hero out of the way (on the high slab, x 384..447) so he touches nothing.
 static void parkHero(tGameState *s) {
-	s->x = LEVEL_W - PLAYER_W; s->y = START_Y; s->yFix = START_Y << FIX_SHIFT;
+	s->x = 400; s->y = 4 * TILE_SIZE - PLAYER_H; s->yFix = s->y << FIX_SHIFT;
 	s->vy = 0; s->onGround = 1;
 }
 
@@ -248,6 +265,23 @@ static void testEnemySpawns(void) {
 		CHECK(logicTileAt((e->x + 8) >> TILE_SHIFT, e->y >> TILE_SHIFT) == TILE_EMPTY);
 		// far enough from the hero's start not to kill him on spawn
 		CHECK(e->x > START_X + 150 || e->y + ENEMY_H <= START_Y - 64);
+		// mushrooms live on the ground
+		CHECK(e->y == START_Y);
+		// patrol ranges: at least a screen apart, so two ground enemies are
+		// never on screen together (they would fight over the sprite)
+		if(i > 0) CHECK(e->xMin - s.pEnemies[i - 1].xMax >= SCREEN_W + ENEMY_W);
+	}
+	// ...which the plan confirms: walk them all for a while, look from every camera
+	parkHero(&s);
+	for(int f = 0; f < 800; ++f) {
+		step(&s, 0, 0, 1);
+		if(f % 50) continue;
+		for(int16_t cam = 0; cam <= CAM_MAX; cam += 4) {
+			tEnemyPlan p;
+			s.cam = cam;
+			logicEnemyPlan(&s, &p);
+			CHECK(p.count <= 1 && p.skipped == 0);
+		}
 	}
 }
 
@@ -276,27 +310,42 @@ static void testEnemySpeed(void) {
 	CHECK(s.pEnemies[1].x == x0 - 20); // 0.5 px/frame, walking left
 }
 
-static void testEnemyTurnsAtPlatformEdges(void) {
-	// Enemy 0 on the slab x 240..303: its feet (cols 2..13) never leave it.
+static void testEnemyPatrolRanges(void) {
+	// The spawn table's ranges, inside their stretches of ground
 	tGameState s;
 	logicInit(&s);
 	parkHero(&s);
 	int16_t mn, mx; int turns;
 	patrol(&s, 0, 600, &mn, &mx, &turns);
+	CHECK(mn == 170 && mx == 264 && turns >= 2);
+	patrol(&s, 1, 800, &mn, &mx, &turns);
+	CHECK(mn == 600 && mx == 735 && turns >= 2);
+	patrol(&s, 2, 1200, &mn, &mx, &turns);
+	CHECK(mn == 1071 && mx == LEVEL_W - ENEMY_W && turns >= 2);
+}
+
+static void testEnemyTurnsAtPlatformEdges(void) {
+	// The game puts none there, but an enemy on a slab (x 240..303) keeps its
+	// feet (cols 2..13) on it.
+	tGameState s;
+	logicInit(&s);
+	onlyEnemy(&s, 0);
+	parkHero(&s);
+	setEnemy(&s.pEnemies[0], 270, 7 * TILE_SIZE - ENEMY_H, -1);
+	int16_t mn, mx; int turns;
+	patrol(&s, 0, 600, &mn, &mx, &turns);
 	CHECK(mn == 240 - ENEMY_HB_L);          // 238
 	CHECK(mx == 303 - ENEMY_HB_R);          // 290
 	CHECK(turns >= 4);
-	CHECK(s.pEnemies[0].y == 7 * TILE_SIZE - ENEMY_H);
-	// Enemy 3 on the narrow high slab 720..767
-	patrol(&s, 3, 400, &mn, &mx, &turns);
-	CHECK(mn == 720 - ENEMY_HB_L && mx == 767 - ENEMY_HB_R);
 }
 
 static void testEnemyTurnsAtPits(void) {
-	// Enemy 1 on the ground between pit 1 (352..399) and pit 2 (752..799).
+	// An enemy on the ground between pit 1 (352..399) and pit 2 (752..799),
+	// without the spawn table's narrower range.
 	tGameState s;
 	logicInit(&s);
 	parkHero(&s);
+	setEnemy(&s.pEnemies[1], 560, START_Y, -1);
 	int16_t mn, mx; int turns;
 	patrol(&s, 1, 1600, &mn, &mx, &turns);
 	CHECK(mn == 400 - ENEMY_HB_L);
@@ -307,15 +356,15 @@ static void testEnemyTurnsAtPits(void) {
 static void testEnemyTurnsAtLevelEnds(void) {
 	tGameState s;
 	logicInit(&s);
-	onlyEnemy(&s, 5);
-	s.x = 200; // hero out of the way (enemy 5 is on the right)
-	setEnemy(&s.pEnemies[5], LEVEL_W - ENEMY_W - 3, START_Y, 1);
+	onlyEnemy(&s, 2);
+	s.x = 200; // hero out of the way (enemy 2 is on the right)
+	setEnemy(&s.pEnemies[2], LEVEL_W - ENEMY_W - 3, START_Y, 1);
 	int16_t mn, mx; int turns;
-	patrol(&s, 5, 20, &mn, &mx, &turns);
+	patrol(&s, 2, 20, &mn, &mx, &turns);
 	CHECK(mx == LEVEL_W - ENEMY_W && turns == 1);
-	setEnemy(&s.pEnemies[5], 3, START_Y, -1);
+	setEnemy(&s.pEnemies[2], 3, START_Y, -1);
 	s.x = 600;
-	patrol(&s, 5, 20, &mn, &mx, &turns);
+	patrol(&s, 2, 20, &mn, &mx, &turns);
 	CHECK(mn == 0 && turns == 1);
 }
 
@@ -456,34 +505,28 @@ static void testEnemyPlan(void) {
 	tGameState s;
 	tEnemyPlan p;
 	logicInit(&s);
-	// camera 0: only enemy 0 (x 270) is on screen
+	// camera 0: only enemy 0 (x 240) is on screen
 	logicEnemyPlan(&s, &p);
 	CHECK(p.count == 1 && p.pId[0] == 0 && p.skipped == 0);
-	// camera 400: enemies 1 (y 192) and 2 (y 144) -> sorted by y: 2 then 1
+	// camera 400: only enemy 1 (x 700)
 	s.cam = 400;
 	logicEnemyPlan(&s, &p);
-	CHECK(p.count == 2 && p.pId[0] == 2 && p.pId[1] == 1 && p.skipped == 0);
+	CHECK(p.count == 1 && p.pId[0] == 1 && p.skipped == 0);
 	// culling: x - cam in -15..319 is visible
-	s.cam = 270 + ENEMY_W - 1;
+	s.cam = 240 + ENEMY_W - 1;
 	logicEnemyPlan(&s, &p);
-	CHECK(p.count >= 1 && p.pId[0] == 0);
-	s.cam = 270 + ENEMY_W;
+	CHECK(p.count == 1 && p.pId[0] == 0);
+	s.cam = 240 + ENEMY_W;
 	logicEnemyPlan(&s, &p);
-	CHECK(p.count == 0 || p.pId[0] != 0);
-	// gone enemies are not shown; squashed ones are
+	CHECK(p.count == 0);
+	// squashed enemies are shown; gone ones are not
 	s.cam = 400;
-	s.pEnemies[2].state = ENEMY_GONE;
 	s.pEnemies[1].state = ENEMY_SQUASHED;
 	logicEnemyPlan(&s, &p);
 	CHECK(p.count == 1 && p.pId[0] == 1);
-	// all spawn heights are multiplex-compatible (different floors)
-	logicInit(&s);
-	for(uint8_t i = 0; i < ENEMY_COUNT; ++i) {
-		for(uint8_t j = 0; j < ENEMY_COUNT; ++j) {
-			int16_t d = s.pEnemies[i].y - s.pEnemies[j].y;
-			CHECK(d == 0 || d >= ENEMY_MUX_GAP || d <= -ENEMY_MUX_GAP);
-		}
-	}
+	s.pEnemies[1].state = ENEMY_GONE;
+	logicEnemyPlan(&s, &p);
+	CHECK(p.count == 0);
 }
 
 static void testEnemyPlanOverlap(void) {
@@ -493,28 +536,28 @@ static void testEnemyPlanOverlap(void) {
 	logicInit(&s);
 	for(uint8_t i = 0; i < ENEMY_COUNT; ++i) s.pEnemies[i].state = ENEMY_GONE;
 	s.cam = 0;
-	setEnemy(&s.pEnemies[4], 50, 110, 1);  // B (listed first: sort must reorder)
-	setEnemy(&s.pEnemies[2], 100, 100, 1); // A
-	setEnemy(&s.pEnemies[6], 150, 150, 1); // C
+	setEnemy(&s.pEnemies[0], 50, 110, 1);  // B (listed first: sort must reorder)
+	setEnemy(&s.pEnemies[1], 100, 100, 1); // A
+	setEnemy(&s.pEnemies[2], 150, 150, 1); // C
 	logicEnemySortY(&s);
 	s.frame = 0; // even: the upper one (A) wins
 	logicEnemyPlan(&s, &p);
-	CHECK(p.count == 2 && p.skipped == 1 && p.pId[0] == 2 && p.pId[1] == 6);
+	CHECK(p.count == 2 && p.skipped == 1 && p.pId[0] == 1 && p.pId[1] == 2);
 	s.frame = 1; // odd: the lower one (B) wins
 	logicEnemyPlan(&s, &p);
-	CHECK(p.count == 2 && p.skipped == 1 && p.pId[0] == 4 && p.pId[1] == 6);
+	CHECK(p.count == 2 && p.skipped == 1 && p.pId[0] == 0 && p.pId[1] == 2);
 	// Exactly ENEMY_MUX_GAP apart: both fit (VSTOP of A < VSTART of B)
-	s.pEnemies[4].y = 100 + ENEMY_MUX_GAP;
+	s.pEnemies[0].y = 100 + ENEMY_MUX_GAP;
 	logicEnemySortY(&s);
 	logicEnemyPlan(&s, &p);
 	CHECK(p.count == 3 && p.skipped == 0);
-	s.pEnemies[4].y = 100 + ENEMY_MUX_GAP - 1; // one line closer: conflict
+	s.pEnemies[0].y = 100 + ENEMY_MUX_GAP - 1; // one line closer: conflict
 	logicEnemySortY(&s);
 	logicEnemyPlan(&s, &p);
 	CHECK(p.count == 2 && p.skipped == 1);
 	// Invariant for any layout: shown list is sorted with gaps >= ENEMY_MUX_GAP
 	for(int16_t yb = 60; yb < 200; yb += 3) {
-		s.pEnemies[4].y = yb;
+		s.pEnemies[0].y = yb;
 		logicEnemySortY(&s);
 		for(uint16_t fr = 0; fr < 2; ++fr) {
 			s.frame = fr;
@@ -530,6 +573,7 @@ static void testEnemyPlanOverlap(void) {
 int main(void) {
 	testEnemySpawns();
 	testEnemySpeed();
+	testEnemyPatrolRanges();
 	testEnemyTurnsAtPlatformEdges();
 	testEnemyTurnsAtPits();
 	testEnemyTurnsAtLevelEnds();

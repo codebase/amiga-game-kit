@@ -51,12 +51,14 @@
 #define WALK_FRAME_TICKS 4
 
 // Parallax bands (back playfield, PF2). Game y of each band's first line.
-#define MOUNTAINS_Y 71   // peaks sit low against a tall sky
-#define MOUNTAINS_H 64   // art cropped to the peaks (agk art-clean --crop 6:70)
+#define MOUNTAINS_Y 79   // peaks sit low against a tall sky
+#define MOUNTAINS_H 56   // art cropped to the peaks (agk art-clean --crop 6:62)
 #define GAP_Y (MOUNTAINS_Y + MOUNTAINS_H)     // 135: one line of blank PF2 to reload the palette
 #define HILLS_Y (GAP_Y + 1)                   // 136
-#define HILLS_H 80
-#define BANDS_END (HILLS_Y + HILLS_H)          // 216: below this PF2 is blank
+#define HILLS_H 73
+#define BANDS_END (HILLS_Y + HILLS_H)          // 209: below this PF2 is blank
+// (the ground's grass blades on line 208 still have hills behind them; from
+// line 209 on, what shows through the level is the inside of a pit)
 #define MOUNTAINS_SHIFT 2   // camera / 4
 #define HILLS_SHIFT 1       // camera / 2
 
@@ -65,8 +67,10 @@
 #define SKY_BANDS (HILLS_Y / SKY_STEP)         // 136
 // Behind the hills: mist (starts at the colour the mountains fade into), one colour every HAZE_STEP lines
 #define HAZE_STEP 1
-#define HAZE_BANDS ((BANDS_END - HILLS_Y) / HAZE_STEP)  // 80
-#define PIT_COLOR 0x102     // COLOR00 below the bands (seen through pits)
+#define HAZE_BANDS ((BANDS_END - HILLS_Y) / HAZE_STEP)  // 73
+// Inside the pits (COLOR00 below the bands): dark earth fading to black
+#define PIT_BANDS (SCREEN_H - BANDS_END)       // 47
+#define PIT_RAMP_LINES 8                        // lines per step of the pit's colour ramp
 
 typedef struct {
 	int8_t dx;      // -1, 0 or 1
@@ -76,7 +80,7 @@ typedef struct {
 // Enemies: 16x16 mushroom critters (art/enemy.txt) that patrol a floor.
 // They walk ENEMY_SPEED_FIX/16 px per frame and turn at walls, at the end of
 // their floor (pit or platform edge) and at the level ends. They never fall.
-#define ENEMY_COUNT 7
+#define ENEMY_COUNT 3
 #define ENEMY_W 16
 #define ENEMY_H 16
 #define ENEMY_HB_L 2        // collision box: columns 2..13, rows 3..15
@@ -160,6 +164,9 @@ extern const char *const g_pLevelRows[LEVEL_TILES_H];
 
 /** Tile id at tile coordinates; outside the map = TILE_EMPTY. */
 uint8_t logicTileAt(int16_t tx, int16_t ty);
+/** Art frame (art/tiles.txt, 0-based) for a solid tile: grass and dirt next
+ *  to a pit get a shaded cliff face. Drawing only; collision uses logicTileAt. */
+uint8_t logicTileArtFrame(int16_t tx, int16_t ty);
 
 void logicInit(tGameState *pState);
 
@@ -203,5 +210,7 @@ uint8_t logicScrollDelay(uint16_t scrollX);
 uint16_t logicSkyColor(uint8_t i);
 /** Colour of haze band i (0..HAZE_BANDS-1) behind the hills. */
 uint16_t logicHazeColor(uint8_t i);
+/** Colour of pit line i (0..PIT_BANDS-1), from BANDS_END down. */
+uint16_t logicPitColor(uint8_t i);
 
 #endif // _LOGIC_H_
