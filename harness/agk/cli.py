@@ -304,6 +304,24 @@ def cmd_play(args):
     return 0
 
 
+def cmd_art_clean(args):
+    from . import art
+    proj = load_project(args.project)
+    art_dir = os.path.join(proj["dir"], "art")
+    src = os.path.join(art_dir, args.src)
+    dst = os.path.join(art_dir, args.out or args.src)
+    crop = tuple(int(v) for v in args.crop.split(":")) if args.crop else None
+    fade = None
+    if args.fade_bottom:
+        rows, colour = args.fade_bottom.split(":")
+        fade = (int(rows), int(colour, 0))
+    notes = art.clean_png(src, dst, args.fill_holes, args.despeckle, crop, fade)
+    for n in notes:
+        print(f"  {n}")
+    print(f"wrote {rel(dst)} - run agk art and look at the preview")
+    return 0
+
+
 def cmd_build(args):
     proj = load_project(args.project)
     if not _run_art(proj, quiet=True):
@@ -572,6 +590,15 @@ def main(argv=None):
     p.add_argument("--resume", metavar="TASK_ID", help="collect a generation that timed out (no new charge)")
     p.add_argument("--dry-run", action="store_true", help="free price check")
 
+    p = sub.add_parser("art-clean", help="tidy AI art: fill holes, remove specks, crop, fade into mist")
+    p.add_argument("src", help="PNG in art/")
+    p.add_argument("--project", default=None)
+    p.add_argument("-o", "--out", help="output PNG in art/ (default: overwrite src)")
+    p.add_argument("--fill-holes", action="store_true", help="fill see-through holes not connected to the sky")
+    p.add_argument("--despeckle", type=int, default=0, metavar="N", help="remove floating bits smaller than N px")
+    p.add_argument("--crop", metavar="Y0:Y1", help="keep rows Y0..Y1-1")
+    p.add_argument("--fade-bottom", metavar="ROWS:0xRGB", help="dither the last ROWS rows into a mist colour")
+
     p = sub.add_parser("art-export", help="turn art/NAME.png into editable text art art/NAME.txt")
     p.add_argument("name")
     p.add_argument("--project", default=None)
@@ -622,7 +649,7 @@ def main(argv=None):
         return {"doctor": cmd_doctor, "build": cmd_build, "run": cmd_run, "test": cmd_test,
                 "unit": cmd_unit, "new": cmd_new, "art": cmd_art, "art-gen": cmd_art_gen,
                 "art-export": cmd_art_export, "art-animate": cmd_art_animate,
-                "play": cmd_play}[args.cmd](args)
+                "play": cmd_play, "art-clean": cmd_art_clean}[args.cmd](args)
     except runner.RunError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

@@ -95,7 +95,7 @@ static tEnemyPlan s_sEnemyPlan;
 
 #define COP_SPRITES_POS 0
 #define COP_TOP_POS 16
-#define COP_RAW_COUNT 200
+#define COP_RAW_COUNT 480
 
 typedef struct {
 	UWORD uwCon1;          // index of the MOVE BPLCON1
@@ -146,9 +146,12 @@ static void cwPalette(tCopWriter *pW, UBYTE ubFirstColor, const UWORD *pPal) {
 	}
 }
 
-static void cwSky(tCopWriter *pW, UWORD uwGameY) {
-	cwWait(pW, uwGameY, 0);
-	cwMove(pW, &g_pCustom->color[0], s_pSkyColors[uwGameY / SKY_STEP]);
+// COLOR00 for one line of a gradient; nothing when it doesn't change.
+static void cwBackground(tCopWriter *pW, UWORD uwGameY, UWORD uwColor, UWORD uwPrev) {
+	if(uwColor != uwPrev) {
+		cwWait(pW, uwGameY, 0);
+		cwMove(pW, &g_pCustom->color[0], uwColor);
+	}
 }
 
 // Band switch at the end of line uwGameY - 1, after its last bitplane fetch
@@ -189,7 +192,7 @@ static void copperWriteList(tCopCmd *pList, UWORD uwBeamTop) {
 
 	// Sky gradient and bands, in beam order.
 	for(UWORD y = SKY_STEP; y < GAP_Y; y += SKY_STEP) {
-		cwSky(&sW, y);
+		cwBackground(&sW, y, s_pSkyColors[y / SKY_STEP], s_pSkyColors[(y - 1) / SKY_STEP]);
 		if(y < MOUNTAINS_Y && y + SKY_STEP >= MOUNTAINS_Y) {
 			// PF2 is still blank here, so the mountains palette can load any
 			// time before the band: keeps the band switch short.
@@ -210,8 +213,7 @@ static void copperWriteList(tCopCmd *pList, UWORD uwBeamTop) {
 	cwPalette(&sW, 8, g_pArtHillsPalette);
 	s_sHillSlots = cwBand(&sW, HILLS_Y, s_pHills);
 	for(UBYTE i = 1; i < HAZE_BANDS; ++i) {
-		cwWait(&sW, HILLS_Y + i * HAZE_STEP, 0);
-		cwMove(&sW, &g_pCustom->color[0], s_pHazeColors[i]);
+		cwBackground(&sW, HILLS_Y + i * HAZE_STEP, s_pHazeColors[i], s_pHazeColors[i - 1]);
 	}
 	// Below the hills: PF2 back to the blank row.
 	cwWait(&sW, BANDS_END - 1, BAND_WAIT_X);

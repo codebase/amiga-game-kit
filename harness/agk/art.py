@@ -647,3 +647,110 @@ def export_text(png_path, txt_path, max_colors=15, frame_width=None, frame_heigh
     with open(txt_path, "w") as f:
         f.write("\n".join(out) + "\n")
     return len(keep), warnings
+
+
+# ------------------------------------------------------------------ cleanup
+
+BAYER4 = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]
+
+
+def write_rgba_png(path, w, h, px):
+    """Write [(r,g,b,a), ...] (row-major) as an 8-bit RGBA PNG."""
+    import struct, zlib
+    rgba = bytes(v for p in px for v in p)
+    stride = w * 4
+    raw = b"".join(b"\x00" + rgba[y * stride:(y + 1) * stride] for y in range(h))
+    def chunk(tag, data):
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+    with open(path, "wb") as f:
+        f.write(png)
+
+
+def clean_png(src, dst, fill_holes=False, despeckle=0, crop=None, fade_bottom=None):
+    """Tidy AI-generated art (typical remove_bg damage) and write a PNG.
+      fill_holes   transparent pixels not connected to the image's top edge
+                   through transparency (holes inside trees, snow) take the
+                   colour of the nearest opaque neighbour
+      despeckle N  drop opaque islands smaller than N px that don't touch
+                   the bottom edge (stray streaks, floating fragments)
+      crop (y0,y1) keep rows y0..y1-1
+      fade_bottom (rows, 0xRGB)  ordered-dither the last rows into a mist
+                   colour (atmospheric fade instead of a hard bottom edge)
+    Returns a list of what it changed."""
+    from collections import deque
+    from .image import load_png_rgba
+    w, h, px = load_png_rgba(src)
+    px = [list(p) for p in px]
+    notes = []
+    if crop:
+        y0, y1 = crop
+        px = px[y0 * w:y1 * w]
+        h = y1 - y0
+        notes.append(f"cropped to rows {y0}-{y1 - 1} ({h} rows)")
+    opaque = lambda i: px[i][3] >= 128
+    if despeckle:
+        seen, removed = set(), 0
+        for start in range(w * h):
+            if start in seen or not opaque(start):
+                continue
+            comp, q, touches_bottom = [], deque([start]), False
+            seen.add(start)
+            while q:
+                i = q.popleft()
+                comp.append(i)
+                x, y = i % w, i // w
+                touches_bottom |= y == h - 1
+                for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                    j = ny * w + nx
+                    if 0 <= nx < w and 0 <= ny < h and j not in seen and opaque(j):
+                        seen.add(j)
+                        q.append(j)
+            if len(comp) < despeckle and not touches_bottom:
+                for i in comp:
+                    px[i][3] = 0
+                removed += len(comp)
+        notes.append(f"removed {removed} px of floating fragments (< {despeckle} px)")
+    if fill_holes:
+        outside = set(i for i in range(w) if not opaque(i))
+        q = deque(outside)
+        while q:
+            i = q.popleft()
+            x, y = i % w, i // w
+            # the image wraps horizontally (looping bands): left/right edges connect
+            for nx, ny in (((x + 1) % w, y), ((x - 1) % w, y), (x, y + 1), (x, y - 1)):
+                j = ny * w + nx
+                if 0 <= ny < h and j not in outside and not opaque(j):
+                    outside.add(j)
+                    q.append(j)
+        holes = [i for i in range(w * h) if not opaque(i) and i not in outside]
+        todo, filled = set(holes), 0
+        while todo:
+            done = []
+            for i in todo:
+                x, y = i % w, i // w
+                for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                    j = ny * w + nx
+                    if 0 <= nx < w and 0 <= ny < h and j not in todo and opaque(j):
+                        px[i] = px[j][:3] + [255]
+                        done.append(i)
+                        break
+            if not done:
+                break
+            todo -= set(done)
+            filled += len(done)
+        notes.append(f"filled {filled} px of holes")
+    if fade_bottom:
+        rows, colour = fade_bottom
+        mist = list(to_rgb8(colour)) + [255]
+        for k in range(rows):
+            y = h - rows + k
+            level = (k + 1) * 16 // (rows + 1)          # 1..15: more mist further down
+            for x in range(w):
+                i = y * w + x
+                if px[i][3] >= 128 and BAYER4[y % 4][x % 4] < level:
+                    px[i] = mist[:]
+        notes.append(f"faded the last {rows} rows into 0x{colour:03X}")
+    write_rgba_png(dst, w, h, px)
+    return notes

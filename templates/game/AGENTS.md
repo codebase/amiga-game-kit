@@ -84,7 +84,7 @@ PNGs work too, from any tool or AI generator.
 - `agk help-art` has the formats. `{{kit}}/techniques/sprites` shows animated sprites and BOB frames end to end.
 - **Bigger, richer sprites:** `attached = true` makes 15-colour sprites up to 64 px wide from channel pairs, and `mirror = true` adds left-facing frames. See `{{kit}}/examples/sidescroller` (a 32×32 hero, 8 frames).
 - **AI art + hand animation:** `agk art-export NAME` turns a PNG into editable text art, so you can generate a base with AI and draw the animation frames yourself.
-- **AI art:** `agk art-gen NAME "description" --size 32x16` generates pixel art in the game's palette with Retro Diffusion, adds it to `art/`, converts it and shows the preview. It needs a key (`RD_API_KEY` or `~/.config/agk/credentials`) and costs about $0.02 per image; `--dry-run` checks the price for free. Always look at the preview: AI art needs a human-quality eye, and you can refine it by exporting to text art or regenerating with a `--seed`.
+- **AI art:** `agk art-gen NAME "description" --size 32x16` generates pixel art in the game's palette with Retro Diffusion, adds it to `art/`, converts it and shows the preview. It needs a key (`RD_API_KEY` or `~/.config/agk/credentials`) and costs about $0.02 per image; `--dry-run` checks the price for free. Always look at the preview: AI art needs a human-quality eye, and you can refine it by exporting to text art or regenerating with a `--seed`. AI backgrounds often have see-through holes and floating fragments: `agk art-clean SRC -o OUT --fill-holes --despeckle 60` fixes most of them.
 
 ## Telling the harness what happens: serial debug
 

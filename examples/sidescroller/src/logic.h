@@ -51,8 +51,8 @@
 #define WALK_FRAME_TICKS 4
 
 // Parallax bands (back playfield, PF2). Game y of each band's first line.
-#define MOUNTAINS_Y 39
-#define MOUNTAINS_H 96
+#define MOUNTAINS_Y 71   // peaks sit low against a tall sky
+#define MOUNTAINS_H 64   // art cropped to the peaks (agk art-clean --crop 6:70)
 #define GAP_Y (MOUNTAINS_Y + MOUNTAINS_H)     // 135: one line of blank PF2 to reload the palette
 #define HILLS_Y (GAP_Y + 1)                   // 136
 #define HILLS_H 80
@@ -61,11 +61,11 @@
 #define HILLS_SHIFT 1       // camera / 2
 
 // Sky gradient (COLOR00): one colour every SKY_STEP lines from 0 to HILLS_Y
-#define SKY_STEP 4
-#define SKY_BANDS (HILLS_Y / SKY_STEP)         // 34
-// Behind the hills: pale snowfield haze, one colour every HAZE_STEP lines
-#define HAZE_STEP 8
-#define HAZE_BANDS ((BANDS_END - HILLS_Y) / HAZE_STEP)  // 10
+#define SKY_STEP 1
+#define SKY_BANDS (HILLS_Y / SKY_STEP)         // 136
+// Behind the hills: mist (starts at the colour the mountains fade into), one colour every HAZE_STEP lines
+#define HAZE_STEP 1
+#define HAZE_BANDS ((BANDS_END - HILLS_Y) / HAZE_STEP)  // 80
 #define PIT_COLOR 0x102     // COLOR00 below the bands (seen through pits)
 
 typedef struct {

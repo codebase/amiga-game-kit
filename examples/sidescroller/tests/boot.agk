@@ -2,25 +2,26 @@
 wait-serial "AGK t0"         # same game frame on every profile (see main.c)
 screenshot start
 expect-serial "AGK ready"
-expect-serial "copper_used=\d+ copper_max=200"
+expect-serial "copper_used=\d+ copper_max=480"
 expect-serial "x=32 y=192 cam=0 mtn=0 hills=0 ground=1"
 expect-serial "stomps=0 spr=1 skip=0"             # enemy 0 on the first slab is on screen
 expect-no-serial "ERR|STACK SMASHED"
-# Sky gradient on COLOR00 (both playfields transparent): one colour per 4 lines
+# Sky gradient on COLOR00 (both playfields transparent): one colour per line, dithered
 expect-color start 10 0 0x114
 expect-color start 10 20 0x225
 expect-color start 10 30 0x326
 expect-color start 10 50 0x437
 # PF2 transparency shows the sky: gaps between the peaks, inside the mountains band
 expect-color start 286 80 0x857
-expect-color start 210 100 0xA67
-# The one-line gap at y=135 (PF2 blank while the hills palette loads) = haze
-expect-color start 5 135 0xBDE
+expect-color start 210 100 0xB67
+# The one-line gap at y=135 (PF2 blank while the hills palette loads) = haze,
+# the same mist colour the mountains fade into
+expect-color start 5 135 0xBCE
 # PF1 transparency shows PF2: between grass blades (y=208) the hills show
 expect-color start 81 208 0x8D3
 expect-color start 82 208 0x273
 # PF1 and PF2 both transparent: under the stone slab, haze COLOR00 (behind hills)
-expect-color start 150 174 0x9CD
+expect-color start 150 174 0x9BD
 # Level (PF1) in front of PF2: the slab, dirt
 expect-color start 240 112 0xCCB
 expect-color start 60 219 0x964

@@ -194,7 +194,7 @@ static void testGradients(void) {
 			CHECK(d >= -1 && d <= 1); // smooth: one step per channel at most
 		}
 	}
-	CHECK(logicHazeColor(0) == 0xBDE && logicHazeColor(HAZE_BANDS - 1) == 0x7AC);
+	CHECK(logicHazeColor(0) == 0xBCE && logicHazeColor(HAZE_BANDS - 1) == 0x7AB);
 }
 
 static void testHeroFrames(void) {

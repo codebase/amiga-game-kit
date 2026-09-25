@@ -408,12 +408,16 @@ uint8_t logicHeroFrame(const tGameState *pState) {
 }
 
 // Colour gradients: startup only (tables are built once in main.c).
-static uint16_t lerpColor(uint16_t a, uint16_t b, int16_t t, int16_t n) {
+// Per-line gradient: OCS has 16 levels per channel, so a plain lerp shows
+// stripes. Interpolate in quarter steps and dither the fraction across lines
+// (ordered 0,2,1,3): neighbouring lines never differ by more than one level.
+static uint16_t lerpColorDither(uint16_t a, uint16_t b, int16_t t, int16_t n, uint8_t ubLine) {
+	static const uint8_t pThreshold[4] = {0, 2, 1, 3};
 	uint16_t out = 0;
 	for(uint8_t s = 0; s <= 8; s += 4) {
 		int16_t ca = (a >> s) & 0xF, cb = (b >> s) & 0xF;
-		int16_t d = (cb - ca) * t; // rounded to nearest, symmetric for +/-
-		int16_t c = ca + (d >= 0 ? (d + n / 2) / n : -((-d + n / 2) / n));
+		int16_t q = (ca * 4 * n + (cb - ca) * 4 * t) / n; // quarter levels, >= 0
+		int16_t c = (q >> 2) + ((q & 3) > pThreshold[ubLine & 3]);
 		out |= (uint16_t)c << s;
 	}
 	return out;
@@ -421,16 +425,17 @@ static uint16_t lerpColor(uint16_t a, uint16_t b, int16_t t, int16_t n) {
 
 uint16_t logicSkyColor(uint8_t i) {
 	// Dawn: deep blue at the top -> violet -> warm orange at the horizon.
-	static const uint8_t pKeyBand[] = {0, 14, 26, SKY_BANDS - 1};
+	static const uint8_t pKeyLine[] = {0, 56, 104, SKY_BANDS - 1};
 	static const uint16_t pKeyColor[] = {0x114, 0x437, 0xB67, 0xFB6};
 	for(uint8_t k = 0; k < 3; ++k) {
-		if(i <= pKeyBand[k + 1]) {
-			return lerpColor(pKeyColor[k], pKeyColor[k + 1], i - pKeyBand[k], pKeyBand[k + 1] - pKeyBand[k]);
+		if(i <= pKeyLine[k + 1]) {
+			return lerpColorDither(pKeyColor[k], pKeyColor[k + 1], i - pKeyLine[k], pKeyLine[k + 1] - pKeyLine[k], i);
 		}
 	}
 	return pKeyColor[3];
 }
 
 uint16_t logicHazeColor(uint8_t i) {
-	return lerpColor(0xBDE, 0x7AC, i, HAZE_BANDS - 1);
+	// Starts at the mist the mountains fade into (art-clean --fade-bottom 10:0xBCE)
+	return lerpColorDither(0xBCE, 0x7AB, i, HAZE_BANDS - 1, i);
 }

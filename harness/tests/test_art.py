@@ -110,6 +110,35 @@ class PngTests(unittest.TestCase):
         self.assertEqual(a.frames[0][0], [0xFFF, 0xF00])
 
 
+class CleanTests(unittest.TestCase):
+    def test_holes_fragments_crop_fade(self):
+        # 8x6: a solid block on the bottom rows with a hole inside, a 1-px
+        # fragment floating above, and an opening in the top row that is not a hole
+        T, G, R = (0, 0, 0, 0), (0, 255, 0, 255), (255, 0, 0, 255)
+        rows = ["........",
+                ".R......",
+                "..GG....",
+                ".GG.GG..",
+                "GGGGGGGG",
+                "GGGGGGGG"]
+        px = [{".": T, "G": G, "R": R}[c] for row in rows for c in row]
+        d = tempfile.mkdtemp()
+        src, dst = os.path.join(d, "in.png"), os.path.join(d, "out.png")
+        art.write_rgba_png(src, 8, 6, px)
+        art.clean_png(src, dst, fill_holes=True, despeckle=3)
+        w, h, out = load_png_rgba(dst)
+        self.assertEqual(out[1 * 8 + 1][3], 0)              # fragment dropped
+        self.assertEqual(out[3 * 8 + 3], G)                 # hole filled from a neighbour
+        self.assertEqual(out[3 * 8 + 6][3], 0)              # open to the sky: kept
+        art.clean_png(src, dst, crop=(2, 6), fade_bottom=(2, 0xFFF))
+        w, h, out = load_png_rgba(dst)
+        self.assertEqual((w, h), (8, 4))
+        last = out[3 * 8:]
+        self.assertTrue(any(p == (255, 255, 255, 255) for p in last))   # mist dithered in
+        self.assertTrue(any(p == G for p in last))
+        self.assertTrue(all(p[3] == 0 for p in out[1 * 8 + 6:1 * 8 + 8]))  # transparent stays
+
+
 if __name__ == "__main__":
     unittest.main()
 
