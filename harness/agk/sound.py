@@ -26,6 +26,8 @@ A project's sound lives in sound/:
 
         [music.theme]
         source = "theme.mml"      # MML text, see below
+        volume = 48               # optional: music volume 0-64 (default 64);
+                                  # sound effects keep their own volume
 
   Noise: `freq` is how often the noise changes value (Hz): ~8000 hiss,
   ~2000 crunch, ~500 rumble.
@@ -903,7 +905,13 @@ def build(project_dir, out_dir=None, previews=True):
         except SoundError as e:
             raise SoundError(f"{src}: {e}")
         _write_if_changed(os.path.join(out_dir, f"{name}.mod"), mod)
-        music.append({"name": name, "mod": mod, "info": info})
+        vol = int(spec.get("volume", 64))
+        if not 0 <= vol <= 64:
+            raise SoundError(f"music.{name}: volume is 0-64")
+        for k in spec:
+            if k not in ("source", "volume"):
+                raise SoundError(f"music.{name}: unknown key '{k}' (use source, volume)")
+        music.append({"name": name, "mod": mod, "info": info, "volume": vol})
     if previews:
         for s in sfx:
             pcm = resample(sfx_to_float(s["data"]), SFX_RATE, PREVIEW_RATE)
@@ -963,14 +971,14 @@ def _write_c(sfx, music, chans, out_dir):
               f"static const UBYTE s_pMod{_c_name(m['name'])}Samples[{len(mod) - head_len}] __attribute__((aligned(2))) = {{",
               _bytes_c(mod[head_len:]), "};"]
     mnames = ", ".join(f'"AGK music {m["name"]}\\n"' for m in music) or '""'
-    c += ["", "static const struct { const UBYTE *pMod; ULONG ulHeadBytes; const UBYTE *pSamples; ULONG ulSampleBytes; } s_pMusicDefs[] = {"]
+    c += ["", "static const struct { const UBYTE *pMod; ULONG ulHeadBytes; const UBYTE *pSamples; ULONG ulSampleBytes; UBYTE ubVolume; } s_pMusicDefs[] = {"]
     for m in music:
         npat = max(m["mod"][952:1080]) + 1
         head_len = 1084 + npat * 1024
         n = _c_name(m["name"])
-        c.append(f"\t{{s_pMod{n}, {head_len}, s_pMod{n}Samples, {len(m['mod']) - head_len}}},")
+        c.append(f"\t{{s_pMod{n}, {head_len}, s_pMod{n}Samples, {len(m['mod']) - head_len}, {m['volume']}}},")
     if not music:
-        c.append("\t{0, 0, 0, 0},")
+        c.append("\t{0, 0, 0, 0, 0},")
     c += ["};", f"static const char *const s_pMusicNames[] = {{{mnames}}};", "",
           f"static tPtplayerSfx s_pSfx[{max(1, len(sfx))}];",
           f"static tPtplayerMod s_pMods[{max(1, len(music))}];",
@@ -1018,6 +1026,7 @@ def _write_c(sfx, music, chans, out_dir):
           "void soundMusicStart(UBYTE ubSong) {",
           "\tif(ubSong >= SOUND_MUSIC_COUNT) return;",
           "\tptplayerLoadMod(&s_pMods[ubSong], 0, 0);",
+          "\tptplayerSetMasterVolume(s_pMusicDefs[ubSong].ubVolume); // music only, not effects",
           "\tptplayerConfigureSongRepeat(1, 0);",
           "\tptplayerEnableMusic(1);",
           "\tagkPrint(s_pMusicNames[ubSong]);",

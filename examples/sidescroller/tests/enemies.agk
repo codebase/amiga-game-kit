@@ -15,7 +15,7 @@ expect-no-serial "deaths=[1-9]"
 expect-color walk1 238 201 0xD43
 # 20 px further left 40 frames later: the old spot shows the hills again
 expect-color walk2 218 201 0xD43
-expect-color walk2 238 201 0x273
+expect-color walk2 238 201 0x153
 # turned at x 170 and walked back: about the same x as walk1, but the mirrored
 # (right-facing) frame. Cap row y=202: the white spot moved from x 234-235
 # (facing left) to x 233-234 (facing right).

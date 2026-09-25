@@ -55,10 +55,10 @@
 #define MOUNTAINS_H 56   // art cropped to the peaks (agk art-clean --crop 6:62)
 #define GAP_Y (MOUNTAINS_Y + MOUNTAINS_H)     // 135: one line of blank PF2 to reload the palette
 #define HILLS_Y (GAP_Y + 1)                   // 136
-#define HILLS_H 73
-#define BANDS_END (HILLS_Y + HILLS_H)          // 209: below this PF2 is blank
-// (the ground's grass blades on line 208 still have hills behind them; from
-// line 209 on, what shows through the level is the inside of a pit)
+#define HILLS_H 80
+#define BANDS_END (HILLS_Y + HILLS_H)          // 216: below this PF2 is blank
+// (the ground's top face, lines 208-215, still has hills behind it; from
+// line 216, where the dirt starts, a pit shows its dark inside)
 #define MOUNTAINS_SHIFT 2   // camera / 4
 #define HILLS_SHIFT 1       // camera / 2
 
@@ -67,9 +67,9 @@
 #define SKY_BANDS (HILLS_Y / SKY_STEP)         // 136
 // Behind the hills: mist (starts at the colour the mountains fade into), one colour every HAZE_STEP lines
 #define HAZE_STEP 1
-#define HAZE_BANDS ((BANDS_END - HILLS_Y) / HAZE_STEP)  // 73
+#define HAZE_BANDS ((BANDS_END - HILLS_Y) / HAZE_STEP)  // 80
 // Inside the pits (COLOR00 below the bands): dark earth fading to black
-#define PIT_BANDS (SCREEN_H - BANDS_END)       // 47
+#define PIT_BANDS (SCREEN_H - BANDS_END)       // 40
 #define PIT_RAMP_LINES 8                        // lines per step of the pit's colour ramp
 
 typedef struct {

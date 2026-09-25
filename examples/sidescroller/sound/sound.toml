@@ -38,3 +38,4 @@ priority = 3
 
 [music.theme]
 source = "theme.mml"
+volume = 44               # a little under the effects

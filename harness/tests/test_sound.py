@@ -124,6 +124,8 @@ class BuildTests(unittest.TestCase):
             c = f.read()
         self.assertIn('"AGK sfx jump\\n"', c)
         self.assertIn("ptplayerSetMusicChannelMask(0x7)", c)     # default: effects on channel 3
+        self.assertIn("ptplayerSetMasterVolume(s_pMusicDefs[ubSong].ubVolume)", c)
+        self.assertIn(", 64}", c)                                 # music volume default 64
         for f in ("theme.mod", "preview/jump.wav", "preview/jump.png", "preview/theme.png"):
             self.assertTrue(os.path.exists(os.path.join(out, f)), f)
         self.assertGreater(res["chip_bytes"], 0)
