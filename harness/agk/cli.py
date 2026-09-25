@@ -64,7 +64,8 @@ def _newest_source(proj):
             dirs[:] = [d for d in dirs if d not in ("build", "tests", ".git")]  # prune in place
             for f in files:
                 if (f.endswith((".c", ".h", ".s", ".asm", ".i", ".cmake", ".toml", ".png"))
-                    or f == "CMakeLists.txt" or (os.path.basename(base) == "art" and f.endswith(".txt"))):
+                    or f == "CMakeLists.txt" or (os.path.basename(base) == "art" and f.endswith(".txt"))
+                    or (os.path.basename(base) == "sound" and f.endswith(".mml"))):
                     newest = max(newest, os.path.getmtime(os.path.join(base, f)))
     return newest
 
@@ -74,11 +75,11 @@ def need_adf(proj, build=True):
     rebuilding if needed so tests never run against stale code."""
     # Regenerate art first (cheap; files are only rewritten when their content
     # changes), so edited art or a newer converter counts as a source change.
-    if not _run_art(proj, quiet=True):
+    if not _run_art(proj, quiet=True) or not _run_sound(proj, quiet=True, previews=False):
         raise SystemExit(1)
     newest = _newest_source(proj)
-    for gen in ("art.c", "art.h"):
-        p = os.path.join(proj["dir"], "build", "art", gen)
+    for gen in ("art/art.c", "art/art.h", "sound/sound.c", "sound/sound.h"):
+        p = os.path.join(proj["dir"], "build", gen)
         if os.path.exists(p):
             newest = max(newest, os.path.getmtime(p))
     stale = not os.path.exists(proj["adf"]) or os.path.getmtime(proj["adf"]) < newest
@@ -164,6 +165,37 @@ def _run_art(proj, quiet=False):
     if not quiet:
         print(f"  previews: {rel(os.path.join(proj['dir'], 'build', 'art', 'preview'))}/", file=sys.stderr)
     return True
+
+
+def _run_sound(proj, quiet=False, previews=True):
+    """Convert sound/ (if any). Returns False on errors (already printed)."""
+    from . import sound
+    try:
+        res = sound.build(proj["dir"], previews=previews)
+    except sound.SoundError as e:
+        print(f"sound error: {e}", file=sys.stderr)
+        return False
+    if res is None or quiet:
+        return True
+    for s in res["sfx"]:
+        print(f"  sfx {s['name']}: {s['seconds']:.2f} s, {len(s['data'])} bytes, volume {s['volume']}, "
+              f"priority {s['priority']}", file=sys.stderr)
+    for m in res["music"]:
+        i = m["info"]
+        insts = ", ".join(f"{n} ({w}{f' cycle {c}' if c else ''})" for n, w, c, _b in i["instruments"])
+        print(f"  music {m['name']}: {i['seconds']:.1f} s loop, {i['rows']} rows at {i['tempo']} BPM, "
+              f"{i['patterns']} pattern(s), {len(m['mod'])} bytes; instruments: {insts}", file=sys.stderr)
+    print(f"  chip RAM for samples: {res['chip_bytes']} bytes", file=sys.stderr)
+    print(f"  previews (listen, or look at the spectrograms): "
+          f"{rel(os.path.join(res['out_dir'], 'preview'))}/", file=sys.stderr)
+    return True
+
+
+def cmd_sound(args):
+    proj = load_project(args.project)
+    if not os.path.exists(os.path.join(proj["dir"], "sound", "sound.toml")):
+        raise SystemExit("no sound/sound.toml in this project - see: agk help-sound")
+    return 0 if _run_sound(proj) else 1
 
 
 def cmd_art(args):
@@ -324,7 +356,7 @@ def cmd_art_clean(args):
 
 def cmd_build(args):
     proj = load_project(args.project)
-    if not _run_art(proj, quiet=True):
+    if not _run_art(proj, quiet=True) or not _run_sound(proj, quiet=True):
         return 1
     return subprocess.run(_build_cmd(proj, args.define or [])).returncode
 
@@ -354,6 +386,9 @@ def _report(res, as_json):
                 where = (f"around game x={gx0}..{gx1} y={gy0}..{gy1}" if gx0 <= gx1 and gy0 <= gy1
                          else "outside the 320x256 playfield (in the border)")
                 print(f"    golden: DIFFERENT - {g['pixels']} px changed {where}, see {rel(g['diff'])}")
+    if res.get("audio_png"):
+        marks = ", ".join(f"{k}@{v}" for k, v in res.get("marks", {}).items())
+        print(f"  audio: {rel(res['audio'])} | spectrogram: {rel(res['audio_png'])} (marks, frame: {marks})")
     for f in res["failures"]:
         print(f"  ! {f}")
     print(f"  serial: {rel(os.path.join(res['outdir'], 'serial.txt'))}")
@@ -632,6 +667,9 @@ def main(argv=None):
 
     sub.add_parser("help-scenario", help="print the scenario language reference")
     sub.add_parser("help-art", help="print the art pipeline reference")
+    sub.add_parser("help-sound", help="print the sound and music (MML) reference")
+    p = sub.add_parser("sound", help="convert sound/ (effects + MML music) and write previews")
+    p.add_argument("project", nargs="?")
     sub.add_parser("help", help="show this help")
 
     args = ap.parse_args(argv)
@@ -641,6 +679,10 @@ def main(argv=None):
     if args.cmd == "help-scenario":
         print(scenario.__doc__)
         return 0
+    if args.cmd == "help-sound":
+        from . import sound
+        print(sound.__doc__)
+        return 0
     if args.cmd == "help-art":
         from . import art
         print(art.__doc__)
@@ -649,7 +691,7 @@ def main(argv=None):
         return {"doctor": cmd_doctor, "build": cmd_build, "run": cmd_run, "test": cmd_test,
                 "unit": cmd_unit, "new": cmd_new, "art": cmd_art, "art-gen": cmd_art_gen,
                 "art-export": cmd_art_export, "art-animate": cmd_art_animate,
-                "play": cmd_play, "art-clean": cmd_art_clean}[args.cmd](args)
+                "play": cmd_play, "art-clean": cmd_art_clean, "sound": cmd_sound}[args.cmd](args)
     except runner.RunError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

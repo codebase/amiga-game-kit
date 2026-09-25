@@ -24,7 +24,8 @@ PASS move [a500] 0.4s
 A dual-playfield parallax platformer, built by an AI agent with the kit:
 - The mountains and hills are AI-generated with `agk art-gen` (Retro Diffusion, about $0.08 in total), then tidied with `agk art-clean`.
 - They scroll at ¼ and ½ speed behind the level, over a per-line copper sky gradient.
-- Run, jump, platforms and pits.
+- Run, jump, platforms and pits, and mushrooms to stomp.
+- Sound: a looping chiptune written in MML and four synthesized effects, all generated from text by `agk sound` (press M in the game to turn the music off).
 
 It's tested pixel-exact on Kickstart 1.3, 3.1 and AROS, including a test that
 proves the parallax speeds, and it runs at 50 fps using about 21% of the
@@ -94,6 +95,27 @@ an AI generator) in `art/`:
 - Games call generated functions (`artPlayerCreate(frame)`, …). See `agk help-art` and `techniques/sprites`.
 - **`agk art-gen`** creates art with [Retro Diffusion](https://retrodiffusion.ai/) (pixel-art models, constrained to the game's palette): about $0.02 and 12 s per image. It needs your own API key in `RD_API_KEY` or `~/.config/agk/credentials`.
 - **`agk art-clean`** fixes typical AI-art damage: `--fill-holes` (see-through gaps in trees and snow), `--despeckle N` (floating fragments), `--crop Y0:Y1`, and `--fade-bottom ROWS:0xRGB` (dithers a hard bottom edge into mist).
+
+## Sound and music
+
+Sound lives in `sound/` as text; `agk sound` (and `agk build`) turns it into
+data linked into the game, played by ACE's ptplayer (ProTracker replay +
+prioritised sound effects on the channels music doesn't reserve):
+- **Sound effects** are recipes in `sound/sound.toml`: a waveform, a pitch sweep
+  or sequence of notes, a length and an envelope (`wave = "square"`,
+  `freq = [260, 620]`, `length = 0.13`, `decay = 8`). No audio files needed.
+- **Music** is MML (Music Macro Language) text, one line per Paula channel,
+  compiled to a real ProTracker `.mod` (also written to `build/sound/`, for any
+  tracker). Instruments are tiny synthesized waveforms (square, pulse, saw,
+  triangle, sine: 8-256 bytes each) and synthesized drums.
+- **Previews:** `build/sound/preview/NAME.wav` to listen to, and `NAME.png`, a
+  spectrogram with the waveform under it, so an agent can *look* at a sound.
+- **Tests:** every scenario run records Paula's output to `audio.wav`.
+  `mark NAME`, `expect-sound FROM TO` and `expect-silence FROM TO` check it, and
+  games print `AGK sfx jump` / `AGK music theme` for `expect-serial`. The
+  recording is bit-identical between runs.
+
+`agk help-sound` has the formats.
 
 ## Project structure
 

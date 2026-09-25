@@ -36,8 +36,18 @@ Commands:
                                     pixel X,Y (game coordinates, 320x256) of screenshot SHOT
                                     must be the 12-bit Amiga colour 0xRGB (e.g. 0xFA0); with
                                     "near R" it may be anywhere within R px (animated sprites)
+    mark NAME                       remember this moment of the audio recording
+    expect-sound FROM TO            something is audible between two marks (or start / end)
+    expect-silence FROM TO          nothing is audible between them (e.g. after the music stops)
     expect-no-dropped-frames        the game never missed a frame (needs agk/perf.h in the game)
     expect-max-load PERCENT         no frame used more than PERCENT of the frame time (agk/perf.h)
+
+Sound: every run records Paula's output to audio.wav (mono, 44.1 kHz, from
+scenario time 0). Audible = louder than -40 dBFS in some 1/50 s window. When a
+scenario uses mark / expect-sound / expect-silence, audio.png shows it too: a
+spectrogram over a waveform, one column per frame, marks as yellow lines.
+Games using sound/ also print "AGK sfx NAME" / "AGK music NAME" when they
+start a sound, for expect-serial.
 
 Goldens: `agk test` compares each screenshot with tests/golden/<test>/<shot>.png
 (shared by all profiles; a profile that differs on purpose gets
@@ -92,6 +102,8 @@ class Scenario:
     expects: list = field(default_factory=list)       # (regex, should_match, lineno)
     colors: list = field(default_factory=list)        # (shot, x, y, (r4, g4, b4), lineno)
     perf: list = field(default_factory=list)          # ("dropped", 0, lineno) / ("maxload", pct, lineno)
+    marks: list = field(default_factory=list)         # audio mark names
+    audio: list = field(default_factory=list)         # ("sound"|"silence", from, to, lineno)
     origins: list = field(default_factory=list)       # scenario line number of each entry in lines
     frames: int = 0                                   # frames of scenario time
 
@@ -230,6 +242,20 @@ def parse(text, name="scenario"):
                 raise ScenarioError(f"line {lineno}: bad regex: {e}")
             sc.expects.append((args[0], cmd == "expect-serial", lineno))
 
+        elif cmd == "mark":
+            if len(args) != 1:
+                raise ScenarioError(f"line {lineno}: usage: mark NAME")
+            if args[0] in ("start", "end"):
+                raise ScenarioError(f"line {lineno}: 'start' and 'end' are built-in marks")
+            n = _name(args[0], lineno, names)
+            sc.marks.append(n)
+            sc.lines.append(f"agk audio mark {n}")
+
+        elif cmd in ("expect-sound", "expect-silence"):
+            if len(args) != 2:
+                raise ScenarioError(f"line {lineno}: usage: {cmd} FROM TO (mark names, or start / end)")
+            sc.audio.append((cmd[7:], args[0], args[1], lineno))
+
         elif cmd == "expect-no-dropped-frames":
             if args:
                 raise ScenarioError(f"line {lineno}: usage: expect-no-dropped-frames")
@@ -265,6 +291,10 @@ def parse(text, name="scenario"):
     for i in sorted(held):   # leave the joystick centred at the end
         sc.lines.append(f"joystick2 {DIRECTIONS[i][1]}")
     sc.origins += [0] * (len(sc.lines) - len(sc.origins))
+    for _kind, a, b, lineno in sc.audio:
+        for m in (a, b):
+            if m not in sc.marks and m not in ("start", "end"):
+                raise ScenarioError(f"line {lineno}: unknown mark '{m}' (add 'mark {m}' where it should be)")
     for shot, *_rest, lineno, _near in sc.colors:
         if shot not in sc.screenshots:
             raise ScenarioError(f"line {lineno}: expect-color refers to unknown screenshot '{shot}'")

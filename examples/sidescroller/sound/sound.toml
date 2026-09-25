@@ -1,0 +1,40 @@
+# Sound effects and music for the sidescroller. Reference: agk help-sound
+# `agk sound` writes previews (WAV + spectrogram) to build/sound/preview/.
+
+[sound]
+sfx_channels = [3]        # effects take Paula channel 3 (the drums) for a moment
+
+[sfx.jump]                # a quick rising blip
+wave = "square"
+freq = [260, 620]
+length = 0.13
+decay = 8
+volume = 36
+priority = 1
+
+[sfx.stomp]               # a falling "boing" as the mushroom squashes
+wave = "pulse25"
+freq = [900, 180]
+length = 0.14
+decay = 10
+volume = 48
+priority = 2
+
+[sfx.hit]                 # the hero is caught: a long buzzing slide down
+wave = "saw"
+freq = [640, 70]
+length = 0.5
+decay = 3
+volume = 52
+priority = 3
+
+[sfx.fall]                # into a pit: a whistle falling away
+wave = "triangle"
+freq = [1100, 140]
+length = 0.7
+release = 0.15
+volume = 56
+priority = 3
+
+[music.theme]
+source = "theme.mml"

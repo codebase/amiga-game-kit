@@ -86,6 +86,27 @@ PNGs work too, from any tool or AI generator.
 - **AI art + hand animation:** `agk art-export NAME` turns a PNG into editable text art, so you can generate a base with AI and draw the animation frames yourself.
 - **AI art:** `agk art-gen NAME "description" --size 32x16` generates pixel art in the game's palette with Retro Diffusion, adds it to `art/`, converts it and shows the preview. It needs a key (`RD_API_KEY` or `~/.config/agk/credentials`) and costs about $0.02 per image; `--dry-run` checks the price for free. Always look at the preview: AI art needs a human-quality eye, and you can refine it by exporting to text art or regenerating with a `--seed`. AI backgrounds often have see-through holes and floating fragments: `agk art-clean SRC -o OUT --fill-holes --despeckle 60` fixes most of them.
 
+## Sound and music
+
+Sound lives in `sound/`, as text: `sound/sound.toml` describes sound effects
+(waveform, pitch sweep, length, envelope) and songs, and songs are MML files
+(one line per Paula channel, e.g. `A @lead o5 l8 e g > c < b a4 g4`). `agk help-sound`
+has both formats.
+- **`agk sound`** converts it and writes previews to `build/sound/preview/`:
+  `NAME.wav` and `NAME.png`, a spectrogram over the waveform. **Look at the
+  spectrogram** after every change: a sweep, a melody, drums and silence are
+  easy to see.
+- C code includes `sound.h`: `soundCreate()` (after the system is set up),
+  `soundPlay(SOUND_SFX_JUMP)`, `soundMusicStart(SOUND_MUSIC_THEME)`,
+  `soundMusicStop()`, `soundDestroy()`.
+- `soundPlay` prints `AGK sfx jump` for tests. Scenarios also record the audio:
+  `mark NAME`, then `expect-sound FROM TO` or `expect-silence FROM TO`; a
+  failure points at `audio.png`.
+- The music player's timer interrupt can cost ~15% of the frame it lands in.
+  If your game starts its frame right at the end of the display, it may start
+  late: `{{kit}}/examples/sidescroller` starts it a little earlier (see
+  FRAME_START_LINES in its main.c).
+
 ## Telling the harness what happens: serial debug
 
 `#include <agk/debug.h>`, then:

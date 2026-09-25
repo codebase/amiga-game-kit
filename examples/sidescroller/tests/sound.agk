@@ -1,0 +1,32 @@
+# Sound: the theme plays from the start, the hop onto enemy 0 (as in
+# stomp.agk) plays the jump and stomp effects over it. Then M turns the music
+# off (silence), and each effect is heard on its own: a jump, then running
+# into pit 1 (the falling whistle).
+wait-serial "AGK t0"         # same game frame on every profile (see main.c)
+mark music
+press right 50
+press right+up 1
+press right 30
+wait-serial "AGK stomp id=0"
+wait 40                      # land after the bounce
+key 0x37                     # M: music off
+wait 5
+mark quiet
+wait 20
+mark hop
+press up 1
+wait 20
+mark run
+hold right
+wait-serial "AGK sfx fall"
+mark fall
+wait 30
+release
+mark end_fall
+expect-serial "AGK music theme"
+expect-serial "AGK sfx jump\n[\s\S]*AGK sfx stomp"
+expect-sound music quiet                 # the theme
+expect-silence quiet hop                 # music off
+expect-sound hop run                     # jump
+expect-sound fall end_fall               # falling whistle
+expect-serial "AGK sfx fall"

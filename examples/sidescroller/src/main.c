@@ -24,6 +24,7 @@
 #include <agk/debug.h>
 #include <agk/perf.h>
 #include "art.h"      // generated from art/ by agk (agk help-art)
+#include "sound.h"    // generated from sound/ by agk (agk help-sound)
 #include "logic.h"
 
 // ------------------------------------------------------ display constants ---
@@ -96,6 +97,7 @@ static tEnemyPlan s_sEnemyPlan;
 #define COP_SPRITES_POS 0
 #define COP_TOP_POS 16
 #define COP_RAW_COUNT 560
+#define FRAME_START_LINES 32   // see the end of genericProcess()
 
 typedef struct {
 	UWORD uwCon1;          // index of the MOVE BPLCON1
@@ -104,6 +106,7 @@ typedef struct {
 
 static tCopSlots s_sTopSlots, s_sMtnSlots, s_sHillSlots;
 static UWORD s_uwCopUsed;
+static UBYTE s_isMusicOn, s_isFallSounded;
 
 static UWORD s_pSkyColors[SKY_BANDS];
 static UWORD s_pHazeColors[HAZE_BANDS];
@@ -450,9 +453,35 @@ void genericCreate(void) {
 	copperUpdate(s_sState.cam);
 	enemyChainsBuild();
 
+	soundCreate();   // ptplayer + samples in chip RAM (sound/sound.toml)
+	soundMusicStart(SOUND_MUSIC_THEME);
+	s_isMusicOn = 1;
+
 	viewLoad(s_pView);
 	systemUnuse();
 	agkDebugAsync(1); // serial channel only: interrupt-driven from here on
+}
+
+// Sound effects for what just happened in the game logic.
+static void playSounds(UBYTE ubJumpsBefore, UBYTE ubDeathsBefore) {
+	if(s_sState.eventStomp) {
+		soundPlay(SOUND_SFX_STOMP);
+	}
+	else if(s_sState.jumps != ubJumpsBefore) {
+		soundPlay(SOUND_SFX_JUMP);
+	}
+	if(s_sState.eventHit) {
+		soundPlay(SOUND_SFX_HIT);
+	}
+	// Falling into a pit: whistle once as the feet drop below the ground line
+	// (the death itself only happens off the bottom of the screen).
+	if(!s_sState.onGround && s_sState.y > START_Y + 4 && !s_isFallSounded) {
+		soundPlay(SOUND_SFX_FALL);
+		s_isFallSounded = 1;
+	}
+	if(s_sState.deaths != ubDeathsBefore || s_sState.onGround) {
+		s_isFallSounded = 0;
+	}
 }
 
 void genericProcess(void) {
@@ -464,9 +493,17 @@ void genericProcess(void) {
 		return;
 	}
 
+	if(keyUse(KEY_M)) { // music on/off
+		s_isMusicOn = !s_isMusicOn;
+		if(s_isMusicOn) soundMusicStart(SOUND_MUSIC_THEME);
+		else soundMusicStop();
+	}
+
 	tInput sInput;
 	readInput(&sInput);
+	UBYTE ubJumpsBefore = s_sState.jumps, ubDeathsBefore = s_sState.deaths;
 	UBYTE isChanged = logicUpdate(&s_sState, &sInput);
+	playSounds(ubJumpsBefore, ubDeathsBefore);
 
 	UBYTE ubHeroFrame = logicHeroFrame(&s_sState) + (s_sState.facingLeft ? ART_HERO_MIRROR : 0);
 	for(UBYTE p = 0; p < ART_HERO_PARTS; ++p) {
@@ -530,9 +567,19 @@ void genericProcess(void) {
 		agkEnd();
 	}
 
+	// The new copper list (and its sprite chains) takes over at the next
+	// vertical blank. We start the frame before the blank (see below), so a
+	// fast machine could get here before it and show this frame one frame
+	// earlier than a slow one: always swap after this frame's blank.
+	agkPerfEnd(); // (the wait below is idle time, not frame work)
+	while(getRayPos().bfPosY >= s_pView->ubPosY + SCREEN_H - FRAME_START_LINES) continue;
 	copProcessBlocks(); // raw mode: swap copper buffers
-	agkPerfEnd();
-	vPortWaitForEnd(s_pVPort);
+	// Start the next frame FRAME_START_LINES lines before the display ends,
+	// not at its very end: the music player's timer interrupt can take ~30
+	// lines, and if it lands just before the vertical blank our frame would
+	// start after it - one frame late. Those last lines show only dirt: no
+	// sprite (hero, enemies) is ever drawn there while we update them.
+	vPortWaitForPos(s_pVPort, SCREEN_H - FRAME_START_LINES, 1);
 
 	// Copper lists are double-buffered: after two frames our first frame is
 	// on screen. Only then tell the harness we're ready.
@@ -556,6 +603,7 @@ void genericProcess(void) {
 void genericDestroy(void) {
 	agkDebugAsync(0); // must be off before the OS takes interrupts back
 	systemUse();
+	soundDestroy();
 	systemSetDmaBit(DMAB_SPRITE, 0);
 	spriteManagerDestroy();
 	enemyChainsDestroy();

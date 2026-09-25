@@ -25,6 +25,8 @@ all tests pass. Check both.
 | `harness/agk/runner.py` | boot-snapshot cache, driving VAHeadless, collecting artifacts |
 | `harness/agk/image.py` | PNG in/out, playfield crop, diff |
 | `harness/agk/profiles.py` | machine profiles, ROM detection by SHA-1 |
+| `harness/agk/art.py` / `rd.py` | art pipeline (`agk art`, `art-clean`, `art-export`) / Retro Diffusion (`art-gen`, `art-animate`) |
+| `harness/agk/sound.py` | sound pipeline: effect synthesis, MML → ProTracker MOD, previews, spectrograms (`agk sound`) |
 | `harness/agk/mcp.py` | MCP stdio server (stdlib only) |
 | `runtime/` | C library every game links (`agk/debug.h` serial channel) |
 | `templates/game/` | what `agk new` copies; `{{name}}` / `{{kit}}` are substituted |

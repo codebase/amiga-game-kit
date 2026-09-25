@@ -99,7 +99,8 @@ These are fixed by `patches/vamiga-agk.patch`, where not noted otherwise.
 6. **`regression setup` loses the RGB palette.** It selects the RGB palette and then applies the machine scheme, which resets the monitor to CRT emulation (gamma 2.8 → 2.2 plus adjustments).
    - The harness sets `monitor set PALETTE RGB` explicitly.
    - OCS/ECS colours then come out as n×16 and AGA as n×17. The harness canonicalises to n×17, which makes 12-bit colours identical on every chipset.
-7. **Small quirks:**
+7. **No way to hear what the game plays.** Added `agk audio start`, `agk audio mark NAME` and `agk audio save PATH`: while recording, every sample Paula produces is kept at a fixed 44.1 kHz (the adaptive host sample rate is off), independent of the host audio buffer. A mark first brings Paula's lazy synthesis up to the current cycle. The sub-sample position isn't part of snapshots, so `start` resets it: recordings are bit-identical between a fresh boot and a restored snapshot.
+8. **Small quirks:**
    - `snapload` requires a `.vasnap` extension.
    - The console treats `\r` as "clear line", which wiped the serial tail.
    - The `waitserial` pause prints a harmless `std::exception` line.

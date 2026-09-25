@@ -1,0 +1,33 @@
+; Level theme: 16 bars in C major at 140 BPM, loops (about 27 s).
+; A lead, B bass, C chords (fast arpeggios), D drums. Sound effects borrow
+; channel D for a moment, so the drums are the part that drops out.
+#title Dawn Run
+#tempo 140
+#inst lead pulse25 vol=40 decay=1
+#inst bass square vol=34
+#inst chord pulse12 vol=20
+#inst kick kick vol=56
+#inst snare snare vol=40
+#inst hat hat vol=22
+
+; ---- lead: bars 1-8 (C G Am F | C G F G), bars 9-16 (Am F C G | Am F G G)
+A @lead o5 l8
+A e g > c < g e4 g4 | d g b > d < b4 a4 | c e a > c < a4 g4 | f a > c < a f4 e4
+A e g > c < g e g > c e < | d4. < b > d4 g4 | f4 e f a4 g4 | g2 r4 a b
+A > c4 < a > c e4 d c < | a4 f a > c4 < a4 | g4 e g > c4. < b | a4 g4 d4 g4
+A e4 a4 > c4 < b4 | a4. g f4 e4 | d4 g4 b4 > d4 < | > d2 < b4 r4
+
+; ---- bass: root, root, octave, root, twice a bar
+B @bass o2 l8
+B [c c > c < c]2 [g g > g < g]2 [a a > a < a]2 [f f > f < f]2
+B [c c > c < c]2 [g g > g < g]2 [f f > f < f]2 [g g > g < g]2
+B [a a > a < a]2 [f f > f < f]2 [c c > c < c]2 [g g > g < g]2
+B [a a > a < a]2 [f f > f < f]2 [g g > g < g]2 [g g > g < g]2
+
+; ---- chords: C = (ceg), G = (dgb), Am = (cea), F = (cfa), four per bar
+C @chord o4 l4 q6
+C [(ceg)]4 [(dgb)]4 [(cea)]4 [(cfa)]4 [(ceg)]4 [(dgb)]4 [(cfa)]4 [(dgb)]4
+C [(cea)]4 [(cfa)]4 [(ceg)]4 [(dgb)]4 [(cea)]4 [(cfa)]4 [(dgb)]4 [(dgb)]4
+
+; ---- drums: one bar, repeated for the whole song
+D o4 l8 @kick c @hat c @snare c @hat c @kick c @kick c @snare c @hat c

@@ -42,9 +42,34 @@ uses no ACE buffer manager. The copper list sets every bitplane register itself.
 Controls: left/right to run (2 px/frame). Fire or up jumps (you must release
 before jumping again). Stone slabs are one-way platforms: you jump up through
 them and land on top. If you fall into a pit, you respawn at the start.
-Seven mushroom enemies patrol the ground and the slabs: land on one to squash
-it, touch one any other way and you respawn at the start (see
-[Enemies & sprite multiplexing](#enemies--sprite-multiplexing)).
+Three mushroom enemies patrol the ground: land on one to squash it, touch one
+any other way and you respawn at the start (see
+[Enemies & sprite multiplexing](#enemies--sprite-multiplexing)). M turns the
+music on and off.
+
+## Sound
+
+`sound/sound.toml` + `sound/theme.mml`, converted by `agk sound` (previews in
+`build/sound/preview/`):
+- **Music:** "Dawn Run", 16 bars in C major at 140 BPM (27 s loop): lead
+  (pulse 25%), bass (square), fast-arpeggio chords (pulse 12%) and drums on
+  channel D. 12 KB of MOD, 5 KB of samples.
+- **Effects** (synthesized, 16.5 kHz): jump (rising square blip), stomp
+  (falling "boing"), hit (buzzing saw slide down), fall (whistle falling into
+  a pit, played once the feet drop below the ground line). They take Paula
+  channel 3, so the drums drop out for a moment. 24 KB of chip RAM.
+- **Frame timing:** ptplayer runs on a CIA-B timer (56 ticks/s at 140 BPM, not
+  locked to the frame) and a tick can take ~15-30 raster lines. The frame used
+  to start at the very end of the display (line 300), 12 lines before the
+  vertical blank; a tick landing there pushed the start past the blank, one
+  frame late (about one "dropped" frame every 2 s, even standing still). The
+  frame now starts `FRAME_START_LINES` (32) lines earlier, over the dirt where
+  no sprite is drawn, and the copper swap waits for the blank so every machine
+  switches to the new list on the same frame (otherwise the faster AROS
+  profile showed some frames one frame earlier).
+- `tests/sound.agk` checks the theme is audible, M gives silence, and the jump
+  and fall effects are heard on their own (Paula's output recorded by the
+  harness).
 
 ## Register setup
 
@@ -336,7 +361,8 @@ control words, so that slot's cached rows stay valid.
 - The largest cost is the **serial state line**: about 1.4% of a frame per `agkState()` value. The heartbeat frames (every 50) show the same spike when standing still (22% maxload).
 - These numbers are from before the enemies. With the enemies, see [Costs](#costs-a500-kick-13) above:
   `tests/perf.agk` now runs the whole level with enemies, requires no dropped frames and
-  `expect-max-load 50` (measured peak 46%).
+  `expect-max-load 60` (measured peak 54% with music: the ptplayer tick adds up to
+  ~15% to the frame it lands in; 46% before sound).
 - Chip RAM: level 120 KB + mountains 24.8 KB + hills 20.6 KB + tiles, copper and sprites ≈ 170 KB.
 
 ## Testing

@@ -2,6 +2,7 @@
 scenario, collect artifacts."""
 import fcntl
 import hashlib
+import math
 import os
 import re
 import subprocess
@@ -213,7 +214,7 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
     failures). Call inside `with outdir_lock(outdir):` if other processes may
     use the same outdir."""
     for f in os.listdir(outdir):
-        if f.endswith((".raw", ".png", ".bin", ".txt")):
+        if f.endswith((".raw", ".png", ".bin", ".txt", ".wav", ".marks")):
             os.remove(os.path.join(outdir, f))
     profile, rom, ext = profiles.resolve(profile_name)
     result = {"scenario": scenario.name, "profile": profile_name, "outdir": outdir,
@@ -242,8 +243,10 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
         lines += ["wait 1 frames", "agk sync true", "wait 1 ticks"]
     else:
         lines.append("wait 1 frames")
+    lines.append("agk audio start")   # audio.wav starts at scenario time 0
     first = len(lines) + 1   # script line number (1-based) of the scenario's first line
     lines += _sync_lines([l.replace("{out}", outdir) for l in scenario.lines], sync)
+    lines.append(f"agk audio save {outdir}/audio.wav")
 
     def line_to_source(n):
         i = n - first
@@ -327,6 +330,8 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
                 f"line {lineno}: pixel ({x},{y}) of '{shot}' is 0x{got[0]:X}{got[1]:X}{got[2]:X}, "
                 f"expected 0x{want[0]:X}{want[1]:X}{want[2]:X}" + hint)
 
+    _check_audio(scenario, outdir, result)
+
     for name, comps in scenario.regs:
         text = _extract_regs(out, comps)
         with open(os.path.join(outdir, f"{name}.txt"), "w") as f:
@@ -342,3 +347,48 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
             result["failures"].append(f"line {lineno}: {what} /{pattern}/"
                                       + (f"; last serial lines: {' | '.join(last)}" if last else ""))
     return result
+
+
+def _check_audio(scenario, outdir, result):
+    wav = os.path.join(outdir, "audio.wav")
+    if not os.path.exists(wav):
+        if scenario.audio:
+            result["ok"] = False
+            result["failures"].append("no audio.wav was recorded (the emulator stopped early?)")
+        return
+    result["audio"] = wav
+    if not (scenario.audio or scenario.marks):
+        return
+    from . import sound
+    pcm, rate = sound.read_wav(wav)
+    marks = {"start": 0, "end": len(pcm)}
+    if os.path.exists(wav + ".marks"):
+        for line in open(wav + ".marks"):
+            name, _, idx = line.strip().rpartition(" ")
+            if name:
+                marks[name] = int(idx)
+    frame = rate // 50
+    result["marks"] = {k: v // frame for k, v in marks.items()}   # in frames
+    png = os.path.join(outdir, "audio.png")
+    sound.spectrogram_png(png, pcm, rate, [(k, v) for k, v in marks.items() if k not in ("start", "end")])
+    result["audio_png"] = png
+    levels = sound.rms_windows(pcm, rate)
+    for kind, a, b, lineno in scenario.audio:
+        if a not in marks or b not in marks:
+            result["ok"] = False
+            result["failures"].append(f"line {lineno}: mark '{a if a not in marks else b}' was never reached")
+            continue
+        fa, fb = marks[a] // frame, marks[b] // frame
+        win = levels[fa:max(fa + 1, fb)]
+        loud = max(win, default=0.0)
+        at = fa + win.index(loud) if win else fa
+        db = 20 * math.log10(loud + 1e-9)
+        span = f"between {a} (frame {fa}) and {b} (frame {fb})"
+        if kind == "sound" and loud < sound.AUDIBLE_RMS:
+            result["ok"] = False
+            result["failures"].append(f"line {lineno}: no sound {span}: loudest {db:.0f} dBFS "
+                                      f"(audible: > -40) - see {os.path.relpath(png)}")
+        elif kind == "silence" and loud >= sound.AUDIBLE_RMS:
+            result["ok"] = False
+            result["failures"].append(f"line {lineno}: sound {span}, loudest at frame {at} ({db:.0f} dBFS) "
+                                      f"- see {os.path.relpath(png)}")

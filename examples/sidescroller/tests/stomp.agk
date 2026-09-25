@@ -12,9 +12,10 @@ wait 30
 screenshot gone
 expect-serial "AGK stomp id=0 x=\d+ y=192"
 # the stomp frame: falling onto it, then bounced (vy -72, off the ground)
-expect-serial "stomps=0\n(AGK stomp id=0 .*\n)AGK frame=\d+ x=194 y=183 .* ground=0 vy=-72 .* deaths=0 stomps=1"
+expect-serial "stomps=0\nAGK sfx stomp\n(AGK stomp id=0 .*\n)AGK frame=\d+ x=194 y=183 .* ground=0 vy=-72 .* deaths=0 stomps=1"
 expect-no-serial "deaths=[1-9]"
 expect-no-serial "AGK hit"
+expect-serial "AGK sfx stomp"
 # squashed frame (only it has red in rows 11-12: y 207-208, drawn 4 px into
 # the grass top face), under the hero; enemy at x 189, camera 42: screen x 147
 expect-color squashed 153 207 0xD43

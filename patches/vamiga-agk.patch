@@ -26,10 +26,10 @@ index 1b7087b..a316d29 100644
      }
      
 diff --git a/Core/Misc/RetroShell/Console.cpp b/Core/Misc/RetroShell/Console.cpp
-index b661c82..abb3d19 100644
+index b661c82..75d53bd 100644
 --- a/Core/Misc/RetroShell/Console.cpp
 +++ b/Core/Misc/RetroShell/Console.cpp
-@@ -1185,16 +1185,156 @@ Console::initCommonCommands(RSCommand &root)
+@@ -1185,16 +1185,211 @@ Console::initCommonCommands(RSCommand &root)
              .flags  = vAmigaDOS ? rs::disabled : rs::hidden,
              .args   = {
                  { .name = { "seconds", "Delay" } },
@@ -144,6 +144,61 @@ index b661c82..abb3d19 100644
 +                std::ofstream file(path, std::ios::binary);
 +                if (!file.is_open()) throw IOError(IOError::FILE_CANT_CREATE, path);
 +                amiga.regressionTester.dumpTexture(amiga, file);
++            }
++        });
++
++        root.add({
++
++            .tokens = { "agk", "audio" },
++            .ghelp  = { "Record Paula's output (mono, 16 bit, 44.1 kHz)" },
++            .func   = [] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) { }
++        });
++
++        root.add({
++
++            .tokens = { "agk", "audio", "start" },
++            .chelp  = { "Start recording (clears any earlier recording)" },
++            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
++
++                if (agnus.clock > paula.audioClock) paula.executeUntil(agnus.clock);
++                audioPort.agkStart();
++            }
++        });
++
++        root.add({
++
++            .tokens = { "agk", "audio", "mark" },
++            .chelp  = { "Remember the current position of the recording under a name" },
++            .args   = { { .name = { "name", "Mark name" } } },
++            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
++
++                // Paula synthesizes lazily: bring the recording up to now first
++                if (agnus.clock > paula.audioClock) paula.executeUntil(agnus.clock);
++                audioPort.agkMarks.push_back({ args.at("name"), isize(audioPort.agkCapture.size()) });
++            }
++        });
++
++        root.add({
++
++            .tokens = { "agk", "audio", "save" },
++            .chelp  = { "Write the recording so far as a WAV file (keeps recording)" },
++            .args   = { { .name = { "path", "File path" } } },
++            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
++
++                if (agnus.clock > paula.audioClock) paula.executeUntil(agnus.clock);
++                auto path = host.makeAbsolute(args.at("path"));
++                std::ofstream file(path, std::ios::binary);
++                if (!file.is_open()) throw IOError(IOError::FILE_CANT_CREATE, path);
++                auto &pcm = audioPort.agkCapture;
++                u32 rate = u32(AudioPort::agkCaptureRate), bytes = u32(pcm.size() * 2);
++                auto le32 = [&](u32 v) { for (int i = 0; i < 4; i++) file.put(char((v >> (8 * i)) & 0xFF)); };
++                auto le16 = [&](u16 v) { file.put(char(v & 0xFF)); file.put(char(v >> 8)); };
++                file.write("RIFF", 4); le32(36 + bytes); file.write("WAVEfmt ", 8);
++                le32(16); le16(1); le16(1); le32(rate); le32(rate * 2); le16(2); le16(16);
++                file.write("data", 4); le32(bytes);
++                for (auto s : pcm) le16(u16(s));
++                std::ofstream marks(path.string() + ".marks");
++                for (auto &m : audioPort.agkMarks) marks << m.first << " " << m.second << "\n";
 +            }
 +        });
 +
@@ -342,6 +397,86 @@ index 3d7c834..ac922c8 100644
      
      
      //
+diff --git a/Core/Ports/AudioPort.cpp b/Core/Ports/AudioPort.cpp
+index ca68727..e94b1af 100644
+--- a/Core/Ports/AudioPort.cpp
++++ b/Core/Ports/AudioPort.cpp
+@@ -358,10 +358,12 @@ AudioPort::synthesize(Cycle clock, Cycle target)
+     if (amiga.objid != 0) return;
+ 
+     // Run the ASR algorithm (adaptive sample rate)
+-    if (config.asr) { updateSampleRateCorrection(); } else { sampleRateCorrection = 0.0; }
++    if (config.asr && !agkCapturing) { updateSampleRateCorrection(); } else { sampleRateCorrection = 0.0; }
+     
+     // Determine the number of elapsed cycles per audio sample
+-    double cps = double(amiga.masterClockFrequency()) / (sampleRate + sampleRateCorrection);
++    // (AGK: a fixed rate while capturing, so the recording is deterministic)
++    double rate = agkCapturing ? agkCaptureRate : sampleRate + sampleRateCorrection;
++    double cps = double(amiga.masterClockFrequency()) / rate;
+     
+     // Determine how many samples we need to produce
+     double exact = (double)(target - clock) / cps + fraction;
+@@ -412,6 +414,7 @@ AudioPort::synthesize(Cycle clock, long count, double cyclesPerSample)
+ 
+             // Fill with zeroes
+             for (isize i = 0; i < count; i++) stream.write( SamplePair { 0, 0 } );
++            if (agkCapturing && count > 0) agkCapture.insert(agkCapture.end(), count, 0);
+             stats.idleSamples += count;
+             stream.mutex.unlock();
+             return;
+@@ -424,6 +427,7 @@ AudioPort::synthesize(Cycle clock, long count, double cyclesPerSample)
+             if (std::abs(latest.l) + std::abs(latest.r) < 1e-8) {
+                 
+                 for (isize i = 0; i < count; i++) stream.write(SamplePair{});
++                if (agkCapturing && count > 0) agkCapture.insert(agkCapture.end(), count, 0);
+                 stats.idleSamples += count;
+                 stream.mutex.unlock();
+                 return;
+@@ -490,6 +494,7 @@ AudioPort::synthesize(Cycle clock, long count, double cyclesPerSample)
+ 
+         // Write sample into ringbuffer
+         stream.put( SamplePair { float(l), float(r) } );
++        agkRecord(l, r);
+ 
+         cycle += cyclesPerSample;
+     }
+@@ -534,7 +539,8 @@ AudioPort::handleBufferOverflow()
+     lastAlignment = utl::Time::now();
+ 
+     // Adjust the sample rate if the emulator runs under normal conditions
+-    if (emulator.isRunning() && !emulator.isWarping()) {
++    // (AGK: not while capturing - nobody drains the stream then)
++    if (emulator.isRunning() && !emulator.isWarping() && !agkCapturing) {
+ 
+         stats.bufferOverflows++;
+         logmsg(LOG_AUDBUF, "Audio buffer overflow after %f seconds\n", elapsedTime.asSeconds());
+diff --git a/Core/Ports/AudioPort.h b/Core/Ports/AudioPort.h
+index 92790b9..9592819 100644
+--- a/Core/Ports/AudioPort.h
++++ b/Core/Ports/AudioPort.h
+@@ -138,6 +138,22 @@ public:
+     // Detector for measuring the sample rate
+     SampleRateDetector detector = SampleRateDetector(amiga);
+ 
++    // AGK: while capturing, every produced sample (mono mix, 16 bit) is kept
++    // here at a fixed rate, independent of the host's audio buffer.
++    bool agkCapturing = false;
++    std::vector<i16> agkCapture;
++    std::vector<std::pair<string, isize>> agkMarks;  // name, sample index
++    static constexpr double agkCaptureRate = 44100.0;
++    void agkStart() {
++        agkCapture.clear();
++        agkMarks.clear();
++        fraction = 0.0;     // not in snapshots: reset so recordings are identical
++        agkCapturing = true;
++    }
++    void agkRecord(double l, double r) {
++        if (agkCapturing) agkCapture.push_back(i16(std::clamp((l + r) * 0.5, -1.0, 1.0) * 32767.0));
++    }
++
+ 
+     //
+     // Methods
 diff --git a/Core/Ports/SerialPort.cpp b/Core/Ports/SerialPort.cpp
 index b8a0833..9e811a3 100644
 --- a/Core/Ports/SerialPort.cpp
