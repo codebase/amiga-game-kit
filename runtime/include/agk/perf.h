@@ -19,6 +19,10 @@
  * agkPerfBegin() also marks the frame start for the harness ("tick"): with
  * sync = "ticks" in agk.toml, scenario time is counted in these game frames.
  *
+ * Games that draw every 2nd vertical blank (25 fps) call agkPerfSetFrameVbls(2)
+ * once: load is then a % of two PAL frames, and a frame is only dropped when
+ * it takes more than two.
+ *
  * Counting starts at agkReady(), so startup isn't reported as dropped frames.
  * Needs ACE's timer manager (the default generic main creates it).
  */
@@ -31,10 +35,12 @@
 void agkPerfBegin(void);
 void agkPerfEnd(void);
 void agkPerfReport(void);
+void agkPerfSetFrameVbls(UBYTE ubVbls);
 #else
 #define agkPerfBegin() do {} while(0)
 #define agkPerfEnd() do {} while(0)
 #define agkPerfReport() do {} while(0)
+#define agkPerfSetFrameVbls(n) do { (void)(n); } while(0)
 #endif
 
 #endif // _AGK_PERF_H_

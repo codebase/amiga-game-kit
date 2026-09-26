@@ -1,0 +1,12 @@
+# First picture: standing on the start straight, the road straight ahead.
+wait-serial "AGK t0"         # same game frame on every profile
+screenshot start
+expect-serial "AGK ready"
+expect-serial "kmh=0 x=0 off=0"
+expect-no-serial "ERR|STACK SMASHED"
+# sky above the horizon (line 96 on a flat road), grass beside the road
+expect-color start 10 20 0x37C
+expect-color start 10 200 0x391 near 3
+# the road: asphalt right of the car, the rumble strip at its edge
+expect-color start 220 240 0x888 near 3
+expect-color start 152 104 0x888 near 2   # far away the road is narrow

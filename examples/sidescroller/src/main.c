@@ -97,7 +97,7 @@ static tEnemyPlan s_sEnemyPlan;
 #define COP_SPRITES_POS 0
 #define COP_TOP_POS 16
 #define COP_RAW_COUNT 560
-#define FRAME_START_LINES 32   // see the end of genericProcess()
+#define FRAME_START_LINES 64   // see the end of genericProcess()
 
 typedef struct {
 	UWORD uwCon1;          // index of the MOVE BPLCON1
@@ -575,10 +575,12 @@ void genericProcess(void) {
 	while(getRayPos().bfPosY >= s_pView->ubPosY + SCREEN_H - FRAME_START_LINES) continue;
 	copProcessBlocks(); // raw mode: swap copper buffers
 	// Start the next frame FRAME_START_LINES lines before the display ends,
-	// not at its very end: the music player's timer interrupt can take ~30
-	// lines, and if it lands just before the vertical blank our frame would
-	// start after it - one frame late. Those last lines show only dirt: no
-	// sprite (hero, enemies) is ever drawn there while we update them.
+	// not at its very end: the music player's timer interrupt can take over
+	// 40 lines, and if it lands just before the vertical blank our frame would
+	// start after it - one frame late (32 lines of margin weren't enough).
+	// Updating sprites while the bottom of the screen is still being drawn is
+	// safe: a sprite's control words are read when it starts, the enemy
+	// chains and the copper list are double-buffered.
 	vPortWaitForPos(s_pVPort, SCREEN_H - FRAME_START_LINES, 1);
 
 	// Copper lists are double-buffered: after two frames our first frame is

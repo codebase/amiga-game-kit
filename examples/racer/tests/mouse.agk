@@ -1,0 +1,9 @@
+# Moving the mouse (port 1) must not steer: the game reads only the joystick
+# in port 2 (ACE JOY1).
+wait-serial "AGK t0"
+press up 50                  # moving, so steering would show
+mouse 40 0
+wait 10
+mouse -60 30
+wait 10
+expect-no-serial "\bx=(?!0 )-?\d+"

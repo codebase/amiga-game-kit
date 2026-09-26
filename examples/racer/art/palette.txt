@@ -1,0 +1,10 @@
+# Palette of playfield 1 (in front of the road): index, 12-bit colour, name.
+# Colours 8-15 are the road (main.c), 17-31 the car sprite.
+0  0x000  transparent
+1  0xFFF  white
+2  0xFC0  yellow
+3  0xE40  orange
+4  0x222  shadow
+5  0x888  grey
+6  0x0AF  cyan
+7  0xD22  red

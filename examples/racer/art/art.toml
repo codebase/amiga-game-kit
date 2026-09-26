@@ -1,0 +1,12 @@
+# Game art, converted by agk (agk art / agk build). Reference: agk help-art
+[art]
+depth = 3                 # PF1 (in front of the road): dashboard, scenery later
+
+[car]
+# Retro Diffusion (art/ai/car_raw.png), 48x32; frames: straight, left, right
+# (the top leans into the turn, made from the original by a small skew)
+source = "car.png"
+kind = "sprite"
+attached = true           # 15 colours: 3 attached pairs = channels 0-5
+channel = 0
+frame_width = 48

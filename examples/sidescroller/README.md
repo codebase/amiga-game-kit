@@ -59,14 +59,17 @@ music on and off.
   a pit, played once the feet drop below the ground line). They take Paula
   channel 3, so the drums drop out for a moment. 24 KB of chip RAM.
 - **Frame timing:** ptplayer runs on a CIA-B timer (56 ticks/s at 140 BPM, not
-  locked to the frame) and a tick can take ~15-30 raster lines. The frame used
-  to start at the very end of the display (line 300), 12 lines before the
-  vertical blank; a tick landing there pushed the start past the blank, one
-  frame late (about one "dropped" frame every 2 s, even standing still). The
-  frame now starts `FRAME_START_LINES` (32) lines earlier, over the dirt where
-  no sprite is drawn, and the copper swap waits for the blank so every machine
+  locked to the frame) and a tick can take over 40 raster lines. The frame
+  used to start at the very end of the display (line 300), 12 lines before
+  the vertical blank; a tick landing there pushed the start past the blank,
+  one frame late (about one "dropped" frame every 2 s, even standing still).
+  The frame now starts `FRAME_START_LINES` (64) lines earlier (32 turned out
+  to be too few), and the copper swap waits for the blank so every machine
   switches to the new list on the same frame (otherwise the faster AROS
-  profile showed some frames one frame earlier).
+  profile showed some frames one frame earlier). Updating sprites while the
+  bottom lines are still being drawn is safe: a sprite's control words are
+  read when it starts, and the enemy chains and copper list are
+  double-buffered.
 - `tests/sound.agk` checks the theme is audible, M gives silence, and the jump
   and fall effects are heard on their own (Paula's output recorded by the
   harness).
