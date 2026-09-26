@@ -34,6 +34,22 @@ It's tested pixel-exact on Kickstart 1.3, 3.1 and AROS, including a test that
 proves the parallax speeds, and it runs at 50 fps using about 21% of the
 frame. See its README for the register-level setup.
 
+## Example: `examples/racer`
+
+[![racer](docs/img/racer.gif)](docs/media/racer.mp4)
+
+▶ [Watch it with sound](docs/media/racer.mp4): 36 s, recorded with `agk record`.
+
+An arcade-style road racer for a stock A500, also built by an AI agent with the kit:
+- A copper raster road with hills and curves: every line of the road picks its row and scroll through the copper, and the CPU draws nothing.
+- Palm trees and 32 rival cars are drawn by the blitter in 10 pre-scaled sizes. The player's car is 6 attached hardware sprites.
+- A clock with checkpoints, a title and TIME UP, and a HUD in an original arcade font.
+- An original tune, an engine note on its own Paula channel that follows the speed, and sound effects.
+
+It runs at 25 fps using about 74% of the time on a 7 MHz 68000. Its README
+covers the raster road and what it took to fit it all in: GCC's hidden
+library multiplies, bus contention, and bitplanes switched off in the sky.
+
 ## Quick start
 
 ```sh
@@ -69,8 +85,9 @@ too old).
    saves a snapshot on the next frame boundary. Snapshots are cached per build
    and profile, so later runs skip the floppy boot and start in about 0.3 s.
 2. **Play the scenario.** Every step (`press right 20`, `wait 5`,
-   `screenshot moved`, ...) is timed in video frames and lands on a frame
-   boundary. The same scenario gives byte-identical results on every run,
+   `screenshot moved`, ...) is timed in game frames (each `agkPerfBegin()`
+   marks one: a video frame for a 50 fps game, two for a 25 fps one) and lands
+   on a frame boundary. The same scenario gives byte-identical results on every run,
    whether it started from the cached snapshot or from a fresh boot.
 3. **Collect results.** You get PNG screenshots, the full serial log, memory
    dumps and register views in `build/agk/<profile>/<scenario>/`. `agk test`

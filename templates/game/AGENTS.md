@@ -154,6 +154,14 @@ Baseline: the template uses about 4% idle and about 9% while moving.
 
 **CPU (68000, 7 MHz)**
 - No 32-bit multiply or divide instruction. `int` is 32-bit here, so `a * b` or `a / b` on `int`/`long` calls a slow libgcc routine. Use `int16_t`/`WORD`, shifts, and lookup tables in per-frame code.
+- GCC also calls those routines where you wrote no multiply:
+  - the end pointer of a counted loop that steps a pointer
+  - `-(x * 64)` folded into a multiply by -64
+  - `a * b / c`
+  
+  After a performance change, list the calls and look at the ones in per-frame functions:
+  `docker run --rm -v "$PWD:$PWD" -w "$PWD" amigadev/crosstools:m68k-amigaos m68k-amigaos-objdump -dr build/CMakeFiles/{{name}}.dir/src/main.c.obj | grep 'RELOC.*___'`.
+  The fixes: inline `muls.w`/`divu.w` (`__asm__("divu.w %1,%0" : "+d"(a) : "d"(b))`), loop to a stop pointer computed with a shift, negate before multiplying (`examples/racer` has all three).
 - Word and long accesses must be even-aligned, or you get an address error (a crash, a "Guru"). Don't cast odd `UBYTE*` offsets to `UWORD*`.
 - No FPU. Use fixed point instead (see ACE `docs/programming/fixed_point.md`).
 - The frame budget is 1/50 s ≈ 140,000 CPU cycles, and bitplane and blitter DMA steal some of them.
@@ -161,6 +169,8 @@ Baseline: the template uses about 4% idle and about 9% while moving.
 **Memory**
 - Chip RAM (512K) is the only memory the custom chips can see. Bitmaps, sprites, copper lists and audio samples must live there; ACE's `bitmapCreate` allocates chip RAM for you unless you pass `BMF_FASTMEM`.
 - The rest of RAM is "slow" RAM at `$C00000`: fine for code and data, not for graphics.
+- On an A500 your code and data live in that slow RAM, which shares the bus with bitplane, blitter and copper DMA. With 6 lowres planes and the blitter busy, code runs about 2× slower than its cycle count. What counts is fewer instructions, memory accesses and spilled registers.
+- Lines that show only the background colour (a sky set by the copper) don't need bitplanes. Switch them off there (`BPLCON0` = `0x0200` from the copper, back on where the picture starts, with the bitplane pointers starting at that row). Six planes over 36 lines cost the racer 5% of its CPU.
 - `tBitMap->Planes[i]` is a **byte** pointer. Cast before indexing words: `(UWORD *)bm->Planes[0] + row * (bm->BytesPerRow / 2)`.
 
 **Display (PAL lores)**
@@ -174,6 +184,7 @@ Baseline: the template uses about 4% idle and about 9% while moving.
   - ACE **block** mode (`copBlockCreate`/`copMove`) re-merges every block whenever anything changes. That's fine for a few static blocks, but a per-line effect updated every frame costs about 90% of a frame.
   - Use **raw** mode for anything big or animated; `{{kit}}/techniques/copper` shows how.
 - ACE copper lists are double-buffered, so a change appears a frame or two later. A screenshot can show the state from up to 2 frames before the serial log.
+- A game that needs two vertical blanks per picture (25 fps, `agkPerfSetFrameVbls(2)`) should start each picture by the blank counter (`while(timerGet() - start < 2)`), not by waiting for the beam. An interrupt (the music player's takes up to ~40 lines) can make a beam wait miss the moment and lose a whole frame. With `sync = "ticks"`, scenario waits count pictures then, not video frames.
 - ACE build options (BOB wrapping, scroll buffer margins, ACE_DEBUG…) go in `agk.toml` `[cmake]`. `CMakeLists.txt` lists them.
 
 **OS**

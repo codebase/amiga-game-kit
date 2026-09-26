@@ -669,7 +669,7 @@ static UWORD s_pDouble[256];        // a byte with each pixel doubled
 // Letters per picture (a big one counts 4): a whole new screen of text is
 // spread over a few pictures instead of one slow one. What didn't fit is
 // still different from s_pHudShown, so it's drawn next time.
-#define HUD_BUDGET 12
+#define HUD_BUDGET 16
 static UBYTE s_ubHudBudget;
 // Per buffer and item, what it shows (a value, or the text's address) once
 // it's all drawn: unchanged items cost a compare
@@ -830,7 +830,7 @@ static void hudUpdate(UBYTE ubBfr, UBYTE ubBudget) {
 	}
 	else {
 		hudText(pFb, ubBfr, HUD_MSG,
-			pS->message == MSG_EXTEND ? (isBlinkOn ? "EXTEND TIME!" : "") :
+			pS->message == MSG_EXTEND ? "EXTEND TIME!" :
 			pS->message == MSG_TIMEUP ? "  TIME UP" : "");
 		hudText(pFb, ubBfr, HUD_SUB, "");
 		hudText(pFb, ubBfr, HUD_LABELS, "TIME          SCORE         SPEED");
