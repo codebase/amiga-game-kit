@@ -13,6 +13,7 @@ import math
 import os
 import re
 import shutil
+import wave
 import subprocess
 from dataclasses import replace
 
@@ -66,21 +67,41 @@ def _frames(outdir, count):
         os.remove(path)
 
 
+def frame_rate(count, audio_seconds):
+    """Pictures per second of a recording: `count` screenshots, one per scenario
+    frame, over `audio_seconds` of real (Paula) time. With tick sync a scenario
+    frame is one game picture, which may take several vertical blanks (a 25 fps
+    game: 2): snapped to 50 / N when close, else as measured."""
+    if not audio_seconds or audio_seconds <= 0 or count <= 0:
+        return float(FPS)
+    fps = count / audio_seconds
+    for n in range(1, 7):
+        if abs(fps - FPS / n) <= 0.04 * FPS / n:
+            return FPS / n
+    return fps
+
+
 def encode(outdir, count, mp4, gif=None, gif_seconds=None, scale=4):
+    """Returns the frame rate used (see frame_rate())."""
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RecordError("ffmpeg not found - install it (e.g. brew install ffmpeg)")
     wav = os.path.join(outdir, "audio.wav")
-    offset = 0.0
+    start = None
     marks = wav + ".marks"
     if os.path.exists(marks):
         for line in open(marks):
             name, _, idx = line.strip().rpartition(" ")
             if name == "_video":
-                # a screenshot shows the last finished frame: start the sound one frame later
-                offset = int(idx) / 44100 + 1 / FPS
+                start = int(idx)
+    fps = float(FPS)
+    if start is not None and os.path.exists(wav):
+        with wave.open(wav) as w:
+            fps = frame_rate(count, (w.getnframes() - start) / w.getframerate())
+    # a screenshot shows the last finished picture: start the sound one picture later
+    offset = (start or 0) / 44100 + 1 / fps if start is not None else 0.0
     cmd = [ffmpeg, "-y", "-loglevel", "error",
-           "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{SCREEN_W * 2}x{SCREEN_H}", "-r", str(FPS), "-i", "-"]
+           "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{SCREEN_W * 2}x{SCREEN_H}", "-r", f"{fps:g}", "-i", "-"]
     if os.path.exists(wav):
         # vAmiga mixes Paula well below full scale: bring the loudest moment to -1 dBFS
         from . import sound
@@ -102,11 +123,13 @@ def encode(outdir, count, mp4, gif=None, gif_seconds=None, scale=4):
     if rc:
         raise RecordError(f"ffmpeg failed ({rc})")
     if gif:
+        fps_gif = min(25.0, fps)
         limit = ["-t", str(gif_seconds)] if gif_seconds else []
         # 64 colours and only changed rectangles per frame: ~0.5 MB per second
-        vf = ("fps=25,scale=640:512:flags=neighbor,split[a][b];"
+        vf = (f"fps={fps_gif:g},scale=640:512:flags=neighbor,split[a][b];"
               "[a]palettegen=max_colors=64:stats_mode=diff[p];"
               "[b][p]paletteuse=dither=none:diff_mode=rectangle")
         r = subprocess.run([ffmpeg, "-y", "-loglevel", "error", *limit, "-i", mp4, "-vf", vf, gif])
         if r.returncode:
             raise RecordError("ffmpeg failed making the GIF")
+    return fps

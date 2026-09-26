@@ -161,6 +161,17 @@ class RecordTests(unittest.TestCase):
         with self.assertRaises(record.RecordError):
             record.video_scenario(scenario.parse('wait-serial "go"'))
 
+    def test_frame_rate_follows_the_game(self):
+        # a scenario frame is a game picture: 50 fps games, 25 fps games (a
+        # picture per 2 blanks, like the racer), a little jitter, no audio
+        from agk import record
+        self.assertEqual(record.frame_rate(500, 10.0), 50)
+        self.assertEqual(record.frame_rate(250, 10.0), 25)
+        self.assertEqual(record.frame_rate(912, 36.6), 25)
+        self.assertAlmostEqual(record.frame_rate(167, 10.0), 50 / 3)
+        self.assertAlmostEqual(record.frame_rate(200, 10.0), 20.0)   # nothing near 50 / N: as measured
+        self.assertEqual(record.frame_rate(500, 0), 50)
+
 
 class ScenarioAudioTests(unittest.TestCase):
     def test_marks_and_checks(self):

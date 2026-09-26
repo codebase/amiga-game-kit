@@ -433,17 +433,17 @@ def cmd_record(args):
     profile = args.profile or proj["profile"]
     outdir = os.path.abspath(os.path.join(proj["dir"], "build", "agk-record", profile, name))
     mp4 = os.path.abspath(args.out or os.path.join(proj["dir"], "build", f"{name}.mp4"))
-    print(f"recording {frames} frames ({frames / record.FPS:.1f} s)...", file=sys.stderr)
+    print(f"recording {frames} pictures...", file=sys.stderr)
     with runner.outdir_lock(outdir):
         res = runner.run(proj["adf"], profile, sc, outdir, proj["boot"], sync=proj["sync"])
         if not res["ok"]:
             _report(res, False)
             return 1
         try:
-            record.encode(outdir, frames, mp4, gif=args.gif, gif_seconds=args.gif_seconds)
+            fps = record.encode(outdir, frames, mp4, gif=args.gif, gif_seconds=args.gif_seconds)
         except record.RecordError as e:
             raise SystemExit(f"record: {e}")
-    print(f"wrote {rel(mp4)} ({os.path.getsize(mp4) // 1024} KB)")
+    print(f"wrote {rel(mp4)} ({os.path.getsize(mp4) // 1024} KB, {frames / fps:.1f} s at {fps:g} fps)")
     if args.gif:
         print(f"wrote {rel(args.gif)} ({os.path.getsize(args.gif) // 1024} KB)")
     return 0
