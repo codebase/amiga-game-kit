@@ -1,9 +1,13 @@
 # Straight down the middle lane into the first rival: we bump into its back
 # (and bounce off, slower), then pull out to the left and overtake it.
 wait-serial "AGK t0"
+mark go
 press up 250
 screenshot bump
+mark bumped
 expect-serial "bumps=[1-9]"
+expect-serial "AGK sfx bump"
+expect-sound go bumped          # the engine, the music, the crunch
 press up+left 15
 press up 150
 screenshot overtaken

@@ -36,6 +36,8 @@
 #include "gen_palm.h"  // the palm tree's and the rival's sizes (art/tools/scale_sheet.py)
 #include "gen_rival.h"
 #include "gen_font.h"   // the HUD's letters (art/tools/font.py)
+#include "sound.h"      // generated from sound/ by agk (agk help-sound)
+#include <ace/managers/ptplayer.h>
 #include "logic.h"
 #include <ace/managers/timer.h>
 
@@ -553,6 +555,8 @@ static void readInput(tInput *pInput) {
 }
 
 static void hudInit(void);
+static void engineCreate(void);
+static UBYTE s_isThrottle;
 static void hudUpdate(UBYTE ubBfr, UBYTE ubBudget);
 
 void genericCreate(void) {
@@ -619,6 +623,10 @@ void genericCreate(void) {
 	copProcessBlocks();
 	copperUpdate();
 	blitQueueWait();
+
+	soundCreate();   // ptplayer + samples in chip RAM (sound/sound.toml)
+	engineCreate();
+	soundMusicStart(SOUND_MUSIC_THEME);
 
 	viewLoad(s_pView);
 	systemUnuse();
@@ -803,15 +811,16 @@ static void hudUpdate(UBYTE ubBfr, UBYTE ubBudget) {
 			hudNumber(szNum, ubTime, 2, ' ');
 			hudShow(pFb, ubBfr, HUD_TIME, ubTime, szNum);
 		}
+		// (speed and score: two pictures in four - one per buffer - is plenty)
 		UWORD uwKmh = logicKmh(pS);
-		if(!hudIsShown(ubBfr, HUD_SPEED, uwKmh)) {
+		if(!(pS->frame & 4) && !hudIsShown(ubBfr, HUD_SPEED, uwKmh)) {
 			hudNumber(szNum, uwKmh, 3, ' ');
 			szNum[3] = ' '; szNum[4] = 'K'; szNum[5] = 'M'; szNum[6] = '/'; szNum[7] = 'H'; szNum[8] = '\0';
 			hudShow(pFb, ubBfr, HUD_SPEED, uwKmh, szNum);
 		}
 	}
-	scoreCount(pS->score);
-	if(!hudIsShown(ubBfr, HUD_SCORE, pS->score)) {
+	if((!(pS->frame & 4) || isTitle) && !hudIsShown(ubBfr, HUD_SCORE, pS->score)) {
+		scoreCount(pS->score);
 		hudShow(pFb, ubBfr, HUD_SCORE, pS->score, s_szScore);
 	}
 	if(isTitle) {
@@ -826,6 +835,76 @@ static void hudUpdate(UBYTE ubBfr, UBYTE ubBudget) {
 		hudText(pFb, ubBfr, HUD_SUB, "");
 		hudText(pFb, ubBfr, HUD_LABELS, "TIME          SCORE         SPEED");
 	}
+}
+
+// ---------------------------------------------------------------- sound ---
+// Music on Paula channels 0, 1, 3 (effects borrow 3); channel 2 is the
+// engine: a short looped waveform whose pitch follows the speed, driven here
+// directly (ptplayer leaves the channel alone).
+
+#define ENGINE_CHANNEL 2
+#define ENGINE_SAMPLES 64      // two firing cycles, not quite alike: a rougher note
+#define ENGINE_CLOCK 3546895   // PAL Paula clock
+static BYTE *s_pEngineWave;    // chip RAM
+
+static void engineCreate(void) {
+	s_pEngineWave = memAllocChip(ENGINE_SAMPLES);
+	WORD pWave[ENGINE_SAMPLES];
+	WORD wSum = 0;
+	for(UBYTE i = 0; i < ENGINE_SAMPLES; ++i) {
+		UBYTE ubPhase = i & 31;
+		WORD wSaw = (WORD)ubPhase * 6 - 96;                     // -96..90
+		WORD wKick = ubPhase < 6 ? (i < 32 ? 60 : 40) : 0;      // the firing, a bit uneven
+		pWave[i] = wSaw / 2 + wKick;
+		wSum += pWave[i];
+	}
+	// Zero mean: with a DC offset every volume change (the throttle) thumps
+	WORD wMean = wSum / ENGINE_SAMPLES;
+	for(UBYTE i = 0; i < ENGINE_SAMPLES; ++i) {
+		WORD v = pWave[i] - wMean;
+		s_pEngineWave[i] = (BYTE)(v > 127 ? 127 : v < -128 ? -128 : v);
+	}
+	ptplayerSetChannelsForPlayer(0xF & ~(1 << ENGINE_CHANNEL));
+	volatile struct AudChannel *pAud = &g_pCustom->aud[ENGINE_CHANNEL];
+	pAud->ac_ptr = (UWORD *)s_pEngineWave;
+	pAud->ac_len = ENGINE_SAMPLES / 2;
+	pAud->ac_vol = 0;
+	pAud->ac_per = 1000;
+	g_pCustom->dmacon = DMAF_SETCLR | (DMAF_AUD0 << ENGINE_CHANNEL);
+}
+
+static void engineUpdate(void) {
+	// Two gears: the note climbs with the speed, drops at the shift
+	const tGameState *pS = &s_sState;
+	UWORD uwKmh = logicKmh(pS);
+	UWORD uwHz = uwKmh < 140 ? 40 + uwKmh * 3 / 4 : 40 + (uwKmh - 70) * 3 / 4;   // fundamental
+	ULONG ulPer = ENGINE_CLOCK / 32;    // a firing cycle is 32 samples
+	__asm__("divu.w %1,%0" : "+d"(ulPer) : "d"(uwHz));
+	UBYTE ubVol = 0;
+	if(pS->phase == PHASE_RACE) ubVol = pS->speed && s_isThrottle ? 34 : 22;
+	else if(pS->phase == PHASE_OVER) ubVol = pS->speed ? 16 : 0;
+	else ubVol = 10;                     // the title: idling
+	volatile struct AudChannel *pAud = &g_pCustom->aud[ENGINE_CHANNEL];
+	pAud->ac_per = (UWORD)ulPer;
+	pAud->ac_vol = ubVol;
+}
+
+static void engineDestroy(void) {
+	g_pCustom->dmacon = DMAF_AUD0 << ENGINE_CHANNEL;
+	g_pCustom->aud[ENGINE_CHANNEL].ac_vol = 0;
+	memFree(s_pEngineWave, ENGINE_SAMPLES);
+}
+
+// Effects for what happened in this picture's logic frames
+static void playSounds(UBYTE ubPhaseBefore, UBYTE isBumped, UBYTE isExtended, UBYTE isOffBefore) {
+	const tGameState *pS = &s_sState;
+	if(pS->phase != ubPhaseBefore) {
+		if(pS->phase == PHASE_RACE) soundPlay(SOUND_SFX_START);
+		else if(pS->phase == PHASE_OVER) soundPlay(SOUND_SFX_TIMEUP);
+	}
+	if(isBumped) soundPlay(SOUND_SFX_BUMP);
+	if(isExtended) soundPlay(SOUND_SFX_CHECKPOINT);
+	if(pS->offroad && !isOffBefore && pS->phase == PHASE_RACE) soundPlay(SOUND_SFX_GRASS);
 }
 
 static void carUpdate(BYTE bSteer) {
@@ -869,16 +948,25 @@ void genericProcess(void) {
 
 	tInput sInput;
 	readInput(&sInput);
+	s_isThrottle = sInput.accel;
+	UBYTE ubPhaseBefore = s_sState.phase, isOffBefore = s_sState.offroad;
 	UBYTE isChanged = logicUpdate(&s_sState, &sInput);
+	UBYTE isBumped = s_sState.bumped, isExtended = s_sState.extended;   // (each lasts a frame)
 	isChanged |= logicUpdate(&s_sState, &sInput);   // 50 Hz rules, 25 fps pictures
+	isBumped |= s_sState.bumped;
+	isExtended |= s_sState.extended;
+	playSounds(ubPhaseBefore, isBumped, isExtended, isOffBefore);
+	engineUpdate();
 	copperUpdate();
 	hudUpdate(s_pView->pCopList->pBackBfr == s_pCopBfrA ? 0 : 1, HUD_BUDGET);
 	carUpdate(sInput.steer);
 
-	// State for tests: when the car goes onto or off the grass, and every
-	// 5th picture (a line costs ~1% of the picture per value)
+	// State for tests: when something happens (grass, a bump, a new phase)
+	// and every 32 frames otherwise. Serial output isn't free: a character is
+	// an interrupt, and a line keeps the CPU busy for a while.
 	(void)isChanged;
-	if(s_sState.offroad != s_ubLastOff || s_sState.frame % 10 == 0 || s_sState.frame <= 3) {
+	if(s_sState.offroad != s_ubLastOff || s_sState.phase != ubPhaseBefore ||
+		!(s_sState.frame & 31) || s_sState.frame <= 3) {
 		s_wLastX = s_sState.x;
 		s_ubLastOff = s_sState.offroad;
 		agkState("frame", s_sState.frame);
@@ -896,10 +984,11 @@ void genericProcess(void) {
 	blitQueueWait();    // the objects are in the back buffer before it's shown
 	copProcessBlocks(); // raw mode: swap copper buffers
 	agkPerfEnd();
-	// Next picture FRAME_VBLS vertical blanks after this one started
-	do {
-		vPortWaitForEnd(s_pVPort);
-	} while(timerGet() - s_ulFrameVbl < FRAME_VBLS);
+	// Next picture FRAME_VBLS vertical blanks after this one started. (On
+	// the blank counter, not the beam: waiting for the display's end missed
+	// it by a whole frame when an interrupt - the music's timer takes up to
+	// ~40 lines - kept us busy just then.)
+	while((UWORD)(timerGet() - s_ulFrameVbl) < FRAME_VBLS) continue;
 
 	if(s_sState.frame == 2) {
 		agkState("copper_used", s_uwCopUsed);
@@ -916,6 +1005,8 @@ void genericDestroy(void) {
 	agkDebugAsync(0); // must be off before the OS takes interrupts back
 	blitQueueWait();
 	systemUse();
+	engineDestroy();
+	soundDestroy();
 	systemSetDmaBit(DMAB_SPRITE, 0);
 	spriteManagerDestroy();
 	for(UBYTE f = 0; f < ART_CAR_FRAMES; ++f) {

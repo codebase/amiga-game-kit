@@ -104,7 +104,8 @@ static inline uint32_t wrapPos(uint32_t pos) {
 
 // Lane -1, 0, +1 (index lane + 1): where, and how fast its cars go
 static const int16_t s_pLaneX[3] = {-LANE_X, 0, LANE_X};
-static const int16_t s_pLaneSpeed[3] = {11 << SPEED_SHIFT, 9 << SPEED_SHIFT, 7 << SPEED_SHIFT};
+#define RIVAL_SPEED_MIN (7 << SPEED_SHIFT)
+static const int16_t s_pLaneSpeed[3] = {11 << SPEED_SHIFT, 9 << SPEED_SHIFT, RIVAL_SPEED_MIN};
 
 // a - b along the loop, in -TRACK_LEN/2 .. TRACK_LEN/2
 static inline int32_t trackDelta(uint32_t a, uint32_t b) {
@@ -114,12 +115,15 @@ static inline int32_t trackDelta(uint32_t a, uint32_t b) {
 	return d;
 }
 
+// Every other frame, two frames' worth (32 rivals are a noticeable part of a
+// 68000 frame). Closing speeds stay under 2 * CAR_LEN per step: no one
+// passes through anyone.
+_Static_assert(2 * ((SPEED_MAX - RIVAL_SPEED_MIN) >> SPEED_SHIFT) < 2 * CAR_LEN, "a step within the collision window");
 static void trafficUpdate(tGameState *pState) {
-	pState->bumped = 0;
 	uint32_t carPos = pState->pos + PLAYER_Z;
 	for(uint8_t i = 0; i < TRAFFIC_N; ++i) {
 		tRival *pR = &pState->rivals[i];
-		uint16_t step = (uint16_t)pR->posFrac + (uint16_t)pR->speed;
+		uint16_t step = (uint16_t)pR->posFrac + 2 * (uint16_t)pR->speed;
 		pR->pos = wrapPos(pR->pos + (step >> SPEED_SHIFT));
 		pR->posFrac = step & 0xFF;
 
@@ -305,7 +309,8 @@ uint8_t logicUpdate(tGameState *pState, const tInput *pInputIn) {
 	pState->bgX -= (uint16_t)(mul16(curve, s) >> 10);   // 1/16 px
 
 	uint32_t prePos = pState->pos;
-	trafficUpdate(pState);
+	pState->bumped = 0;
+	if(pState->frame & 1) trafficUpdate(pState);
 	if(pState->pos > prePos + TRACK_LEN / 2) --pState->laps;   // bounced back over the start line
 
 	if(pState->phase == PHASE_RACE) {

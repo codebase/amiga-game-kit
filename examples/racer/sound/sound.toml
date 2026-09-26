@@ -1,0 +1,49 @@
+# Sound effects and music for the racer. Reference: agk help-sound
+# `agk sound` writes previews (WAV + spectrogram) to build/sound/preview/.
+# Paula channel 2 is the engine (main.c drives it directly, pitch = speed):
+# the music plays on 0, 1 and 3 and effects borrow 3 (the drums).
+
+[sound]
+sfx_channels = [3]
+
+[sfx.bump]                # into a rival's back: a crunch
+wave = "noise"
+freq = 1800
+length = 0.28
+decay = 9
+volume = 60
+priority = 3
+
+[sfx.checkpoint]          # EXTEND TIME!: a bright rising arpeggio
+wave = "square"
+steps = [[784, 0.06], [988, 0.06], [1175, 0.06], [1568, 0.3]]
+decay = 4
+volume = 50
+priority = 2
+
+[sfx.start]               # fire on the title: go!
+wave = "pulse25"
+steps = [[1175, 0.08], [1760, 0.25]]
+decay = 5
+volume = 50
+priority = 2
+
+[sfx.timeup]              # the clock ran out: a long fall
+wave = "saw"
+freq = [880, 90]
+length = 0.9
+decay = 2
+volume = 54
+priority = 3
+
+[sfx.grass]               # wheels onto the grass: a rumble
+wave = "noise"
+freq = 420
+length = 0.22
+decay = 8
+volume = 44
+priority = 1
+
+[music.theme]
+source = "theme.mml"
+volume = 40               # under the engine and the effects

@@ -9,8 +9,9 @@ wait 20
 screenshot timeup
 press up 100
 wait 150
-expect-serial "frame=10 .*phase=0"            # the title at first
+expect-serial "frame=[23] .*phase=0"          # the title at first
 expect-serial "phase=1 time=3[89]"            # racing, the clock running
 expect-no-serial "kmh=[1-9]\d* .*phase=2"     # time up: the car can't drive
 expect-serial "phase=2(.|\n)*phase=0"         # then the title again
+expect-serial "AGK sfx start(.|\n)*AGK sfx timeup"
 expect-no-serial "ERR|STACK SMASHED"
