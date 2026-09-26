@@ -100,11 +100,48 @@ typedef struct {
 	int16_t left;      // bitmap column shown at screen x 0 (LEFT_MIN..LEFT_MAX)
 } tRoadLine;
 
+// The same as runs of lines (what main.c uses): each run shows one row on
+// lines y .. (the previous run's y) - 1, runs ordered from the bottom up.
+typedef struct {
+	int16_t y;         // the run's top line
+	uint8_t dark;
+	uint8_t row;
+	int16_t left;
+} tRoadRun;
+#define RUN_MAX (ROAD_ROWS / 2 + BACK_H + 1)
+
+// Where the projected road rows ended up this picture (for placing objects)
+#define PROJ_ROWS (ROAD_ROWS / ROW_STEP)   // projected row i is road row r = ROW_STEP * i + 1
+typedef struct {
+	int16_t y[PROJ_ROWS];    // screen line, or -1 if hidden behind a crest
+	int16_t cx[PROJ_ROWS];   // screen x of the road's centre
+} tRoadView;
+
+// Roadside objects (palm trees for now), placed per track segment
+#define OBJ_MAX 10            // the nearest ones: every blit has a fixed cost, far ones are tiny
+#define OBJ_SIDE_X 360        // lateral position, 1/256 road half widths from the centre
+#define SCENERY_PALM_L 1
+#define SCENERY_PALM_R 2
+typedef struct {
+	int16_t x;         // screen x of the object's centre
+	int16_t y;         // screen line of its foot
+	uint16_t scale;    // size, 1/256 of the nearest row's (256 = full size)
+	uint8_t type;
+} tObject;
+
 void logicInit(tGameState *pState);
 /** One frame of driving. Returns 1 if anything test-visible changed. */
 uint8_t logicUpdate(tGameState *pState, const tInput *pInput);
-/** Road layout for lines REGION_TOP..SCREEN_H-1 (pOut[0] is line REGION_TOP). */
-void logicRoadLines(const tGameState *pState, tRoadLine *pOut);
+/** Road layout as runs of lines (see tRoadRun), and where each projected row
+ *  landed. Returns the number of runs; together they cover lines REGION_TOP..255. */
+uint8_t logicRoadRuns(const tGameState *pState, tRoadRun *pRuns, tRoadView *pView);
+/** The same, one entry per line REGION_TOP..SCREEN_H-1 (pOut[0] is line REGION_TOP). */
+void logicRoadLines(const tGameState *pState, tRoadLine *pOut, tRoadView *pView);
+/** The roadside objects in view, farthest first (draw them in this order).
+ *  Needs this picture's tRoadView. Returns how many. */
+uint8_t logicObjects(const tGameState *pState, const tRoadView *pView, tObject *pOut);
+/** Scenery flags (SCENERY_*) of the segment at pos. */
+uint8_t logicSceneryAt(uint32_t pos);
 
 /** Half the road's width in row r, px. */
 uint16_t logicRoadHalf(uint8_t r);

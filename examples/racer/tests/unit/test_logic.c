@@ -10,6 +10,7 @@ static int s_failures;
 } while(0)
 
 static tRoadLine s_pLines[REGION_LINES];
+static tRoadView s_sView;
 #define LINE(y) (s_pLines[(y) - REGION_TOP])
 
 static void drive(tGameState *s, tInput in, int frames) {
@@ -41,7 +42,7 @@ static void testFlatStraightRoad(void) {
 	// The start is flat and straight: row r on line HORIZON_Y + 1 + r, centred
 	tGameState s;
 	logicInit(&s);
-	logicRoadLines(&s, s_pLines);
+	logicRoadLines(&s, s_pLines, &s_sView);
 	// above the road: the horizon strip (its bottom row on the road's top line), then sky
 	int top = REGION_TOP;
 	while(LINE(top).row >= ROAD_ROWS) ++top;
@@ -63,14 +64,14 @@ static void testStripesMove(void) {
 	// Driving forward moves the stripe pattern down the screen (towards you)
 	tGameState s;
 	logicInit(&s);
-	logicRoadLines(&s, s_pLines);
+	logicRoadLines(&s, s_pLines, &s_sView);
 	int y0 = -1;
 	for(int y = SCREEN_H - 1; y > HORIZON_Y; --y) {
 		if(LINE(y).dark != LINE(SCREEN_H - 1).dark) { y0 = y; break; }   // first stripe edge from the bottom
 	}
 	CHECK(y0 > HORIZON_Y);
 	s.pos += 4;
-	logicRoadLines(&s, s_pLines);
+	logicRoadLines(&s, s_pLines, &s_sView);
 	int y1 = -1;
 	for(int y = SCREEN_H - 1; y > HORIZON_Y; --y) {
 		if(LINE(y).dark != LINE(SCREEN_H - 1).dark) { y1 = y; break; }
@@ -83,7 +84,7 @@ static void testSteeringShiftsTheRoad(void) {
 	tGameState s;
 	logicInit(&s);
 	s.x = X_ROAD_EDGE / 2;
-	logicRoadLines(&s, s_pLines);
+	logicRoadLines(&s, s_pLines, &s_sView);
 	int near = LINE(SCREEN_H - 1).left - (ROAD_CX - SCREEN_W / 2);
 	int far = LINE(HORIZON_Y + 10).left - (ROAD_CX - SCREEN_W / 2);
 	CHECK(near > 0 && far >= 0 && near > far);
@@ -103,7 +104,7 @@ static void testCurvesBendTheFarRoad(void) {
 	logicInit(&s);
 	s.pos = findCurve(1);
 	CHECK(s.pos != 0);
-	logicRoadLines(&s, s_pLines);
+	logicRoadLines(&s, s_pLines, &s_sView);
 	int nearShift = (ROAD_CX - SCREEN_W / 2) - LINE(SCREEN_H - 1).left;
 	int farRow = -1;
 	for(int y = REGION_TOP; y < SCREEN_H; ++y) if(LINE(y).row < ROAD_ROWS) { farRow = y; break; }
@@ -112,7 +113,7 @@ static void testCurvesBendTheFarRoad(void) {
 	CHECK(farShift > nearShift && farShift > 40);
 	// and a left curve the other way
 	s.pos = findCurve(-1);
-	logicRoadLines(&s, s_pLines);
+	logicRoadLines(&s, s_pLines, &s_sView);
 	for(int y = REGION_TOP; y < SCREEN_H; ++y) if(LINE(y).row < ROAD_ROWS) { farRow = y; break; }
 	CHECK(LINE(farRow).left - (ROAD_CX - SCREEN_W / 2) > 40);
 }
@@ -125,7 +126,7 @@ static void testHills(void) {
 	int top = SCREEN_H, topMin = SCREEN_H, topMax = 0;
 	for(uint32_t p = 0; p < TRACK_LEN; p += SEG_LEN / 2) {
 		s.pos = p;
-		logicRoadLines(&s, s_pLines);
+		logicRoadLines(&s, s_pLines, &s_sView);
 		top = SCREEN_H;
 		for(int y = REGION_TOP; y < SCREEN_H; ++y) if(LINE(y).row < ROAD_ROWS) { top = y; break; }
 		if(top < topMin) topMin = top;
@@ -147,17 +148,58 @@ static void testBackdropDriftsInCurves(void) {
 	// The horizon strip scrolls against a curve (bgX), looping every BACK_PERIOD px
 	tGameState s;
 	logicInit(&s);
-	logicRoadLines(&s, s_pLines);
+	logicRoadLines(&s, s_pLines, &s_sView);
 	int left0 = LINE(HORIZON_Y).left;
 	s.pos = findCurve(1);
 	s.speed = SPEED_MAX;
 	for(int i = 0; i < 50; ++i) logicUpdate(&s, &(tInput){.accel = 1, .steer = 1});
 	CHECK((int16_t)s.bgX < 0);   // right curve: the scenery slides left
-	logicRoadLines(&s, s_pLines);
+	logicRoadLines(&s, s_pLines, &s_sView);
 	int y = REGION_TOP;
 	while(LINE(y).row < ROW_BACK || LINE(y).row == ROW_SKY) ++y;
 	CHECK(LINE(y).left != left0);
 	CHECK(LINE(y).left == LEFT_MIN + ((s.bgX >> 4) & (BACK_PERIOD - 1)));
+}
+
+static tObject s_pObj[OBJ_MAX];
+
+static void testObjectsInView(void) {
+	// The start straight has palm trees on both sides: they come out farthest
+	// first (their feet lower down the screen, bigger), left of and right of the road
+	tGameState s;
+	logicInit(&s);
+	logicRoadLines(&s, s_pLines, &s_sView);
+	uint8_t n = logicObjects(&s, &s_sView, s_pObj);
+	CHECK(n >= 6);
+	int left = 0, right = 0;
+	for(uint8_t i = 0; i < n; ++i) {
+		const tObject *o = &s_pObj[i];
+		CHECK(o->scale > 0 && o->scale <= 256);
+		CHECK(o->y > HORIZON_Y && o->y < SCREEN_H);
+		if(i) {
+			CHECK(o->y >= s_pObj[i - 1].y && o->scale >= s_pObj[i - 1].scale);
+		}
+		if(o->x < SCREEN_W / 2) ++left; else ++right;
+		// beside the road, outside its edge at that depth
+		int hw = (int)o->scale * ROAD_HALF_MAX / 256;
+		CHECK(abs(o->x - SCREEN_W / 2) > hw);
+	}
+	CHECK(left == right);
+}
+
+static void testObjectsHideBehindCrests(void) {
+	// Wherever the road is hidden, no objects are placed there
+	tGameState s;
+	logicInit(&s);
+	for(uint32_t p = 0; p < TRACK_LEN; p += SEG_LEN) {
+		s.pos = p;
+		logicRoadLines(&s, s_pLines, &s_sView);
+		uint8_t n = logicObjects(&s, &s_sView, s_pObj);
+		for(uint8_t i = 0; i < n; ++i) {
+			// the object's foot is on a line that shows road or its horizon strip, never sky
+			CHECK(LINE(s_pObj[i].y).row != ROW_SKY);
+		}
+	}
 }
 
 static void testTrackLoops(void) {
@@ -237,6 +279,8 @@ int main(void) {
 	testHills();
 	testTrackLoops();
 	testBackdropDriftsInCurves();
+	testObjectsInView();
+	testObjectsHideBehindCrests();
 	testAcceleration();
 	testSteering();
 	testOffroadSlowsDown();

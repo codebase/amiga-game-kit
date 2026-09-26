@@ -19,3 +19,9 @@ kind = "bitmap"
 depth = 3
 palette = "road_palette.txt"   # the road's own colour indices
 wrap_x = 512                   # 512 + 512 = the road bitmap's 1024 px
+
+[palm]
+# Retro Diffusion (art/ai/palm_raw.png) in 10 sizes by art/tools/scale_sheet.py
+# (the sizes are in src/gen_palm.h); drawn with the blitter into playfield 1
+source = "palm_sheet.png"
+kind = "bob"

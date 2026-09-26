@@ -1,10 +1,11 @@
 # Palette of playfield 1 (in front of the road): index, 12-bit colour, name.
-# Colours 8-15 are the road (main.c), 17-31 the car sprite.
+# Shared by the roadside objects, traffic and the dashboard. Colours 8-15 are
+# the road (art/road_palette.txt), 17-31 the car sprite.
 0  0x000  transparent
-1  0xFFF  white
-2  0xFC0  yellow
-3  0xE40  orange
-4  0x222  shadow
-5  0x888  grey
-6  0x0AF  cyan
-7  0xD22  red
+1  0x111  outline
+2  0xFFE  white
+3  0xFC2  yellow
+4  0x963  trunk
+5  0x531  trunk shade
+6  0x7C3  leaves
+7  0x262  leaves shade
