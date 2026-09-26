@@ -7,6 +7,10 @@ expect-no-serial "ERR|STACK SMASHED"
 # sky above the horizon (line 96 on a flat road), grass beside the road
 expect-color start 10 20 0x37C
 expect-color start 10 200 0x391 near 3
-# the road: asphalt right of the car, the rumble strip at its edge
-expect-color start 220 240 0x888 near 3
-expect-color start 152 104 0x888 near 2   # far away the road is narrow
+# the horizon strip on top of the road: a snow cap, mountain rock, hills
+expect-color start 0 80 0xEEE
+expect-color start 60 84 0x778
+expect-color start 0 92 0x4A2
+# the road: asphalt right of the car, and far away where the road is narrow
+expect-color start 210 240 0x889
+expect-color start 152 104 0x889 near 2   # far away the road is narrow

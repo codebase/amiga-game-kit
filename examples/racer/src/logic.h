@@ -25,6 +25,12 @@
 #define REGION_TOP 40         // lines from here to the bottom get a per-line copper block
 #define REGION_LINES (SCREEN_H - REGION_TOP)
 #define ROW_SKY 0xFF          // tRoadLine.row for a line that shows no road
+// The horizon strip (art/backdrop.txt) sits on the road's top line, BACK_H
+// lines tall: tRoadLine.row = ROW_BACK + its row. It loops every BACK_PERIOD px
+// and drifts sideways in curves (tGameState.bgX).
+#define BACK_H 32
+#define BACK_PERIOD 512
+#define ROW_BACK 200
 #define LEFT_MIN 16           // scroll range in the road bitmap (one fetch word
 #define LEFT_MAX (ROAD_BMP_W - SCREEN_W - 16)   // of pre-roll on each side)
 
@@ -46,9 +52,9 @@
 #define GRASS_DARK 0x391
 #define RUMBLE_LIGHT 0xEEE
 #define RUMBLE_DARK 0xD22
-#define ROAD_LIGHT 0x888
-#define ROAD_DARK 0x777
-#define LANE_LIGHT 0xEEE
+#define ROAD_LIGHT 0x889
+#define ROAD_DARK 0x778
+#define LANE_LIGHT 0xEEF
 
 // Road bitmap colours (playfield 2: 0 = transparent = COLOR00 = grass)
 #define ROADPIX_GRASS 0
@@ -82,7 +88,7 @@ typedef struct {
 	uint8_t posFrac;   // 1/256 units
 	int16_t speed;     // 1/256 units per frame
 	int16_t x;         // lateral position, 0 = centre, +-X_ROAD_EDGE = edges
-	int16_t bgX;       // horizon scenery scroll (moves on curves)
+	uint16_t bgX;      // horizon scenery scroll, 1/16 px (drifts in curves; wraps)
 	uint16_t frame;
 	uint8_t offroad;   // wheels on the grass
 	uint16_t laps;

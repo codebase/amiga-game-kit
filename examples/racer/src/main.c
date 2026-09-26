@@ -47,9 +47,10 @@
 // Only the projected rows (every ROW_STEP-th depth) are stored: depth r is
 // bitmap row r / ROW_STEP. Light rows, dark rows, then the empty row.
 #define ROAD_STORED (ROAD_ROWS / ROW_STEP)
-#define ROAD_BMP_ROWS (2 * ROAD_STORED + 1)
+#define ROAD_BMP_ROWS (2 * ROAD_STORED + 1 + BACK_H)   // + the horizon strip
 #define ROAD_EMPTY_OFFS (2 * ROAD_STORED * ROAD_BYTES_PER_ROW)   // 20480: < 32K, so
                                     // every jump between rows fits the 16-bit modulo
+#define ROAD_BACK_OFFS (ROAD_EMPTY_OFFS + ROAD_BYTES_PER_ROW)   // the horizon strip
 
 #define COP_SPRITES_POS 0
 #define COP_TOP_POS 16
@@ -206,7 +207,9 @@ static void rowOffsCreate(void) {
 static void copperTablesCreate(void) {
 	for(UWORD k = 0; k < 512; ++k) {
 		UBYTE ubRow = k & 0xFF, ubDark = k >> 8;
-		s_pKeyOffs[k] = ubRow < ROAD_ROWS ? s_pRowOffs[ubDark][ubRow] : ROAD_EMPTY_OFFS;
+		s_pKeyOffs[k] = ubRow < ROAD_ROWS ? s_pRowOffs[ubDark][ubRow]
+			: (ubRow >= ROW_BACK && ubRow < ROW_BACK + BACK_H) ? ROAD_BACK_OFFS + (ubRow - ROW_BACK) * ROAD_BYTES_PER_ROW
+			: ROAD_EMPTY_OFFS;
 	}
 	for(WORD x = 0; x < ROAD_BMP_W; ++x) {
 		s_pLeftOffs[x] = scrollByteOffset(x);
@@ -244,6 +247,21 @@ static void copperUpdate(void) {
 }
 
 // ---------------------------------------------------------------- road ---
+
+// The horizon strip (after the empty row) is copied from art/backdrop.txt
+static void backdropCopy(void) {
+	tBitMap *pBack = artBackdropCreate();
+	for(UBYTE y = 0; y < BACK_H; ++y) {
+		for(UBYTE p = 0; p < ROAD_BPP; ++p) {
+			const UWORD *pSrc = (const UWORD *)(pBack->Planes[p] + y * pBack->BytesPerRow);
+			UWORD *pDst = (UWORD *)(s_pRoad->Planes[p] + ROAD_BACK_OFFS + y * ROAD_BYTES_PER_ROW);
+			for(UBYTE w = 0; w < ROAD_BMP_W / 16; ++w) {
+				pDst[w] = pSrc[w];
+			}
+		}
+	}
+	bitmapDestroy(pBack);
+}
 
 static void roadDraw(void) {
 	// Once, at startup: each row twice (light, dark), 16 px at a time.
@@ -307,6 +325,7 @@ void genericCreate(void) {
 	s_pBlankRow = memAllocChipClear(FETCH_BYTES);
 	rowOffsCreate();
 	roadDraw();
+	backdropCopy();
 
 	for(UWORD y = 0; y < SCREEN_H; ++y) s_pSky[y] = logicSkyColor(y);
 	logicInit(&s_sState);

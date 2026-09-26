@@ -42,7 +42,14 @@ static void testFlatStraightRoad(void) {
 	tGameState s;
 	logicInit(&s);
 	logicRoadLines(&s, s_pLines);
-	for(int y = REGION_TOP; y <= HORIZON_Y; ++y) CHECK(LINE(y).row == ROW_SKY);
+	// above the road: the horizon strip (its bottom row on the road's top line), then sky
+	int top = REGION_TOP;
+	while(LINE(top).row >= ROAD_ROWS) ++top;
+	CHECK(top == HORIZON_Y + 1 + (ROAD_ROWS - 1) % ROW_STEP);   // the farthest projected row
+	for(int y = REGION_TOP; y < top; ++y) {
+		int back = y - (top - BACK_H);
+		CHECK(back < 0 ? LINE(y).row == ROW_SKY : LINE(y).row == ROW_BACK + back);
+	}
 	// the farthest projected row is (ROAD_ROWS - 1) % ROW_STEP
 	for(int r = (ROAD_ROWS - 1) % ROW_STEP; r < ROAD_ROWS; ++r) {
 		// every ROW_STEP-th row is projected; the lines between show the farther one
@@ -99,14 +106,14 @@ static void testCurvesBendTheFarRoad(void) {
 	logicRoadLines(&s, s_pLines);
 	int nearShift = (ROAD_CX - SCREEN_W / 2) - LINE(SCREEN_H - 1).left;
 	int farRow = -1;
-	for(int y = REGION_TOP; y < SCREEN_H; ++y) if(LINE(y).row != ROW_SKY) { farRow = y; break; }
+	for(int y = REGION_TOP; y < SCREEN_H; ++y) if(LINE(y).row < ROAD_ROWS) { farRow = y; break; }
 	CHECK(farRow > 0);
 	int farShift = (ROAD_CX - SCREEN_W / 2) - LINE(farRow).left;
 	CHECK(farShift > nearShift && farShift > 40);
 	// and a left curve the other way
 	s.pos = findCurve(-1);
 	logicRoadLines(&s, s_pLines);
-	for(int y = REGION_TOP; y < SCREEN_H; ++y) if(LINE(y).row != ROW_SKY) { farRow = y; break; }
+	for(int y = REGION_TOP; y < SCREEN_H; ++y) if(LINE(y).row < ROAD_ROWS) { farRow = y; break; }
 	CHECK(LINE(farRow).left - (ROAD_CX - SCREEN_W / 2) > 40);
 }
 
@@ -120,18 +127,37 @@ static void testHills(void) {
 		s.pos = p;
 		logicRoadLines(&s, s_pLines);
 		top = SCREEN_H;
-		for(int y = REGION_TOP; y < SCREEN_H; ++y) if(LINE(y).row != ROW_SKY) { top = y; break; }
+		for(int y = REGION_TOP; y < SCREEN_H; ++y) if(LINE(y).row < ROAD_ROWS) { top = y; break; }
 		if(top < topMin) topMin = top;
 		if(top > topMax) topMax = top;
 		// every line below the top shows road, and rows never go back up the
 		// screen (nearer rows are lower)
 		for(int y = top + 1; y < SCREEN_H; ++y) {
-			CHECK(LINE(y).row != ROW_SKY && LINE(y).row >= LINE(y - 1).row);
+			CHECK(LINE(y).row < ROAD_ROWS && LINE(y).row >= LINE(y - 1).row);
 		}
+		// the horizon strip sits right on top of the road
+		if(top - 1 >= REGION_TOP) CHECK(LINE(top - 1).row == ROW_BACK + BACK_H - 1);
 	}
 	printf("road top: %d..%d (flat %d)\n", topMin, topMax, HORIZON_Y + 1);
 	CHECK(topMin < HORIZON_Y - 10);   // uphill ahead
 	CHECK(topMax > HORIZON_Y + 10);   // over a crest
+}
+
+static void testBackdropDriftsInCurves(void) {
+	// The horizon strip scrolls against a curve (bgX), looping every BACK_PERIOD px
+	tGameState s;
+	logicInit(&s);
+	logicRoadLines(&s, s_pLines);
+	int left0 = LINE(HORIZON_Y).left;
+	s.pos = findCurve(1);
+	s.speed = SPEED_MAX;
+	for(int i = 0; i < 50; ++i) logicUpdate(&s, &(tInput){.accel = 1, .steer = 1});
+	CHECK((int16_t)s.bgX < 0);   // right curve: the scenery slides left
+	logicRoadLines(&s, s_pLines);
+	int y = REGION_TOP;
+	while(LINE(y).row < ROW_BACK || LINE(y).row == ROW_SKY) ++y;
+	CHECK(LINE(y).left != left0);
+	CHECK(LINE(y).left == LEFT_MIN + ((s.bgX >> 4) & (BACK_PERIOD - 1)));
 }
 
 static void testTrackLoops(void) {
@@ -210,6 +236,7 @@ int main(void) {
 	testCurvesBendTheFarRoad();
 	testHills();
 	testTrackLoops();
+	testBackdropDriftsInCurves();
 	testAcceleration();
 	testSteering();
 	testOffroadSlowsDown();

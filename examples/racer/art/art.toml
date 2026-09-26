@@ -10,3 +10,12 @@ kind = "sprite"
 attached = true           # 15 colours: 3 attached pairs = channels 0-5
 channel = 0
 frame_width = 48
+
+[backdrop]
+# The horizon strip behind the road: drawn by art/tools/backdrop.py, copied
+# into the road bitmap (main.c) and shown above the road's top line
+source = "backdrop.txt"
+kind = "bitmap"
+depth = 3
+palette = "road_palette.txt"   # the road's own colour indices
+wrap_x = 512                   # 512 + 512 = the road bitmap's 1024 px

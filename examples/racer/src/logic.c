@@ -172,7 +172,7 @@ uint8_t logicUpdate(tGameState *pState, const tInput *pInput) {
 		++pState->laps;
 	}
 	// The scenery on the horizon drifts against the curve
-	pState->bgX -= (int16_t)(((int32_t)curve * s) >> 11);
+	pState->bgX -= (uint16_t)(((int32_t)curve * s) >> 10);   // 1/16 px
 
 	return pState->speed != oldSpeed || pState->x != oldX || (pState->pos >> STRIPE_SHIFT) != (oldPos >> STRIPE_SHIFT);
 }
@@ -266,8 +266,14 @@ void logicRoadLines(const tGameState *pState, tRoadLine *pOut) {
 		minY = y;
 		if(y == REGION_TOP) break;
 	}
+	// The horizon strip on top of the road, then sky
+	tRoadLine sBack = {.dark = 0, .row = ROW_BACK + BACK_H - 1,
+		.left = LEFT_MIN + (int16_t)((pState->bgX >> 4) & (BACK_PERIOD - 1))};
+	for(int16_t n = minY - REGION_TOP; n > 0 && sBack.row >= ROW_BACK; --n, --sBack.row) {
+		*--pFill = sBack;
+	}
 	tRoadLine sSky = {.dark = 0, .row = ROW_SKY, .left = LEFT_MIN};
-	for(int16_t n = minY - REGION_TOP; n > 0; --n) {
+	while(pFill != pOut) {
 		*--pFill = sSky;
 	}
 }

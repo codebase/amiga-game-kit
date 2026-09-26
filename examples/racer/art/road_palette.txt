@@ -1,0 +1,11 @@
+# The road playfield's colours (PF2, colour registers 8-15), as the road
+# bitmap (main.c) and the horizon backdrop use them. Keep in step with the
+# colour constants in src/logic.h.
+0  0x000  transparent (sky)
+1  0x4A2  grass light
+2  0x391  grass dark
+3  0xEEE  rumble strip, light
+4  0xD22  rumble strip, dark
+5  0x889  asphalt light
+6  0x778  asphalt dark
+7  0xEEF  lane marks
