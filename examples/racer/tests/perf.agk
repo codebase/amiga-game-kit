@@ -1,10 +1,12 @@
 # Frame budget guard at 25 fps (two vertical blanks per picture, see main.c):
-# full speed through the first hills and curves, steering, onto the grass.
+# up to speed through the first hills and curves (bumping into the rival
+# ahead), steering, onto the grass; palms and rivals in view all the way.
 wait-serial "AGK t0"
 press up 300
 press up+left 40
 press up+right 80
 press up 200
 expect-no-dropped-frames
-# measured ~82% of the two-frame budget (the road's per-line work)
+# measured ~77% (peaks 83%) of the two-frame budget: the road projection and
+# the copper loop are most of it
 expect-max-load 90

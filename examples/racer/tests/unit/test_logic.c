@@ -17,6 +17,15 @@ static void drive(tGameState *s, tInput in, int frames) {
 	for(int i = 0; i < frames; ++i) logicUpdate(s, &in);
 }
 
+// A fresh game with the road to ourselves (the driving rules without traffic)
+static void initNoTraffic(tGameState *s) {
+	logicInit(s);
+	for(uint8_t i = 0; i < TRAFFIC_N; ++i) {
+		s->rivals[i].speed = 0;
+		s->rivals[i].pos = TRACK_LEN / 2;
+	}
+}
+
 // ------------------------------------------------------------ road bitmap
 
 static void testRoadRows(void) {
@@ -171,7 +180,7 @@ static void testObjectsInView(void) {
 	logicRoadLines(&s, s_pLines, &s_sView);
 	uint8_t n = logicObjects(&s, &s_sView, s_pObj);
 	CHECK(n >= 6);
-	int left = 0, right = 0;
+	int left = 0, right = 0, rivals = 0;
 	for(uint8_t i = 0; i < n; ++i) {
 		const tObject *o = &s_pObj[i];
 		CHECK(o->scale > 0 && o->scale <= 256);
@@ -179,12 +188,18 @@ static void testObjectsInView(void) {
 		if(i) {
 			CHECK(o->y >= s_pObj[i - 1].y && o->scale >= s_pObj[i - 1].scale);
 		}
+		int hw = (int)o->scale * ROAD_HALF_MAX / 256;   // the road's half width at that depth
+		if(o->type == OBJ_RIVAL) {
+			// rivals ahead (the first in the left lane): on the road
+			++rivals;
+			CHECK(abs(o->x - SCREEN_W / 2) <= hw + 1);   // (+1: rounding, far away)
+			continue;
+		}
 		if(o->x < SCREEN_W / 2) ++left; else ++right;
-		// beside the road, outside its edge at that depth
-		int hw = (int)o->scale * ROAD_HALF_MAX / 256;
-		CHECK(abs(o->x - SCREEN_W / 2) > hw);
+		CHECK(abs(o->x - SCREEN_W / 2) > hw);   // palms: beside the road
 	}
 	CHECK(left == right);
+	CHECK(rivals >= 1);
 }
 
 static void testObjectsHideBehindCrests(void) {
@@ -215,7 +230,7 @@ static void testTrackLoops(void) {
 
 static void testAcceleration(void) {
 	tGameState s;
-	logicInit(&s);
+	initNoTraffic(&s);
 	drive(&s, (tInput){.accel = 1}, 50);
 	CHECK(s.speed > 0 && s.pos > 0);
 	int after1s = logicKmh(&s);
@@ -244,7 +259,7 @@ static void testSteering(void) {
 
 static void testOffroadSlowsDown(void) {
 	tGameState s;
-	logicInit(&s);
+	initNoTraffic(&s);
 	drive(&s, (tInput){.accel = 1}, 400);
 	CHECK(s.speed == SPEED_MAX);
 	s.x = X_ROAD_EDGE + 60;
@@ -259,6 +274,54 @@ static void testCurvesPushYouOut(void) {
 	s.speed = SPEED_MAX;
 	drive(&s, (tInput){.accel = 1}, 30);
 	CHECK(s.x < 0);   // right curve: pushed left
+}
+
+// ---------------------------------------------------------------- traffic
+
+// A rival alone on the track, just ahead of the player's car in lane `lane`
+static void oneRival(tGameState *pS, int8_t lane, uint32_t ahead) {
+	initNoTraffic(pS);
+	pS->pos = 1000;
+	pS->rivals[0].pos = pS->pos + PLAYER_Z + ahead;
+	pS->rivals[0].lane = lane;
+	pS->rivals[0].speed = 9 << SPEED_SHIFT;
+}
+
+static void testRivalsDrive(void) {
+	tGameState s;
+	logicInit(&s);
+	uint32_t p0 = s.rivals[0].pos;
+	drive(&s, (tInput){0}, 50);
+	CHECK(s.rivals[0].pos > p0 && s.rivals[0].speed > 0);
+	CHECK((s.rivals[0].pos - p0) == (uint32_t)(s.rivals[0].speed * 50) >> SPEED_SHIFT);
+}
+
+static void testRearEndSlowsYouDown(void) {
+	// Full speed into a rival in our lane: we bounce off its back, down below its speed
+	tGameState s;
+	oneRival(&s, 0, 400);
+	s.speed = SPEED_MAX;
+	uint16_t bumpFrame = 0;
+	for(uint16_t f = 0; f < 100 && !bumpFrame; ++f) {
+		logicUpdate(&s, &(tInput){.accel = 1});
+		if(s.bumped) bumpFrame = s.frame;
+		// never through it
+		int32_t dz = (int32_t)(s.rivals[0].pos - (s.pos + PLAYER_Z));
+		CHECK(dz >= CAR_LEN || dz <= -CAR_LEN || !s.bumped);
+	}
+	CHECK(bumpFrame && s.bumps == 1);
+	CHECK(s.speed <= s.rivals[0].speed - BUMP_SLOW);
+	CHECK((int32_t)(s.rivals[0].pos - (s.pos + PLAYER_Z)) == CAR_LEN);
+}
+
+static void testOtherLanesPass(void) {
+	// The same, a lane to the left: we just overtake
+	tGameState s;
+	oneRival(&s, -1, 400);
+	s.speed = SPEED_MAX;
+	drive(&s, (tInput){.accel = 1}, 100);
+	CHECK(s.bumps == 0 && s.speed == SPEED_MAX);
+	CHECK(s.pos + PLAYER_Z > s.rivals[0].pos + CAR_LEN);
 }
 
 static void testLap(void) {
@@ -286,6 +349,9 @@ int main(void) {
 	testOffroadSlowsDown();
 	testCurvesPushYouOut();
 	testLap();
+	testRivalsDrive();
+	testRearEndSlowsYouDown();
+	testOtherLanesPass();
 	if(s_failures) {
 		printf("%d check(s) failed\n", s_failures);
 		return 1;

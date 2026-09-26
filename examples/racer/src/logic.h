@@ -83,6 +83,26 @@ typedef struct {
 	uint8_t brake;     // down
 } tInput;
 
+// ------------------------------------------------------------- traffic ---
+// Rival cars drive in three lanes, one speed per lane (so a lane never piles
+// up); you overtake them. The player's car stands PLAYER_Z units ahead of the
+// camera (where the car sprite's wheels meet the road); cars closer than
+// CAR_LEN along the track and CAR_HIT_X across touch, and the one behind is
+// pushed back and slowed to the front one's speed.
+#define TRAFFIC_N 32            // ~3 in view: you pass one every few seconds
+#define LANE_X 170             // lane centres: -LANE_X, 0, +LANE_X
+#define PLAYER_Z 68             // z of the car sprite's rear wheels (line ~244)
+#define CAR_LEN 16              // its nose is at z ~84 (line ~222): perspective squeezes the near rows
+#define CAR_HIT_X 72
+#define BUMP_SLOW (3 << SPEED_SHIFT)   // the one behind drops to the front's speed minus this
+
+typedef struct {
+	uint32_t pos;      // along the track, units
+	uint8_t posFrac;
+	int8_t lane;       // -1, 0, +1
+	int16_t speed;     // 1/256 units per frame
+} tRival;
+
 typedef struct {
 	uint32_t pos;      // distance along the track, units (wraps at the track length)
 	uint8_t posFrac;   // 1/256 units
@@ -92,6 +112,9 @@ typedef struct {
 	uint16_t frame;
 	uint8_t offroad;   // wheels on the grass
 	uint16_t laps;
+	uint16_t bumps;    // collisions with rivals so far
+	uint8_t bumped;    // a collision this frame (for the sound)
+	tRival rivals[TRAFFIC_N];
 } tGameState;
 
 typedef struct {
@@ -105,10 +128,12 @@ typedef struct {
 typedef struct {
 	int16_t y;         // the run's top line
 	uint8_t dark;
-	uint8_t row;
+	uint8_t row;       // the row on its top line
+	uint8_t step;      // 0: that row on every line; 1: the next row on each line
+	                   // down (the horizon strip: one run instead of a run per line)
 	int16_t left;
 } tRoadRun;
-#define RUN_MAX (ROAD_ROWS / 2 + BACK_H + 1)
+#define RUN_MAX (ROAD_ROWS / 2 + 2)   // the projected rows, the horizon strip, the sky
 
 // Where the projected road rows ended up this picture (for placing objects)
 #define PROJ_ROWS (ROAD_ROWS / ROW_STEP)   // projected row i is road row r = ROW_STEP * i + 1
@@ -117,16 +142,20 @@ typedef struct {
 	int16_t cx[PROJ_ROWS];   // screen x of the road's centre
 } tRoadView;
 
-// Roadside objects (palm trees for now), placed per track segment
-#define OBJ_MAX 10            // the nearest ones: every blit has a fixed cost, far ones are tiny
+// What's drawn on the road: roadside palms (placed per track segment) and
+// the rivals, farthest first
+#define OBJ_MAX 14            // the nearest ones: every blit has a fixed cost, far ones are tiny
+#define OBJ_PALMS_MAX 10      // of which palms
 #define OBJ_SIDE_X 360        // lateral position, 1/256 road half widths from the centre
 #define SCENERY_PALM_L 1
 #define SCENERY_PALM_R 2
+#define OBJ_PALM 0
+#define OBJ_RIVAL 1
 typedef struct {
 	int16_t x;         // screen x of the object's centre
 	int16_t y;         // screen line of its foot
 	uint16_t scale;    // size, 1/256 of the nearest row's (256 = full size)
-	uint8_t type;
+	uint8_t type;      // OBJ_*
 } tObject;
 
 void logicInit(tGameState *pState);
@@ -137,7 +166,7 @@ uint8_t logicUpdate(tGameState *pState, const tInput *pInput);
 uint8_t logicRoadRuns(const tGameState *pState, tRoadRun *pRuns, tRoadView *pView);
 /** The same, one entry per line REGION_TOP..SCREEN_H-1 (pOut[0] is line REGION_TOP). */
 void logicRoadLines(const tGameState *pState, tRoadLine *pOut, tRoadView *pView);
-/** The roadside objects in view, farthest first (draw them in this order).
+/** The roadside objects and rivals in view, farthest first (draw them in this order).
  *  Needs this picture's tRoadView. Returns how many. */
 uint8_t logicObjects(const tGameState *pState, const tRoadView *pView, tObject *pOut);
 /** Scenery flags (SCENERY_*) of the segment at pos. */

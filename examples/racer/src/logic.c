@@ -102,6 +102,51 @@ static inline uint32_t wrapPos(uint32_t pos) {
 	return pos >= TRACK_LEN ? pos - TRACK_LEN : pos;
 }
 
+// Lane -1, 0, +1 (index lane + 1): where, and how fast its cars go
+static const int16_t s_pLaneX[3] = {-LANE_X, 0, LANE_X};
+static const int16_t s_pLaneSpeed[3] = {11 << SPEED_SHIFT, 9 << SPEED_SHIFT, 7 << SPEED_SHIFT};
+
+// a - b along the loop, in -TRACK_LEN/2 .. TRACK_LEN/2
+static inline int32_t trackDelta(uint32_t a, uint32_t b) {
+	int32_t d = (int32_t)(a - b);
+	if(d > (int32_t)(TRACK_LEN / 2)) d -= TRACK_LEN;
+	else if(d < -(int32_t)(TRACK_LEN / 2)) d += TRACK_LEN;
+	return d;
+}
+
+static void trafficUpdate(tGameState *pState) {
+	pState->bumped = 0;
+	uint32_t carPos = pState->pos + PLAYER_Z;
+	for(uint8_t i = 0; i < TRAFFIC_N; ++i) {
+		tRival *pR = &pState->rivals[i];
+		uint16_t step = (uint16_t)pR->posFrac + (uint16_t)pR->speed;
+		pR->pos = wrapPos(pR->pos + (step >> SPEED_SHIFT));
+		pR->posFrac = step & 0xFF;
+
+		int32_t dz = trackDelta(pR->pos, carPos);
+		if(dz <= -CAR_LEN || dz >= CAR_LEN) continue;
+		int16_t dx = pState->x - s_pLaneX[pR->lane + 1];
+		if(dx <= -CAR_HIT_X || dx >= CAR_HIT_X) continue;
+		if(dz >= 0) {
+			// we ran into its back: bounce off, down to its speed
+			uint32_t pos = pR->pos + TRACK_LEN - CAR_LEN - PLAYER_Z;
+			pState->pos = wrapPos(pos);
+			pState->posFrac = 0;
+			int16_t s = pR->speed - BUMP_SLOW;
+			if(s < 0) s = 0;
+			if(pState->speed > s) pState->speed = s;
+			pState->bumped = 1;
+			++pState->bumps;
+			carPos = pState->pos + PLAYER_Z;
+		}
+		else {
+			// it caught up with us (we're slow): it waits behind
+			pR->pos = wrapPos(carPos + TRACK_LEN - CAR_LEN);
+			pR->posFrac = 0;
+		}
+	}
+}
+
 int8_t logicCurveAt(uint32_t pos) {
 	tablesInit();
 	return s_pCurve[wrapPos(pos) >> SEG_SHIFT];
@@ -158,6 +203,19 @@ void logicInit(tGameState *pState) {
 	pState->frame = 0;
 	pState->offroad = 0;
 	pState->laps = 0;
+	pState->bumps = 0;
+	pState->bumped = 0;
+	// spread around the loop at irregular gaps (a fixed pseudo-random
+	// sequence: every game is the same), the first one ahead in our lane
+	uint16_t rnd = 0xACE1;
+	for(uint8_t i = 0; i < TRAFFIC_N; ++i) {
+		tRival *pR = &pState->rivals[i];
+		rnd = (uint16_t)(rnd * 25173u + 13849u);
+		pR->pos = 1200 + i * (TRACK_LEN / TRAFFIC_N) + (i ? (rnd >> 6) : 0);   // + 0..1023
+		pR->posFrac = 0;
+		pR->lane = i ? (int8_t)((rnd >> 3) % 3) - 1 : 0;
+		pR->speed = s_pLaneSpeed[pR->lane + 1];
+	}
 }
 
 uint8_t logicUpdate(tGameState *pState, const tInput *pInput) {
@@ -203,7 +261,12 @@ uint8_t logicUpdate(tGameState *pState, const tInput *pInput) {
 	// The scenery on the horizon drifts against the curve
 	pState->bgX -= (uint16_t)(mul16(curve, s) >> 10);   // 1/16 px
 
-	return pState->speed != oldSpeed || pState->x != oldX || (pState->pos >> STRIPE_SHIFT) != (oldPos >> STRIPE_SHIFT);
+	uint32_t prePos = pState->pos;
+	trafficUpdate(pState);
+	if(pState->pos > prePos + TRACK_LEN / 2) --pState->laps;   // bounced back over the start line
+
+	return pState->speed != oldSpeed || pState->x != oldX || (pState->pos >> STRIPE_SHIFT) != (oldPos >> STRIPE_SHIFT) ||
+		pState->bumped;
 }
 
 uint16_t logicKmh(const tGameState *pState) {
@@ -237,17 +300,17 @@ uint8_t logicRoadRuns(const tGameState *pState, tRoadRun *pRuns, tRoadView *pVie
 	}
 	// Where the road's centre is on screen, per row, in 16.16: the curve shift
 	// minus the player's offset (x * half(r) / 256 px, half(r) = 1.25 (r + 1)).
-	// Both are accumulators, so one: cxFx += curveDx + pxStep each row.
+	// Both are accumulators, so one: cxFx += dxFx each row, and dxFx grows by
+	// the segment's curve (dxAdd) each row.
 	int32_t pxStep = mul16(pState->x, (int16_t)(ROW_STEP * 5)) * 64;
 	// (one step back: the loop adds a step before using it)
-	int32_t cxFx = -(mul16(pState->x, (int16_t)(ROAD_ROWS * 5)) * 64) - pxStep;   // row ROAD_ROWS-1: -x * 1.25 * 160 / 256
-	int32_t curveDx = 0;
+	int32_t cxFx = mul16(-pState->x, (int16_t)(ROAD_ROWS * 5)) * 64 - pxStep;   // row ROAD_ROWS-1: -x * 1.25 * 160 / 256
+	int32_t dxFx = pxStep, dxAdd = 0;
 	int16_t minY = SCREEN_H;          // lines minY.. are filled
-	int32_t yFx = 0;                  // screen line of the current row, 1/1024 lines
-	int16_t yStep = 0;
+	int32_t yFx = 0, yStep = 0;       // screen line of the current row, 16.16
 	int16_t kCur = -1;
 	tRoadRun *pRun = pRuns;
-	int16_t *pViewY = &pView->y[PROJ_ROWS], *pViewCx = &pView->cx[PROJ_ROWS];
+	int16_t *pViewY = &pView->y[PROJ_ROWS];   // (and cx: PROJ_ROWS further on)
 	for(int16_t r = ROAD_ROWS - 1; r >= 0; r -= ROW_STEP) {
 		uint16_t off = camFrac + s_pZ[r];               // units ahead of the camera's segment
 		int16_t k = off >> SEG_SHIFT;
@@ -265,44 +328,49 @@ uint8_t logicRoadRuns(const tGameState *pState, tRoadRun *pRuns, tRoadView *pVie
 			// s * ZSCALE / CAM_H: one MULS by a folded 16-bit constant (as
 			// "* 40 * 2, negated" GCC called the 32-bit ___mulsi3 by -2)
 			int32_t bFx = mul16(d, -(ROAD_ZSCALE >> SEG_SHIFT) * (1 << (10 - CAM_SHIFT)));
-			yStep = aFx * ROW_STEP;
-			yFx = (int32_t)HORIZON_Y * 1024 + mul16(aFx, r + 1) + bFx;
+			yStep = (int32_t)aFx * (ROW_STEP << 6);                // 1/1024 -> 16.16
+			yFx = ((int32_t)HORIZON_Y * 1024 + mul16(aFx, r + 1) + bFx) << 6;
+			dxAdd = (int32_t)pCurve[k] * (256L * ROW_STEP * ROW_STEP);
 		}
-		curveDx += pCurve[k] * (256L * ROW_STEP * ROW_STEP);
-		cxFx += curveDx + pxStep;
-		int16_t y = (int16_t)(yFx >> 10);
+		dxFx += dxAdd;
+		cxFx += dxFx;
+		int16_t y = (int16_t)(yFx >> 16);
 		yFx -= yStep;
 		int16_t cx = (int16_t)(cxFx >> 16);
-		*--pViewCx = SCREEN_W / 2 + cx;
+		--pViewY;
+		pViewY[PROJ_ROWS] = SCREEN_W / 2 + cx;
 		if(y >= minY || y < REGION_TOP) {
-			*--pViewY = -1;
+			*pViewY = -1;
 			if(y >= minY) continue;   // hidden behind a nearer crest (or below the screen)
+			y = REGION_TOP;
 		}
 		else {
-			*--pViewY = y;
+			*pViewY = y;
 		}
-		if(y < REGION_TOP) y = REGION_TOP;
 		int16_t left = ROAD_CX - SCREEN_W / 2 - cx;
 		if(left < LEFT_MIN) left = LEFT_MIN;
-		if(left > LEFT_MAX) left = LEFT_MAX;
+		else if(left > LEFT_MAX) left = LEFT_MAX;
 		// the segment starts on a multiple of 256 units: its stripes are off's
-		// the segment starts on a multiple of 256 units: its stripes are off's
-		*pRun++ = (tRoadRun){.y = y, .dark = (off >> STRIPE_SHIFT) & 1, .row = (uint8_t)r, .left = left};
+		*pRun++ = (tRoadRun){.y = y, .dark = (off >> STRIPE_SHIFT) & 1, .row = (uint8_t)r, .step = 0, .left = left};
 		minY = y;
 		if(y == REGION_TOP) {
 			while(pViewY != pView->y) *--pViewY = -1;   // the rest is hidden
 			break;
 		}
 	}
-	// The horizon strip on top of the road (a run per line), then sky
-	int16_t wBackLeft = LEFT_MIN + (int16_t)((pState->bgX >> 4) & (BACK_PERIOD - 1));
-	uint8_t ubBackRow = ROW_BACK + BACK_H - 1;
-	for(int16_t y = minY - 1; y >= REGION_TOP && ubBackRow >= ROW_BACK; --y, --ubBackRow) {
-		*pRun++ = (tRoadRun){.y = y, .dark = 0, .row = ubBackRow, .left = wBackLeft};
-		minY = y;
+	// The horizon strip on top of the road (as much as fits below REGION_TOP), then sky
+	int16_t wBackTop = minY - BACK_H;
+	if(wBackTop < REGION_TOP) wBackTop = REGION_TOP;
+	if(wBackTop < minY) {
+		int16_t wBackLeft = LEFT_MIN + (int16_t)((pState->bgX >> 4) & (BACK_PERIOD - 1));
+		*pRun++ = (tRoadRun){
+			.y = wBackTop, .dark = 0, .row = (uint8_t)(ROW_BACK + BACK_H - (minY - wBackTop)),
+			.step = 1, .left = wBackLeft
+		};
+		minY = wBackTop;
 	}
 	if(minY > REGION_TOP) {
-		*pRun++ = (tRoadRun){.y = REGION_TOP, .dark = 0, .row = ROW_SKY, .left = LEFT_MIN};
+		*pRun++ = (tRoadRun){.y = REGION_TOP, .dark = 0, .row = ROW_SKY, .step = 0, .left = LEFT_MIN};
 	}
 	return (uint8_t)(pRun - pRuns);
 }
@@ -313,7 +381,8 @@ void logicRoadLines(const tGameState *pState, tRoadLine *pOut, tRoadView *pView)
 	int16_t bottom = SCREEN_H - 1;
 	for(uint8_t i = 0; i < n; ++i) {
 		for(int16_t y = bottom; y >= pRuns[i].y; --y) {
-			pOut[y - REGION_TOP] = (tRoadLine){.dark = pRuns[i].dark, .row = pRuns[i].row, .left = pRuns[i].left};
+			uint8_t row = pRuns[i].row + (pRuns[i].step ? y - pRuns[i].y : 0);
+			pOut[y - REGION_TOP] = (tRoadLine){.dark = pRuns[i].dark, .row = row, .left = pRuns[i].left};
 		}
 		bottom = pRuns[i].y - 1;
 	}
@@ -321,39 +390,70 @@ void logicRoadLines(const tGameState *pState, tRoadLine *pOut, tRoadView *pView)
 
 // ---------------------------------------------------------------- objects
 
+// Where an object at depth z (units from the camera) shows: projected row
+// index, or -1 if it's behind the nearest row, beyond the horizon or hidden
+// behind a crest
+static inline int8_t objectRow(uint16_t z, const tRoadView *pView) {
+	if(z < (ROAD_ZSCALE / ROAD_ROWS) || z >= ROAD_ZSCALE) return -1;
+	uint16_t r1 = div16u(ROAD_ZSCALE, z);                     // r + 1: z = ZSCALE / (r + 1)
+	_Static_assert(ROW_STEP == 2, "the shift below divides by ROW_STEP");
+	uint8_t i = (uint8_t)((uint16_t)(r1 - 1) >> 1);          // / ROW_STEP
+	if(i >= PROJ_ROWS) i = PROJ_ROWS - 1;
+	return pView->y[i] < 0 ? -1 : (int8_t)i;
+}
+
 uint8_t logicObjects(const tGameState *pState, const tRoadView *pView, tObject *pOut) {
-	// Segment by segment from the camera outwards, so the nearest OBJ_MAX are
-	// kept; then reversed, so they come out farthest first
+	// Everything in view, nearest first: palms segment by segment from the
+	// camera outwards, the rivals slotted in by depth. Then the nearest
+	// OBJ_MAX come out farthest first.
+	static tObject pAll[OBJ_PALMS_MAX + TRAFFIC_N];
+	static uint16_t pZ[OBJ_PALMS_MAX + TRAFFIC_N];
 	uint8_t n = 0;
 	uint16_t camSeg = pState->pos >> SEG_SHIFT;
 	uint16_t camFrac = pState->pos & (SEG_LEN - 1);
-	for(uint8_t k = 1; k <= (ROAD_ZSCALE >> SEG_SHIFT) && n < OBJ_MAX - 1; ++k) {
+	for(uint8_t k = 1; k <= (ROAD_ZSCALE >> SEG_SHIFT) && n < OBJ_PALMS_MAX - 1; ++k) {
 		uint16_t seg = camSeg + k;
 		if(seg >= TRACK_SEGS) seg -= TRACK_SEGS;
 		uint8_t flags = s_pScenery[seg];
 		if(!flags) continue;
-		// which projected row is at this depth: z = ZSCALE / (r + 1)
 		uint16_t z = (uint16_t)(k << SEG_SHIFT) - camFrac;
-		if(z < (ROAD_ZSCALE / ROAD_ROWS)) continue;              // behind the nearest row
-		uint16_t r1 = div16u(ROAD_ZSCALE, z);                     // r + 1
-		_Static_assert(ROW_STEP == 2, "the shift below divides by ROW_STEP");
-		uint8_t i = (uint8_t)((uint16_t)(r1 - 1) >> 1);          // / ROW_STEP
-		if(i >= PROJ_ROWS) i = PROJ_ROWS - 1;
-		int16_t y = pView->y[i];
-		if(y < 0) continue;                                      // behind a crest
-		int16_t side = s_pRowSide[i];
+		int8_t i = objectRow(z, pView);
+		if(i < 0) continue;
+		int16_t y = pView->y[i], side = s_pRowSide[i];
 		uint16_t scale = s_pRowScale[i];
 		if(flags & SCENERY_PALM_L) {
-			pOut[n++] = (tObject){.x = pView->cx[i] - side, .y = y, .scale = scale, .type = 0};
+			pZ[n] = z;
+			pAll[n++] = (tObject){.x = pView->cx[i] - side, .y = y, .scale = scale, .type = OBJ_PALM};
 		}
 		if(flags & SCENERY_PALM_R) {
-			pOut[n++] = (tObject){.x = pView->cx[i] + side, .y = y, .scale = scale, .type = 0};
+			pZ[n] = z;
+			pAll[n++] = (tObject){.x = pView->cx[i] + side, .y = y, .scale = scale, .type = OBJ_PALM};
 		}
 	}
-	for(uint8_t a = 0, b = n - 1; a < b && n; ++a, --b) {
-		tObject t = pOut[a];
-		pOut[a] = pOut[b];
-		pOut[b] = t;
+	for(uint8_t c = 0; c < TRAFFIC_N; ++c) {
+		const tRival *pR = &pState->rivals[c];
+		uint32_t d = pR->pos - pState->pos;
+		if(d >= TRACK_LEN) d += TRACK_LEN;                       // (it's behind the start line)
+		if(d >= ROAD_ZSCALE) continue;
+		uint16_t z = (uint16_t)d;
+		int8_t i = objectRow(z, pView);
+		if(i < 0) continue;
+		int16_t half = (int16_t)s_pHalf[ROW_STEP * i + 1];
+		tObject o = {
+			.x = pView->cx[i] + (int16_t)(mul16(s_pLaneX[pR->lane + 1], half) >> 8),
+			.y = pView->y[i], .scale = s_pRowScale[i], .type = OBJ_RIVAL
+		};
+		uint8_t j = n++;
+		for(; j && pZ[j - 1] > z; --j) {
+			pZ[j] = pZ[j - 1];
+			pAll[j] = pAll[j - 1];
+		}
+		pZ[j] = z;
+		pAll[j] = o;
+	}
+	if(n > OBJ_MAX) n = OBJ_MAX;
+	for(uint8_t k = 0; k < n; ++k) {
+		pOut[k] = pAll[n - 1 - k];
 	}
 	return n;
 }

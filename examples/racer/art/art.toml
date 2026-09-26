@@ -25,3 +25,9 @@ wrap_x = 512                   # 512 + 512 = the road bitmap's 1024 px
 # (the sizes are in src/gen_palm.h); drawn with the blitter into playfield 1
 source = "palm_sheet.png"
 kind = "bob"
+
+[rival]
+# The player's car repainted in these colours (art/tools/rival.py -> ai/rival_raw.png),
+# in 10 sizes by art/tools/scale_sheet.py (src/gen_rival.h)
+source = "rival_sheet.png"
+kind = "bob"

@@ -33,7 +33,8 @@
 #include <agk/debug.h>
 #include <agk/perf.h>
 #include "art.h"      // generated from art/ by agk (agk help-art)
-#include "gen_palm.h" // the palm tree's sizes (art/tools/scale_sheet.py)
+#include "gen_palm.h"  // the palm tree's and the rival's sizes (art/tools/scale_sheet.py)
+#include "gen_rival.h"
 #include "logic.h"
 #include <ace/managers/timer.h>
 
@@ -82,15 +83,24 @@ static UBYTE *s_pBlankRow;        // FETCH_BYTES of zeros
 #define FB_ROW_BYTES (FB_PLANE_BYTES * FB_BPP)        // interleaved: all planes of a row
 #define FB_FETCH_OFFS ((FB_X0 - 16) / 8)
 static tBitMap *s_pFb[2];
-static tBitMap *s_pPalmBm, *s_pPalmMask;
+// Objects (tObject.type: OBJ_PALM, OBJ_RIVAL) come in OBJ_LEVELS pre-scaled
+// sizes, stacked in one bitmap (and its mask) per type
+#define OBJ_TYPES 2
+#define OBJ_LEVELS 10
+_Static_assert(PALM_LEVELS == OBJ_LEVELS && RIVAL_LEVELS == OBJ_LEVELS, "one scale table for all");
+static tBitMap *s_pObjBm[OBJ_TYPES], *s_pObjMask[OBJ_TYPES];
+static struct { UWORD y, w, h; } s_pObjSize[OBJ_TYPES][OBJ_LEVELS];
 static tRoadView s_sView;
 static tObject s_pObj[OBJ_MAX];
-static UBYTE s_pScaleLevel[257];         // object scale (1/256) -> palm size
+static UBYTE s_pScaleLevel[257];         // object scale (1/256) -> size (the same for every type)
 static UBYTE s_pDrawnCount[2];          // objects drawn in each buffer
 static tGameState s_sState;
 static tRoadRun s_pRuns[RUN_MAX];
 static UWORD s_pBlockMove[BLOCK_COUNT];   // copper index of each line block's BPLCON1 MOVE
 static UWORD *s_pBlockVal[2][BLOCK_COUNT];  // [buffer][block]: its BPLCON1 value word
+// The blocks are 4 copper commands (8 words) apart, except that the line-255
+// wrap WAIT sits before the block of line s_wWrapLine (2 words more)
+static WORD s_wWrapLine;
 static tCopBfr *s_pCopBfrA;                 // copper buffer 0 of s_pBlockVal
 static UWORD s_pRowOffs[2][ROAD_ROWS];    // [dark][row]: byte offset of the row in a plane
 // Per line lookups for copperUpdate(), indexed by the tRoadLine's (dark, row)
@@ -245,13 +255,32 @@ static void copperTablesCreate(void) {
 			s_pBlockVal[b][i] = &pVal[2 * s_pBlockMove[i] + 1];
 		}
 	}
+	s_wWrapLine = 0x7FFF;
+	for(UWORD i = 1; i < BLOCK_COUNT; ++i) {
+		UWORD uwGap = s_pBlockMove[i] - s_pBlockMove[i - 1];
+		if(uwGap == 5 && s_wWrapLine == 0x7FFF) {
+			s_wWrapLine = BLOCK_FIRST_LINE + i;
+		}
+		else if(uwGap != 4) {
+			agkPrint("AGK ERR copper blocks aren't evenly spaced: see copperUpdate\n");
+		}
+	}
 }
 
 // -------------------------------------------------------------- objects ---
 
 static void objectsInit(void) {
-	// For each scale (1/256 of the nearest row's size), the palm size whose
-	// height is closest to that fraction of the full size
+	for(UBYTE l = 0; l < OBJ_LEVELS; ++l) {
+		s_pObjSize[OBJ_PALM][l].y = g_pPalmLevel[l].y;
+		s_pObjSize[OBJ_PALM][l].w = g_pPalmLevel[l].w;
+		s_pObjSize[OBJ_PALM][l].h = g_pPalmLevel[l].h;
+		s_pObjSize[OBJ_RIVAL][l].y = g_pRivalLevel[l].y;
+		s_pObjSize[OBJ_RIVAL][l].w = g_pRivalLevel[l].w;
+		s_pObjSize[OBJ_RIVAL][l].h = g_pRivalLevel[l].h;
+	}
+	// For each scale (1/256 of the nearest row's size), the size whose height
+	// is closest to that fraction of the full size (the sheets all use the
+	// same steps: the palm's stand for all)
 	UWORD uwFull = g_pPalmLevel[PALM_LEVELS - 1].h;
 	for(UWORD s = 0; s <= 256; ++s) {
 		UWORD uwWant = (UWORD)((ULONG)uwFull * s / 256);
@@ -319,33 +348,35 @@ static void blitQueueWait(void) {
 	s_ubBlitNext = 0;
 }
 
-// The palm's blits, precomputed per size and per "needs an extra word for
-// the shift" (x & 15 + w > the source's width): only the shift and the
+// The objects' blits, precomputed per type, size and "needs an extra word
+// for the shift" (x & 15 + w > the source's width): only the shift and the
 // destination change per object.
-static tBlit s_pPalmBlit[PALM_LEVELS][2];
+static tBlit s_pObjBlit[OBJ_TYPES][OBJ_LEVELS][2];
 static UWORD s_pFbRowOffs[SCREEN_H];      // y * FB_ROW_BYTES
 // What each buffer showed: its blits, reused (destination only) to erase it
 static tBlit s_pErase[2][OBJ_MAX];
 
 static void blitTemplatesCreate(void) {
-	const UWORD uwSrcWords = ART_PALM_BITMAP_W / 16;
-	for(UBYTE l = 0; l < PALM_LEVELS; ++l) {
-		UWORD w = g_pPalmLevel[l].w, h = g_pPalmLevel[l].h;
-		ULONG ulSrc = (ULONG)g_pPalmLevel[l].y * s_pPalmBm->BytesPerRow;
-		for(UBYTE e = 0; e < 2; ++e) {
-			UWORD uwWords = ((w + 15) >> 4) + e;
-			tBlit *pB = &s_pPalmBlit[l][e];
-			pB->uwCon0 = USEA | USEB | USEC | USED | 0xCA;    // cookie cut (+ shift)
-			pB->uwCon1 = 0;
-			// A blit one word wider than the source reads a word past each
-			// row: the last-word mask hides it
-			pB->uwAlwm = uwWords > uwSrcWords ? 0x0000 : 0xFFFF;
-			pB->pA = s_pPalmMask->Planes[0] + ulSrc;
-			pB->pB = s_pPalmBm->Planes[0] + ulSrc;
-			pB->pCD = 0;
-			pB->wSrcMod = (WORD)(uwSrcWords * 2) - 2 * uwWords;
-			pB->wDstMod = FB_PLANE_BYTES - 2 * uwWords;
-			pB->uwSize = ((h * FB_BPP) << 6) | uwWords;
+	for(UBYTE t = 0; t < OBJ_TYPES; ++t) {
+		const UWORD uwSrcWords = s_pObjBm[t]->BytesPerRow / (2 * FB_BPP);
+		for(UBYTE l = 0; l < OBJ_LEVELS; ++l) {
+			UWORD w = s_pObjSize[t][l].w, h = s_pObjSize[t][l].h;
+			ULONG ulSrc = (ULONG)s_pObjSize[t][l].y * s_pObjBm[t]->BytesPerRow;
+			for(UBYTE e = 0; e < 2; ++e) {
+				UWORD uwWords = ((w + 15) >> 4) + e;
+				tBlit *pB = &s_pObjBlit[t][l][e];
+				pB->uwCon0 = USEA | USEB | USEC | USED | 0xCA;    // cookie cut (+ shift)
+				pB->uwCon1 = 0;
+				// A blit one word wider than the source reads a word past each
+				// row: the last-word mask hides it
+				pB->uwAlwm = uwWords > uwSrcWords ? 0x0000 : 0xFFFF;
+				pB->pA = s_pObjMask[t]->Planes[0] + ulSrc;
+				pB->pB = s_pObjBm[t]->Planes[0] + ulSrc;
+				pB->pCD = 0;
+				pB->wSrcMod = (WORD)(uwSrcWords * 2) - 2 * uwWords;
+				pB->wDstMod = FB_PLANE_BYTES - 2 * uwWords;
+				pB->uwSize = ((h * FB_BPP) << 6) | uwWords;
+			}
 		}
 	}
 	for(UWORD y = 0; y < SCREEN_H; ++y) s_pFbRowOffs[y] = y * FB_ROW_BYTES;
@@ -368,11 +399,11 @@ static void objectsQueue(UBYTE ubBfr) {
 	const tObject *pO = s_pObj;
 	for(UBYTE i = n; i--; ++pO) {
 		UBYTE ubLevel = s_pScaleLevel[pO->scale];
-		WORD w = g_pPalmLevel[ubLevel].w, h = g_pPalmLevel[ubLevel].h;
+		WORD w = s_pObjSize[pO->type][ubLevel].w, h = s_pObjSize[pO->type][ubLevel].h;
 		WORD x = pO->x - (w >> 1) + FB_X0, y = pO->y - h + 1;
 		if(x < 0 || x + w > FB_W || y < 0 || pO->y >= SCREEN_H) continue;   // off screen
 		UBYTE ubShift = x & 15;
-		const tBlit *pT = &s_pPalmBlit[ubLevel][((ubShift + w + 15) >> 4) > ((w + 15) >> 4)];
+		const tBlit *pT = &s_pObjBlit[pO->type][ubLevel][((ubShift + w + 15) >> 4) > ((w + 15) >> 4)];
 		*pQ = *pT;
 		pQ->uwCon0 |= ubShift << ASHIFTSHIFT;
 		pQ->uwCon1 = ubShift << BSHIFTSHIFT;
@@ -388,6 +419,22 @@ static void objectsQueue(UBYTE ubBfr) {
 // run (a run = lines showing the same road row) from the bottom up. Inside a
 // run every line gets the same BPLCON1 and the modulo -FETCH_BYTES (re-read the
 // row); the last line of a run gets the jump to the row of the run below.
+// Fill the uwLines line blocks above pVal (BPLCON1 = uwCon1, BPL2MOD =
+// uwMod: the same row again or the next one); returns the topmost. (A pointer
+// compare with a hidden stop: counting lines down made GCC work out the end
+// pointer with a library multiply.)
+static inline UWORD *linesFill(UWORD *pVal, UWORD uwLines, UWORD uwCon1, UWORD uwMod) {
+	ULONG ulBytes = (ULONG)uwLines << 4;   // 8 words per block
+	__asm__("" : "+d"(ulBytes));
+	UWORD *pStop = (UWORD *)((UBYTE *)pVal - ulBytes);
+	while(pVal != pStop) {
+		pVal -= 8;
+		pVal[0] = uwCon1;
+		pVal[2] = uwMod;
+	}
+	return pStop;
+}
+
 static void copperUpdate(void) {
 	UBYTE n = logicRoadRuns(&s_sState, s_pRuns, &s_sView);
 	// The objects need this picture's road; queue their blits now so the
@@ -395,8 +442,12 @@ static void copperUpdate(void) {
 	objectsQueue(s_pView->pCopList->pBackBfr == s_pCopBfrA ? 0 : 1);
 	blitQueueStart();
 
+	// Bottom-up, a line's block is 8 words above the one below it (10 across
+	// the wrap WAIT): stepping a pointer, not a table of them, halves the
+	// memory accesses (the program runs from slow RAM, which shares the bus
+	// with the display and the blitter)
 	UWORD **pBlock = s_pBlockVal[s_pView->pCopList->pBackBfr == s_pCopBfrA ? 0 : 1];
-	UWORD **pLine = &pBlock[SCREEN_H - REGION_TOP];   // line 255's block (block 0 is line REGION_TOP-1)
+	UWORD *pVal = pBlock[SCREEN_H - 1 - BLOCK_FIRST_LINE];    // line 255's block
 	WORD wOffsBelow = 0, wBottom = SCREEN_H - 1;
 	const tRoadRun *pRun = s_pRuns;
 	for(UBYTE i = 0; i < n; ++i, ++pRun) {
@@ -404,26 +455,32 @@ static void copperUpdate(void) {
 		WORD wLeft = pRun->left;
 		WORD wOffs = s_pKeyOffs[((UWORD)pRun->dark << 8) | pRun->row] + s_pLeftOffs[wLeft];
 		UWORD uwCon1 = s_pLeftCon1[wLeft];
-		// its bottom line: the jump into the run below (line 255: nothing follows)
-		UWORD *pVal = *pLine--;
-		pVal[0] = uwCon1;
-		pVal[2] = i ? (UWORD)(wOffsBelow - wOffs - FETCH_BYTES) : (UWORD)-FETCH_BYTES;
-		// (a pointer compare: counting lines made GCC work out the end
-		// pointer with a library multiply every run)
-		ULONG ulBytes = (ULONG)(UWORD)(wBottom - pRun->y) << 2;
-		__asm__("" : "+d"(ulBytes));   // keep GCC from folding it back into a multiply
-		UWORD **pStop = (UWORD **)((UBYTE *)pLine - ulBytes);
-		while(pLine != pStop) {
-			pVal = *pLine--;
-			pVal[0] = uwCon1;
-			pVal[2] = (UWORD)-FETCH_BYTES;
+		// its bottom line: the jump into the run below (line 255: nothing
+		// follows). A stepping run (the horizon strip) shows the next row on
+		// each line: its bottom row is further down the bitmap.
+		WORD wTop = pRun->y;
+		UWORD uwMod = (UWORD)-FETCH_BYTES;
+		WORD wOffsBottom = wOffs;
+		if(pRun->step) {
+			uwMod = ROAD_BYTES_PER_ROW - FETCH_BYTES;
+			wOffsBottom += (wBottom - wTop) << 7;
+			_Static_assert(ROAD_BYTES_PER_ROW == 1 << 7, "the shift above");
 		}
-		pLine = pStop;
+		pVal[0] = uwCon1;
+		pVal[2] = i ? (UWORD)(wOffsBelow - wOffsBottom - FETCH_BYTES) : (UWORD)-FETCH_BYTES;
+		// the lines above it in the run
+		if(wBottom >= s_wWrapLine && wTop < s_wWrapLine) {
+			pVal = linesFill(pVal, wBottom - s_wWrapLine, uwCon1, uwMod) - 2;   // (- 2: over the wrap WAIT)
+			wBottom = s_wWrapLine;
+		}
+		pVal = linesFill(pVal, wBottom - wTop, uwCon1, uwMod);
+		if(wTop == s_wWrapLine) pVal -= 2;
+		pVal -= 8;                            // the block of the next run's bottom line
 		wOffsBelow = wOffs;
-		wBottom = pRun->y - 1;
+		wBottom = wTop - 1;
 	}
 	// Line REGION_TOP-1 (always sky): the jump into the top run
-	(*pLine)[2] = (UWORD)(wOffsBelow - ROAD_EMPTY_OFFS - FETCH_BYTES);
+	pVal[2] = (UWORD)(wOffsBelow - ROAD_EMPTY_OFFS - FETCH_BYTES);
 }
 
 // ---------------------------------------------------------------- road ---
@@ -506,8 +563,10 @@ void genericCreate(void) {
 	for(UBYTE b = 0; b < 2; ++b) {
 		s_pFb[b] = bitmapCreate(FB_W, SCREEN_H, FB_BPP, BMF_CLEAR | BMF_INTERLEAVED);
 	}
-	s_pPalmBm = artPalmCreate();
-	s_pPalmMask = artPalmCreateMask();
+	s_pObjBm[OBJ_PALM] = artPalmCreate();
+	s_pObjMask[OBJ_PALM] = artPalmCreateMask();
+	s_pObjBm[OBJ_RIVAL] = artRivalCreate();
+	s_pObjMask[OBJ_RIVAL] = artRivalCreateMask();
 	objectsInit();
 	blitTemplatesCreate();
 	rowOffsCreate();
@@ -613,6 +672,7 @@ void genericProcess(void) {
 		agkState("x", s_sState.x);
 		agkState("off", s_sState.offroad);
 		agkState("laps", s_sState.laps);
+		agkState("bumps", s_sState.bumps);
 		agkEnd();
 	}
 
@@ -647,8 +707,10 @@ void genericDestroy(void) {
 		}
 	}
 	memFree(s_pBlankRow, FETCH_BYTES);
-	bitmapDestroy(s_pPalmBm);
-	bitmapDestroy(s_pPalmMask);
+	for(UBYTE t = 0; t < OBJ_TYPES; ++t) {
+		bitmapDestroy(s_pObjBm[t]);
+		bitmapDestroy(s_pObjMask[t]);
+	}
 	for(UBYTE b = 0; b < 2; ++b) bitmapDestroy(s_pFb[b]);
 	bitmapDestroy(s_pRoad);
 	viewDestroy(s_pView);

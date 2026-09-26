@@ -1,0 +1,10 @@
+# Straight down the middle lane into the first rival: we bump into its back
+# (and bounce off, slower), then pull out to the left and overtake it.
+wait-serial "AGK t0"
+press up 250
+screenshot bump
+expect-serial "bumps=[1-9]"
+press up+left 15
+press up 150
+screenshot overtaken
+expect-no-serial "ERR|STACK SMASHED"

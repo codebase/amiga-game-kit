@@ -5,6 +5,10 @@ vertically, left-aligned) for the art pipeline and a C table of where each
 size is in it.
 
     python3 art/tools/scale_sheet.py palm ai/palm_raw.png 10
+    python3 art/tools/scale_sheet.py rival ai/rival_raw.png 10 1.2
+
+The optional last argument scales every size (the rivals: 1.2, so one beside
+the player's car is as big as it).
 
 -> art/palm_sheet.png, src/gen_palm.h (PALM_LEVELS, g_pPalmLevel[] = {y, w, h}).
 Level 0 is the smallest (far away), the last is the source's own size.
@@ -14,19 +18,20 @@ import sys
 from PIL import Image
 
 name, src, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
+top = float(sys.argv[4]) if len(sys.argv) > 4 else 1.0
 here = os.path.dirname(os.path.abspath(__file__))
 art = os.path.join(here, '..')
 im = Image.open(os.path.join(art, src)).convert('RGBA')
 im = im.crop(im.getbbox())
 W, H = im.size
 # sizes grow geometrically: the far ones differ by a pixel or two, the near ones by more
-scales = [0.07 * (1 / 0.07) ** (i / (n - 1)) for i in range(n)]
+scales = [top * 0.07 * (1 / 0.07) ** (i / (n - 1)) for i in range(n)]
 levels, y = [], 0
 for sc in scales:
     w, h = max(2, round(W * sc)), max(3, round(H * sc))
     levels.append((y, w, h, im.resize((w, h), Image.NEAREST)))
     y += h
-sheet = Image.new('RGBA', (W, y), (0, 0, 0, 0))
+sheet = Image.new('RGBA', (max(l[1] for l in levels), y), (0, 0, 0, 0))
 for (ly, w, h, img) in levels:
     sheet.paste(img, (0, ly))
 sheet.save(os.path.join(art, f'{name}_sheet.png'))
@@ -40,4 +45,4 @@ lines += [f'\t{{{ly}, {w}, {h}}},' for (ly, w, h, _) in levels]
 lines += ['};', '', '#endif', '']
 with open(os.path.join(art, '..', 'src', f'gen_{name}.h'), 'w') as f:
     f.write('\n'.join(lines))
-print(f'{name}: {n} sizes, {W}x{H} down to {levels[0][1]}x{levels[0][2]}; sheet {W}x{y}')
+print(f'{name}: {n} sizes, {W}x{H} down to {levels[0][1]}x{levels[0][2]}; sheet {sheet.width}x{y}')
