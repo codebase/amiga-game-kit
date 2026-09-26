@@ -89,8 +89,8 @@ typedef struct {
 } tGameState;
 
 typedef struct {
-	uint8_t row;       // road bitmap row, or ROW_SKY
 	uint8_t dark;      // stripe phase: 0 light, 1 dark
+	uint8_t row;       // road bitmap row, or ROW_SKY
 	int16_t left;      // bitmap column shown at screen x 0 (LEFT_MIN..LEFT_MAX)
 } tRoadLine;
 

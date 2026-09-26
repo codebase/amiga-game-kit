@@ -70,7 +70,14 @@ static UBYTE *s_pBlankRow;        // PF1: FETCH_BYTES of zeros (modulo -FETCH_BY
 static tGameState s_sState;
 static tRoadLine s_pLines[REGION_LINES];
 static UWORD s_pBlockMove[BLOCK_COUNT];   // copper index of each line block's BPLCON1 MOVE
+static UWORD *s_pBlockVal[2][BLOCK_COUNT];  // [buffer][block]: its BPLCON1 value word
+static tCopBfr *s_pCopBfrA;                 // copper buffer 0 of s_pBlockVal
 static UWORD s_pRowOffs[2][ROAD_ROWS];    // [dark][row]: byte offset of the row in a plane
+// Per line lookups for copperUpdate(), indexed by the tRoadLine's (dark, row)
+// word (dark << 8 | row; ROW_SKY -> the empty row) and by its left column
+static WORD s_pKeyOffs[512];
+static WORD s_pLeftOffs[ROAD_BMP_W];
+static UWORD s_pLeftCon1[ROAD_BMP_W];
 static UWORD s_pSky[SCREEN_H];
 static UWORD s_uwCopUsed;
 
@@ -186,27 +193,52 @@ static inline UWORD scrollDelay(WORD wLeft) {
 	return (UWORD)((16 - (wLeft & 15)) & 15);
 }
 
+static void rowOffsCreate(void) {
+	// Where each depth's row is stored: only every ROW_STEP-th depth is
+	// projected, so depth r is bitmap row r / ROW_STEP (light rows, then dark)
+	for(UBYTE ubDark = 0; ubDark < 2; ++ubDark) {
+		for(UBYTE r = 0; r < ROAD_ROWS; ++r) {
+			s_pRowOffs[ubDark][r] = (ubDark * ROAD_STORED + r / ROW_STEP) * ROAD_BYTES_PER_ROW;
+		}
+	}
+}
+
+static void copperTablesCreate(void) {
+	for(UWORD k = 0; k < 512; ++k) {
+		UBYTE ubRow = k & 0xFF, ubDark = k >> 8;
+		s_pKeyOffs[k] = ubRow < ROAD_ROWS ? s_pRowOffs[ubDark][ubRow] : ROAD_EMPTY_OFFS;
+	}
+	for(WORD x = 0; x < ROAD_BMP_W; ++x) {
+		s_pLeftOffs[x] = scrollByteOffset(x);
+		s_pLeftCon1[x] = scrollDelay(x) << 4;   // PF2 delay: BPLCON1 bits 4-7
+	}
+	// (sky lines have left = LEFT_MIN: offset 0 and delay 0, the empty row as is)
+	tCopList *pCopList = s_pView->pCopList;
+	s_pCopBfrA = pCopList->pBackBfr;
+	for(UBYTE b = 0; b < 2; ++b) {
+		UWORD *pVal = (UWORD *)(b ? pCopList->pFrontBfr : pCopList->pBackBfr)->pList;
+		for(UWORD i = 0; i < BLOCK_COUNT; ++i) {
+			// the value word of copper instruction n is word 2n+1 of the list
+			s_pBlockVal[b][i] = &pVal[2 * s_pBlockMove[i] + 1];
+		}
+	}
+}
+
 // Rewrite the back buffer's per-line values from this frame's road layout.
+// Per line: two table lookups, a subtraction and two word writes.
 static void copperUpdate(void) {
 	logicRoadLines(&s_sState, s_pLines);
-	// The value word of copper instruction i is word 2*i+1 of the list
-	UWORD *pVal = (UWORD *)s_pView->pCopList->pBackBfr->pList;
-	WORD wPrev = ROAD_EMPTY_OFFS;   // line REGION_TOP-1 always shows the sky
-	UWORD *pModPrev = &pVal[2 * (s_pBlockMove[0] + 1) + 1];   // block REGION_TOP-1's BPL2MOD
-	for(UWORD l = 0; l < REGION_LINES; ++l) {
-		const tRoadLine *pL = &s_pLines[l];
-		UWORD *pBlock = &pVal[2 * s_pBlockMove[l + 1] + 1];     // block of line REGION_TOP + l
-		WORD wOffs;
-		if(pL->row == ROW_SKY) {
-			wOffs = ROAD_EMPTY_OFFS;
-			pBlock[0] = 0;
-		}
-		else {
-			wOffs = s_pRowOffs[pL->dark][pL->row] + scrollByteOffset(pL->left);
-			pBlock[0] = scrollDelay(pL->left) << 4;   // PF2 delay: bits 4-7
-		}
+	UWORD **pBlock = s_pBlockVal[s_pView->pCopList->pBackBfr == s_pCopBfrA ? 0 : 1];
+	WORD wPrev = ROAD_EMPTY_OFFS;          // line REGION_TOP-1 always shows the sky
+	UWORD *pModPrev = pBlock[0] + 2;       // its block's BPL2MOD value
+	const tRoadLine *pL = s_pLines;
+	for(UWORD l = REGION_LINES; l--; ++pL) {
+		UWORD *pVal = *++pBlock;
+		WORD wLeft = pL->left;
+		WORD wOffs = s_pKeyOffs[((UWORD)pL->dark << 8) | pL->row] + s_pLeftOffs[wLeft];
+		pVal[0] = s_pLeftCon1[wLeft];
 		*pModPrev = (UWORD)(wOffs - wPrev - FETCH_BYTES);
-		pModPrev = &pBlock[2];
+		pModPrev = pVal + 2;
 		wPrev = wOffs;
 	}
 }
@@ -217,8 +249,6 @@ static void roadDraw(void) {
 	// Once, at startup: each row twice (light, dark), 16 px at a time.
 	for(UBYTE ubDark = 0; ubDark < 2; ++ubDark) {
 		for(UBYTE r = 0; r < ROAD_ROWS; ++r) {
-			UWORD uwRow = ubDark * ROAD_STORED + r / ROW_STEP;
-			s_pRowOffs[ubDark][r] = uwRow * ROAD_BYTES_PER_ROW;
 			if((ROAD_ROWS - 1 - r) % ROW_STEP) {
 				continue;   // never projected: shares its stored row, not drawn
 			}
@@ -275,6 +305,8 @@ void genericCreate(void) {
 
 	s_pRoad = bitmapCreate(ROAD_BMP_W, ROAD_BMP_ROWS, ROAD_BPP, BMF_CLEAR);
 	s_pBlankRow = memAllocChipClear(FETCH_BYTES);
+	rowOffsCreate();
+	roadDraw();
 
 	for(UWORD y = 0; y < SCREEN_H; ++y) s_pSky[y] = logicSkyColor(y);
 	logicInit(&s_sState);
@@ -300,6 +332,7 @@ void genericCreate(void) {
 	tCopList *pCopList = s_pView->pCopList;
 	copperWriteList(pCopList->pBackBfr->pList, s_pView->ubPosY);
 	copperWriteList(pCopList->pFrontBfr->pList, s_pView->ubPosY);
+	copperTablesCreate();
 	copperUpdate();
 	copProcessBlocks();
 	copperUpdate();
@@ -307,7 +340,6 @@ void genericCreate(void) {
 	viewLoad(s_pView);
 	systemUnuse();
 	agkPerfSetFrameVbls(FRAME_VBLS);
-	roadDraw();   // with the OS off (see README: drawn before, it came out blank)
 	agkDebugAsync(1); // serial channel only: interrupt-driven from here on
 }
 
@@ -315,8 +347,12 @@ static ULONG s_ulFrameVbl;   // vertical blank count when this picture started
 
 static void carUpdate(BYTE bSteer) {
 	UBYTE ubFrame = bSteer < 0 ? CAR_FRAME_LEFT : bSteer > 0 ? CAR_FRAME_RIGHT : 0;
-	// On the grass the car shakes (1 px, every other picture)
-	WORD wY = CAR_Y + ((s_sState.offroad && s_sState.speed && (s_sState.frame & 2)) ? 1 : 0);
+	// On the grass the car shakes (1 px, every other picture). Written without
+	// branches: as "offroad && speed && (frame & 2) ? 1 : 0" GCC 6.5 (-O3) left
+	// the register for the 0 case uninitialised - the car jumped around the top
+	// of the screen whenever it was on the road.
+	WORD wBounce = (WORD)(s_sState.offroad & (s_sState.speed != 0) & ((s_sState.frame >> 1) & 1));
+	WORD wY = CAR_Y + wBounce;
 	for(UBYTE p = 0; p < ART_CAR_PARTS; ++p) {
 		tSprite *pSpr = s_pCar[p];
 		if(ubFrame != s_ubCarFrame) {

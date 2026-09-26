@@ -231,7 +231,9 @@ void logicRoadLines(const tGameState *pState, tRoadLine *pOut) {
 			// (a 16-bit value: one MULS per row count below, no 32-bit multiply)
 			int32_t c = (int32_t)h0 * 16 - (mul16(d, z0) >> (SEG_SHIFT - 4));
 			int16_t aFx = (int16_t)(1024 - (c >> (4 + CAM_SHIFT - 10)));
-			int32_t bFx = -mul16(d, ROAD_ZSCALE >> SEG_SHIFT) * (1 << (10 - CAM_SHIFT));   // s * ZSCALE / CAM_H
+			// s * ZSCALE / CAM_H: one MULS by a folded 16-bit constant (as
+			// "* 40 * 2, negated" GCC called the 32-bit ___mulsi3 by -2)
+			int32_t bFx = mul16(d, -(ROAD_ZSCALE >> SEG_SHIFT) * (1 << (10 - CAM_SHIFT)));
 			yStep = aFx * ROW_STEP;
 			yFx = (int32_t)HORIZON_Y * 1024 + mul16(aFx, r + 1) + bFx;
 		}
@@ -249,21 +251,22 @@ void logicRoadLines(const tGameState *pState, tRoadLine *pOut) {
 		if(left < LEFT_MIN) left = LEFT_MIN;
 		if(left > LEFT_MAX) left = LEFT_MAX;
 		tRoadLine sLine = {
-			.row = (uint8_t)r,
 			.dark = ((uint16_t)(stripeBase + s_pZ[r]) >> STRIPE_SHIFT) & 1,
+			.row = (uint8_t)r,
 			.left = left
 		};
-		// A plain counted loop of 4-byte copies: GCC turned the pointer
-		// version into an unrolled loop whose trip count cost two 32-bit
-		// multiplies per row - it was half of this function's time.
-		int16_t n = minY - y;
-		do {
+		// Copy until the pointer reaches its target. (Written with a count or
+		// as pFill > pTop, GCC computed the pointer's end value as count * -4
+		// with a 32-bit ___mulsi3 call per row.)
+		tRoadLine *pTop = &pOut[y - REGION_TOP];
+		while(pFill != pTop) {
 			*--pFill = sLine;
-		} while(--n);
+		}
+		pFill = pTop;   // (already true: stops GCC computing it with a multiply)
 		minY = y;
 		if(y == REGION_TOP) break;
 	}
-	tRoadLine sSky = {.row = ROW_SKY, .dark = 0, .left = LEFT_MIN};
+	tRoadLine sSky = {.dark = 0, .row = ROW_SKY, .left = LEFT_MIN};
 	for(int16_t n = minY - REGION_TOP; n > 0; --n) {
 		*--pFill = sSky;
 	}
