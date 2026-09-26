@@ -35,12 +35,19 @@
 #include "art.h"      // generated from art/ by agk (agk help-art)
 #include "gen_palm.h"  // the palm tree's and the rival's sizes (art/tools/scale_sheet.py)
 #include "gen_rival.h"
+#include "gen_font.h"   // the HUD's letters (art/tools/font.py)
 #include "logic.h"
 #include <ace/managers/timer.h>
 
 // ------------------------------------------------------ display constants ---
 
 #define BPLCON0_DPF6 0x6600   // 6 planes (BPU=6) | DBLPF | COLOR
+#define BPLCON0_OFF 0x0200    // no planes: the border colour (COLOR00) only
+// Above this line there's only sky (COLOR00, set per line): the planes are
+// off, so their DMA doesn't slow the CPU (6 planes cost ~11% of the CPU per
+// plane over the whole screen; these lines are 1/7 of it). Frame buffer line
+// y is still screen line y: playfield 1 starts fetching at this row.
+#define PLANES_ON_LINE 36
 #define BPLCON2_DPF 0x0024    // PF2PRI=0 (PF1 in front), sprites in front of both
 #define DDFSTRT_SCROLL 0x30   // one fetch word early for fine scroll (costs sprite 7)
 #define DDFSTOP_LORES 0xD0
@@ -171,7 +178,7 @@ static void copperWriteList(tCopCmd *pList, UWORD uwBeamTop, const tBitMap *pFb)
 	tCopWriter sW = {.pList = pList, .uwPos = COP_TOP_POS, .uwBeamTop = uwBeamTop};
 
 	// Top of frame (vertical blank, no WAIT)
-	cwMove(&sW, &g_pCustom->bplcon0, BPLCON0_DPF6);
+	cwMove(&sW, &g_pCustom->bplcon0, BPLCON0_OFF);
 	cwMove(&sW, &g_pCustom->bplcon2, BPLCON2_DPF);
 	cwMove(&sW, &g_pCustom->ddfstrt, DDFSTRT_SCROLL);
 	cwMove(&sW, &g_pCustom->ddfstop, DDFSTOP_LORES);
@@ -179,18 +186,19 @@ static void copperWriteList(tCopCmd *pList, UWORD uwBeamTop, const tBitMap *pFb)
 	cwMove(&sW, &g_pCustom->bpl2mod, (UWORD)-FETCH_BYTES);   // PF2: re-read the empty row
 	cwMove(&sW, &g_pCustom->bplcon1, 0);
 	for(UBYTE p = 0; p < 3; ++p) {
-		cwPtrs(&sW, 2 * p, (ULONG)pFb->Planes[p] + FB_FETCH_OFFS);         // PF1
+		cwPtrs(&sW, 2 * p, (ULONG)pFb->Planes[p] + PLANES_ON_LINE * FB_ROW_BYTES + FB_FETCH_OFFS);   // PF1
 		cwPtrs(&sW, 2 * p + 1, (ULONG)s_pRoad->Planes[p] + ROAD_EMPTY_OFFS); // PF2
 	}
 	cwMove(&sW, &g_pCustom->color[0], s_pSky[0]);
 	for(UBYTE i = 1; i < 8; ++i) cwMove(&sW, &g_pCustom->color[8 + i], s_pRoadPalette[i]);
 
 	// Sky above the road region: one colour per line (when it changes)
+	_Static_assert(PLANES_ON_LINE < BLOCK_FIRST_LINE, "the planes go on in the sky part");
 	for(UWORD y = 1; y < BLOCK_FIRST_LINE; ++y) {
-		if(s_pSky[y] != s_pSky[y - 1]) {
-			cwWait(&sW, y, 0);
-			cwMove(&sW, &g_pCustom->color[0], s_pSky[y]);
-		}
+		UBYTE isColor = s_pSky[y] != s_pSky[y - 1];
+		if(isColor || y == PLANES_ON_LINE) cwWait(&sW, y, 0);
+		if(isColor) cwMove(&sW, &g_pCustom->color[0], s_pSky[y]);
+		if(y == PLANES_ON_LINE) cwMove(&sW, &g_pCustom->bplcon0, BPLCON0_DPF6);
 	}
 	// A block per line b, at the start of that line before its first fetch:
 	// BPLCON1 for line b, BPL2MOD for the jump after line b's fetch (to line
@@ -544,6 +552,9 @@ static void readInput(tInput *pInput) {
 	pInput->brake = joyCheck(JOY1 + JOY_DOWN);
 }
 
+static void hudInit(void);
+static void hudUpdate(UBYTE ubBfr, UBYTE ubBudget);
+
 void genericCreate(void) {
 	agkDebugInit();
 	agkPrint("AGK boot racer\n");
@@ -575,6 +586,11 @@ void genericCreate(void) {
 
 	for(UWORD y = 0; y < SCREEN_H; ++y) s_pSky[y] = logicSkyColor(y);
 	logicInit(&s_sState);
+	logicTitle(&s_sState);
+	s_sState.phaseFrames = TITLE_WAIT;   // (fire isn't held over from a race at boot)
+	hudInit();
+	hudUpdate(0, 255);   // the first screen whole (at boot there's time)
+	hudUpdate(1, 255);
 
 	// Copper slots 0-15 are the sprite pointers (the sprite manager fills them;
 	// left at zero they'd stop the copper: 0 is a MOVE to BLTDDAT).
@@ -613,6 +629,204 @@ void genericCreate(void) {
 static ULONG s_ulFrameVbl;   // vertical blank count when this picture started
 static WORD s_wLastX;
 static UBYTE s_ubLastOff;
+
+// ------------------------------------------------------------------ HUD ---
+// Text in playfield 1's top lines (from PLANES_ON_LINE) and on the horizon
+// strip (where no object reaches): the CPU copies letters in (small: 8x8, big: 16x16 by doubling
+// the pixels), only those that changed since that buffer last showed them.
+
+typedef struct {
+	UWORD uwX, uwY;    // px (small: a multiple of 8, big: of 16), line
+	UBYTE isBig, ubLen;
+} tHudItem;
+#define HUD_LABELS 0
+#define HUD_TIME 1
+#define HUD_SCORE 2
+#define HUD_SPEED 3
+#define HUD_MSG 4
+#define HUD_SUB 5
+#define HUD_ITEMS 6
+#define HUD_LEN_MAX 36
+static const tHudItem s_pHudItems[HUD_ITEMS] = {
+	[HUD_LABELS] = {16, PLANES_ON_LINE + 2, 0, 36},
+	[HUD_TIME] = {16, PLANES_ON_LINE + 11, 1, 2},
+	[HUD_SCORE] = {136, PLANES_ON_LINE + 14, 0, 7},
+	[HUD_SPEED] = {248, PLANES_ON_LINE + 14, 0, 8},
+	[HUD_MSG] = {64, PLANES_ON_LINE + 26, 1, 12},
+	[HUD_SUB] = {120, PLANES_ON_LINE + 44, 0, 10},
+};
+static char s_pHudShown[2][HUD_ITEMS][HUD_LEN_MAX];   // per buffer: what's there
+static UBYTE s_pFontIndex[128];     // character -> g_pFont index (unknown: the space)
+static UWORD s_pDouble[256];        // a byte with each pixel doubled
+// Letters per picture (a big one counts 4): a whole new screen of text is
+// spread over a few pictures instead of one slow one. What didn't fit is
+// still different from s_pHudShown, so it's drawn next time.
+#define HUD_BUDGET 12
+static UBYTE s_ubHudBudget;
+// Per buffer and item, what it shows (a value, or the text's address) once
+// it's all drawn: unchanged items cost a compare
+#define HUD_KEY_NONE 0xFFFFFFFF
+static ULONG s_pHudKey[2][HUD_ITEMS];
+// The score in decimal, counted up digit by digit (7 DIVUs a picture otherwise)
+static char s_szScore[8] = "0000000";
+static ULONG s_ulScore;
+
+static void hudInit(void) {
+	for(UWORD b = 0; b < 2; ++b)
+		for(UWORD i = 0; i < HUD_ITEMS; ++i)
+			for(UWORD c = 0; c < HUD_LEN_MAX; ++c) s_pHudShown[b][i][c] = ' ';   // (the buffers start empty)
+	for(UWORD b = 0; b < 2; ++b)
+		for(UWORD i = 0; i < HUD_ITEMS; ++i) s_pHudKey[b][i] = HUD_KEY_NONE;
+	const char *szChars = FONT_CHARS;
+	for(UBYTE i = 0; szChars[i]; ++i) s_pFontIndex[(UBYTE)szChars[i]] = i;
+	for(UWORD v = 0; v < 256; ++v) {
+		UWORD d = 0;
+		for(UBYTE b = 0; b < 8; ++b) if(v & (0x80 >> b)) d |= 0xC000 >> (2 * b);
+		s_pDouble[v] = d;
+	}
+}
+
+static void hudChar(tBitMap *pFb, UWORD uwX, UWORD uwY, UBYTE isBig, char c) {
+	const UBYTE (*pGlyph)[2] = g_pFont[s_pFontIndex[(UBYTE)c & 0x7F]];
+	UBYTE *pRow = pFb->Planes[0] + s_pFbRowOffs[uwY] + ((FB_X0 + uwX) >> 3);
+	if(!isBig) {
+		for(UBYTE r = 0; r < 8; ++r, pRow += FB_ROW_BYTES) {
+			pRow[0] = pGlyph[r][0];
+			pRow[FB_PLANE_BYTES] = pGlyph[r][1];
+			pRow[2 * FB_PLANE_BYTES] = 0;
+		}
+		return;
+	}
+	UWORD *pW = (UWORD *)pRow;
+	for(UBYTE r = 0; r < 8; ++r) {
+		UWORD p0 = s_pDouble[pGlyph[r][0]], p1 = s_pDouble[pGlyph[r][1]];
+		for(UBYTE k = 0; k < 2; ++k, pW += FB_ROW_BYTES / 2) {
+			pW[0] = p0;
+			pW[FB_PLANE_BYTES / 2] = p1;
+			pW[FB_PLANE_BYTES] = 0;
+		}
+	}
+}
+
+// Show szText (padded with spaces) in item i of the back buffer; 0 if the
+// budget ran out first
+static UBYTE hudSet(tBitMap *pFb, UBYTE ubBfr, UBYTE i, const char *szText) {
+	const tHudItem *pI = &s_pHudItems[i];
+	char *pShown = s_pHudShown[ubBfr][i];
+	UBYTE ubCell = pI->isBig ? 16 : 8;
+	UBYTE isEnd = 0;
+	for(UBYTE c = 0; c < pI->ubLen; ++c) {
+		char ch = ' ';
+		if(!isEnd) {
+			if(szText[c]) ch = szText[c];
+			else isEnd = 1;
+		}
+		if(pShown[c] != ch) {
+			UBYTE ubCost = pI->isBig ? 4 : 1;
+			if(s_ubHudBudget < ubCost) return 0;
+			s_ubHudBudget -= ubCost;
+			pShown[c] = ch;
+			hudChar(pFb, pI->uwX + c * ubCell, pI->uwY, pI->isBig, ch);
+		}
+	}
+	return 1;
+}
+
+// hudSet() unless the item already shows what ulKey stands for
+static inline UBYTE hudIsShown(UBYTE ubBfr, UBYTE i, ULONG ulKey) {
+	return s_pHudKey[ubBfr][i] == ulKey;
+}
+static void hudShow(tBitMap *pFb, UBYTE ubBfr, UBYTE i, ULONG ulKey, const char *szText) {
+	s_pHudKey[ubBfr][i] = hudSet(pFb, ubBfr, i, szText) ? ulKey : HUD_KEY_NONE;
+}
+static void hudText(tBitMap *pFb, UBYTE ubBfr, UBYTE i, const char *szText) {
+	if(!hudIsShown(ubBfr, i, (ULONG)szText)) hudShow(pFb, ubBfr, i, (ULONG)szText, szText);
+}
+
+static void scoreCount(ULONG ulScore) {
+	if(ulScore < s_ulScore || ulScore - s_ulScore > 9999) {
+		// a new race (or a jump): write it out
+		for(BYTE d = 6; d >= 0; --d) s_szScore[d] = '0';
+		s_ulScore = 0;
+	}
+	UWORD uwAdd = (UWORD)(ulScore - s_ulScore);
+	s_ulScore = ulScore;
+	for(BYTE d = 6; uwAdd && d >= 0; --d) {
+		// add the lowest decimal digit of uwAdd here, carry the rest
+		UWORD uwDigit = uwAdd;
+		ULONG ulQ = uwAdd;
+		__asm__("divu.w #10,%0" : "+d"(ulQ));
+		uwAdd = (UWORD)ulQ;
+		uwDigit = (UWORD)(ulQ >> 16);
+		char c = s_szScore[d] + (char)uwDigit;
+		if(c > '9') {
+			c -= 10;
+			++uwAdd;
+		}
+		s_szScore[d] = c;
+	}
+}
+
+// v in decimal, right-aligned in ubDigits characters (leading zeros or
+// spaces); two 16-bit DIVUs per digit (no 32-bit library divide)
+static void hudNumber(char *pOut, ULONG ulV, UBYTE ubDigits, char cPad) {
+	pOut[ubDigits] = '\0';
+	for(BYTE d = ubDigits - 1; d >= 0; --d) {
+		ULONG ulHi = ulV >> 16, ulLo = ulV & 0xFFFF;
+		__asm__("divu.w #10,%0" : "+d"(ulHi));             // high word: quotient | remainder << 16
+		ulLo |= ulHi & 0xFFFF0000;
+		__asm__("divu.w #10,%0" : "+d"(ulLo));             // (remainder << 16 | low) / 10 fits a word
+		pOut[d] = '0' + (char)(ulLo >> 16);
+		ulV = (ulHi << 16) | (ulLo & 0xFFFF);
+		if(!ulV && d && cPad == ' ') {
+			while(d--) pOut[d] = ' ';
+			break;
+		}
+	}
+}
+
+static void hudUpdate(UBYTE ubBfr, UBYTE ubBudget) {
+	// the numbers first, then the words; each only when it changed
+	tBitMap *pFb = s_pFb[ubBfr];
+	char szNum[12];
+	const tGameState *pS = &s_sState;
+	UBYTE isBlinkOn = (pS->frame & 32) != 0;
+	UBYTE isTitle = pS->phase == PHASE_TITLE;
+	s_ubHudBudget = ubBudget;
+	if(isTitle) {
+		hudText(pFb, ubBfr, HUD_TIME, "");
+		hudText(pFb, ubBfr, HUD_SPEED, "");
+	}
+	else {
+		UBYTE ubTime = logicTimeSeconds(pS);
+		if(!hudIsShown(ubBfr, HUD_TIME, ubTime)) {
+			hudNumber(szNum, ubTime, 2, ' ');
+			hudShow(pFb, ubBfr, HUD_TIME, ubTime, szNum);
+		}
+		UWORD uwKmh = logicKmh(pS);
+		if(!hudIsShown(ubBfr, HUD_SPEED, uwKmh)) {
+			hudNumber(szNum, uwKmh, 3, ' ');
+			szNum[3] = ' '; szNum[4] = 'K'; szNum[5] = 'M'; szNum[6] = '/'; szNum[7] = 'H'; szNum[8] = '\0';
+			hudShow(pFb, ubBfr, HUD_SPEED, uwKmh, szNum);
+		}
+	}
+	scoreCount(pS->score);
+	if(!hudIsShown(ubBfr, HUD_SCORE, pS->score)) {
+		hudShow(pFb, ubBfr, HUD_SCORE, pS->score, s_szScore);
+	}
+	if(isTitle) {
+		hudText(pFb, ubBfr, HUD_MSG, "   RACER");
+		hudText(pFb, ubBfr, HUD_SUB, isBlinkOn ? "PRESS FIRE" : "");
+		hudText(pFb, ubBfr, HUD_LABELS, "                 SCORE");
+	}
+	else {
+		hudText(pFb, ubBfr, HUD_MSG,
+			pS->message == MSG_EXTEND ? (isBlinkOn ? "EXTEND TIME!" : "") :
+			pS->message == MSG_TIMEUP ? "  TIME UP" : "");
+		hudText(pFb, ubBfr, HUD_SUB, "");
+		hudText(pFb, ubBfr, HUD_LABELS, "TIME          SCORE         SPEED");
+	}
+}
 
 static void carUpdate(BYTE bSteer) {
 	UBYTE ubFrame = bSteer < 0 ? CAR_FRAME_LEFT : bSteer > 0 ? CAR_FRAME_RIGHT : 0;
@@ -658,6 +872,7 @@ void genericProcess(void) {
 	UBYTE isChanged = logicUpdate(&s_sState, &sInput);
 	isChanged |= logicUpdate(&s_sState, &sInput);   // 50 Hz rules, 25 fps pictures
 	copperUpdate();
+	hudUpdate(s_pView->pCopList->pBackBfr == s_pCopBfrA ? 0 : 1, HUD_BUDGET);
 	carUpdate(sInput.steer);
 
 	// State for tests: when the car goes onto or off the grass, and every
@@ -673,6 +888,8 @@ void genericProcess(void) {
 		agkState("off", s_sState.offroad);
 		agkState("laps", s_sState.laps);
 		agkState("bumps", s_sState.bumps);
+		agkState("phase", s_sState.phase);
+		agkState("time", logicTimeSeconds(&s_sState));
 		agkEnd();
 	}
 

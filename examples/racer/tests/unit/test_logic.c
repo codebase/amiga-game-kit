@@ -324,6 +324,58 @@ static void testOtherLanesPass(void) {
 	CHECK(s.pos + PLAYER_Z > s.rivals[0].pos + CAR_LEN);
 }
 
+// ---------------------------------------------------------------- game flow
+
+static void testClockRunsOut(void) {
+	// Standing still, the clock runs down: time up, the car can't drive, then the title
+	tGameState s;
+	initNoTraffic(&s);
+	CHECK(s.phase == PHASE_RACE && logicTimeSeconds(&s) == START_TIME / FPS);
+	drive(&s, (tInput){0}, FPS);
+	CHECK(logicTimeSeconds(&s) == START_TIME / FPS - 1);
+	drive(&s, (tInput){0}, START_TIME - FPS);
+	CHECK(s.phase == PHASE_OVER && s.message == MSG_TIMEUP && s.time == 0);
+	drive(&s, (tInput){.accel = 1}, OVER_FRAMES - 1);
+	CHECK(s.phase == PHASE_OVER && s.speed == 0 && s.pos == 0);
+	drive(&s, (tInput){.accel = 1}, 1);
+	CHECK(s.phase == PHASE_TITLE);
+}
+
+static void testCheckpointExtendsTime(void) {
+	tGameState s;
+	initNoTraffic(&s);
+	s.pos = CHECKPOINT_LEN - 200;
+	s.speed = SPEED_MAX;
+	uint16_t t0 = s.time;
+	int frames = 0;
+	while(!s.extended && frames < 100) {
+		logicUpdate(&s, &(tInput){.accel = 1});
+		++frames;
+	}
+	CHECK(s.extended && s.message == MSG_EXTEND && s.pos >= CHECKPOINT_LEN);
+	CHECK(s.time == t0 - frames + EXTEND_TIME);
+	CHECK(s.nextCheckpoint == 2 * CHECKPOINT_LEN);
+	CHECK(s.score > 0);
+	// the message goes away, the next frame doesn't extend again
+	logicUpdate(&s, &(tInput){.accel = 1});
+	CHECK(!s.extended);
+	drive(&s, (tInput){.accel = 1}, MESSAGE_FRAMES);
+	CHECK(s.message == MSG_NONE);
+}
+
+static void testTitleStartsARace(void) {
+	tGameState s;
+	logicInit(&s);
+	s.score = 1234;
+	logicTitle(&s);
+	CHECK(s.phase == PHASE_TITLE && s.score == 1234);
+	// fire still held from the race: ignored at first
+	drive(&s, (tInput){.accel = 1}, TITLE_WAIT);
+	CHECK(s.phase == PHASE_TITLE && s.speed == 0 && s.pos == 0);
+	drive(&s, (tInput){.accel = 1}, 1);
+	CHECK(s.phase == PHASE_RACE && s.score == 0 && s.time == START_TIME && s.pos == 0);
+}
+
 static void testLap(void) {
 	tGameState s;
 	logicInit(&s);
@@ -352,6 +404,9 @@ int main(void) {
 	testRivalsDrive();
 	testRearEndSlowsYouDown();
 	testOtherLanesPass();
+	testClockRunsOut();
+	testCheckpointExtendsTime();
+	testTitleStartsARace();
 	if(s_failures) {
 		printf("%d check(s) failed\n", s_failures);
 		return 1;

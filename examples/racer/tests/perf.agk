@@ -7,6 +7,6 @@ press up+left 40
 press up+right 80
 press up 200
 expect-no-dropped-frames
-# measured ~77% (peaks 83%) of the two-frame budget: the road projection and
+# measured ~75% (peaks 85%) of the two-frame budget: the road projection and
 # the copper loop are most of it
 expect-max-load 90

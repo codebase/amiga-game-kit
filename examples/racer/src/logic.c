@@ -205,6 +205,14 @@ void logicInit(tGameState *pState) {
 	pState->laps = 0;
 	pState->bumps = 0;
 	pState->bumped = 0;
+	pState->phase = PHASE_RACE;
+	pState->phaseFrames = 0;
+	pState->time = START_TIME;
+	pState->score = 0;
+	pState->nextCheckpoint = CHECKPOINT_LEN;
+	pState->message = MSG_NONE;
+	pState->messageFrames = 0;
+	pState->extended = 0;
 	// spread around the loop at irregular gaps (a fixed pseudo-random
 	// sequence: every game is the same), the first one ahead in our lane
 	uint16_t rnd = 0xACE1;
@@ -218,8 +226,43 @@ void logicInit(tGameState *pState) {
 	}
 }
 
-uint8_t logicUpdate(tGameState *pState, const tInput *pInput) {
+void logicTitle(tGameState *pState) {
+	uint32_t score = pState->score;
+	uint16_t frame = pState->frame;
+	logicInit(pState);
+	pState->phase = PHASE_TITLE;
+	pState->score = score;
+	pState->frame = frame;
+}
+
+uint8_t logicTimeSeconds(const tGameState *pState) {
+	return (uint8_t)div16u(pState->time + FPS - 1, FPS);
+}
+
+uint8_t logicUpdate(tGameState *pState, const tInput *pInputIn) {
 	++pState->frame;
+	++pState->phaseFrames;
+	pState->extended = 0;
+	if(pState->messageFrames && !--pState->messageFrames) pState->message = MSG_NONE;
+	// What the phase lets the player do
+	static const tInput sNone = {0};
+	const tInput *pInput = pInputIn;
+	if(pState->phase == PHASE_TITLE) {
+		if(pInputIn->accel && pState->phaseFrames > TITLE_WAIT) {
+			uint16_t frame = pState->frame;
+			logicInit(pState);   // (the score starts again)
+			pState->frame = frame;
+			return 1;
+		}
+		pInput = &sNone;
+	}
+	else if(pState->phase == PHASE_OVER) {
+		if(pState->phaseFrames >= OVER_FRAMES) {
+			logicTitle(pState);
+			return 1;
+		}
+		pInput = &sNone;    // coast to a stop
+	}
 	int16_t oldSpeed = pState->speed, oldX = pState->x;
 	uint32_t oldPos = pState->pos;
 
@@ -265,12 +308,31 @@ uint8_t logicUpdate(tGameState *pState, const tInput *pInput) {
 	trafficUpdate(pState);
 	if(pState->pos > prePos + TRACK_LEN / 2) --pState->laps;   // bounced back over the start line
 
+	if(pState->phase == PHASE_RACE) {
+		pState->score += (uint16_t)pState->speed >> SPEED_SHIFT;
+		if(trackDelta(pState->pos, pState->nextCheckpoint) >= 0) {
+			pState->nextCheckpoint = wrapPos(pState->nextCheckpoint + CHECKPOINT_LEN);
+			pState->time = pState->time + EXTEND_TIME > TIME_MAX ? TIME_MAX : pState->time + EXTEND_TIME;
+			pState->message = MSG_EXTEND;
+			pState->messageFrames = MESSAGE_FRAMES;
+			pState->extended = 1;
+		}
+		if(!--pState->time) {
+			pState->phase = PHASE_OVER;
+			pState->phaseFrames = 0;
+			pState->message = MSG_TIMEUP;
+			pState->messageFrames = OVER_FRAMES;
+		}
+	}
+
 	return pState->speed != oldSpeed || pState->x != oldX || (pState->pos >> STRIPE_SHIFT) != (oldPos >> STRIPE_SHIFT) ||
 		pState->bumped;
 }
 
 uint16_t logicKmh(const tGameState *pState) {
-	return (uint16_t)(((uint32_t)pState->speed * KMH_MAX) / SPEED_MAX);
+	// (every picture for the HUD: one MULU and one DIVU, no library calls)
+	uint32_t v = (uint32_t)(uint16_t)pState->speed * (uint16_t)KMH_MAX;
+	return div16u(v, SPEED_MAX);
 }
 
 // -------------------------------------------------------------- the road ---

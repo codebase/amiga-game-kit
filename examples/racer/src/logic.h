@@ -103,6 +103,26 @@ typedef struct {
 	int16_t speed;     // 1/256 units per frame
 } tRival;
 
+// ----------------------------------------------------------- game flow ---
+// Title (attract: the road, rivals driving by, "press fire") -> race against
+// the clock: a checkpoint every CHECKPOINT_SEGS segments adds time -> time up:
+// coast to a stop -> title. Frames are logic frames (50 per second).
+#define PHASE_TITLE 0
+#define PHASE_RACE 1
+#define PHASE_OVER 2
+#define FPS 50
+#define START_TIME (40 * FPS)
+#define CHECKPOINT_SEGS 100    // 4 per lap (the start line is one)
+#define CHECKPOINT_LEN ((uint32_t)CHECKPOINT_SEGS << SEG_SHIFT)
+#define EXTEND_TIME (25 * FPS)
+#define TIME_MAX (99 * FPS)
+#define OVER_FRAMES (4 * FPS)  // time up -> title
+#define TITLE_WAIT FPS         // the title ignores fire this long (still held from the race)
+#define MESSAGE_FRAMES (2 * FPS)
+#define MSG_NONE 0
+#define MSG_EXTEND 1           // "EXTEND TIME!"
+#define MSG_TIMEUP 2           // "TIME UP"
+
 typedef struct {
 	uint32_t pos;      // distance along the track, units (wraps at the track length)
 	uint8_t posFrac;   // 1/256 units
@@ -115,6 +135,14 @@ typedef struct {
 	uint16_t bumps;    // collisions with rivals so far
 	uint8_t bumped;    // a collision this frame (for the sound)
 	tRival rivals[TRAFFIC_N];
+	uint8_t phase;     // PHASE_*
+	uint16_t phaseFrames;   // frames since the phase began
+	uint16_t time;     // frames left in the race
+	uint32_t score;    // units driven (kept on the title after a race)
+	uint32_t nextCheckpoint;   // track position of the next one
+	uint8_t message;   // MSG_*, shown for messageFrames more frames
+	uint16_t messageFrames;
+	uint8_t extended;  // a checkpoint this frame (for the sound)
 } tGameState;
 
 typedef struct {
@@ -158,7 +186,13 @@ typedef struct {
 	uint8_t type;      // OBJ_*
 } tObject;
 
+/** A new race, from the start line with the clock running. */
 void logicInit(tGameState *pState);
+/** The title (attract mode): a race's start, standing, rivals driving by;
+ *  keeps the last race's score. Fire (tInput.accel) starts a race. */
+void logicTitle(tGameState *pState);
+/** Seconds left on the clock, rounded up (what the HUD shows). */
+uint8_t logicTimeSeconds(const tGameState *pState);
 /** One frame of driving. Returns 1 if anything test-visible changed. */
 uint8_t logicUpdate(tGameState *pState, const tInput *pInput);
 /** Road layout as runs of lines (see tRoadRun), and where each projected row
