@@ -248,10 +248,12 @@ static void backdropUpdate(UBYTE ubBfr) {
 	// a quarter pixel a frame: a pixel every 4th
 	(void)ubBfr;
 	if(!(s_sGame.frame & 3) && ++s_uwBdX == BD_LOOP) s_uwBdX = 0;
-	UWORD s = s_uwBdX;
-	UWORD uwWord = (UWORD)((s >> 4) * 2), uwDelay = (UWORD)((16 - (s & 15)) & 15);
-	// the first fetched word is early: when the delay is 0 start one word later
-	if(uwDelay) uwWord -= 0;
+	// The first fetched word is one early (DDFSTRT 0x30) and shifted right by
+	// the delay, so pixel s is at screen x 0 when the fetch starts at word
+	// (s - 1) / 16 with a delay of 16 - s % 16 (0 on a word boundary). s runs
+	// 1..640: the bitmap's wrap copy makes 640 the same as 0.
+	UWORD s = s_uwBdX ? s_uwBdX : BD_LOOP;
+	UWORD uwWord = (UWORD)(((s - 1) >> 4) * 2), uwDelay = (UWORD)((16 - (s & 15)) & 15);
 	UWORD *pList = (UWORD *)s_pView->pCopList->pBackBfr->pList;
 	pList[2 * s_uwCopCon1 + 1] = (UWORD)(uwDelay << 4);
 	for(UBYTE p = 0; p < 2; ++p) {
