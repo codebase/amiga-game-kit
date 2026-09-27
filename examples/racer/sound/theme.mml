@@ -1,16 +1,19 @@
 ; Redline: driving metal, 16 bars in E minor at 168 BPM, loops (about 23 s).
-; A lead, B rhythm guitar (saw power chords: root + fifth as fast arpeggios,
-; chugged short), D drums (double kick). Channel C is left out: Paula
-; channel 2 is the engine. Sound effects borrow D, so the drums drop out then.
+; Sampled instruments (sound/tools/make_samples.py synthesizes them): A lead
+; guitar, B rhythm guitar (palm-muted chugs and ringing power chords: each
+; sample is a whole chord, so a note transposes it), D drums with a double
+; kick. Channel C is left out: Paula channel 2 is the engine. Sound effects
+; borrow D, so the drums drop out for a moment then.
 #title Redline
 #tempo 168
-#inst lead square vol=40 decay=1
-#inst rhy saw vol=46 decay=3
-#inst kick kick vol=60
-#inst snare snare vol=48
-#inst crash crash vol=34
+#inst lead samples/lead.wav root=e5 vol=46
+#inst chug samples/chug.wav root=e2 vol=54
+#inst chord samples/chord.wav root=e2 vol=50
+#inst kick samples/kick.wav root=o4c vol=60
+#inst snare samples/snare.wav root=o4c vol=52
+#inst crash samples/crash.wav root=o4c vol=40
 
-; ---- lead: verse (the riff) twice, the second an octave up; chorus C G D Em
+; ---- lead: verse twice (the second an octave up), chorus over C G D Em
 A @lead l4
 A o4 e4. g8 b4 a8 g8        | o4 f+4 e8 d8 e2
 A o4 e4. g8 b4 > d8 < b8    | o4 a4 g8 f+8 e2
@@ -21,18 +24,13 @@ A o5 a4 f+4 a4 b4           | o5 b2. r4
 A o6 c4 < b4 g4 e4          | o5 d4 g4 b4 > d4
 A o6 d4 c+8 < a8 f+4 a4     | o5 e2 r4 < b4
 
-; ---- rhythm: the riff (chugs on E, a run up at the end), then gallops
-B @rhy l16 q3
-B o2 (eb) (eb) (eb) r (eb) (eb) (eb) r (eb) (eb) (dg) (dg) (ea) (ea) (f+b) (ea)
-B o2 (eb) (eb) (eb) r (eb) (eb) (eb) r (cg) (cg) (cg) (cg) (da) (da) (da) (da)
-B o2 (eb) (eb) (eb) r (eb) (eb) (eb) r (eb) (eb) (dg) (dg) (ea) (ea) (f+b) (ea)
-B o2 (eb) (eb) (eb) r (eb) (eb) (eb) r (cg) (cg) (cg) (cg) (da) (da) (da) (da)
-B o2 (eb) (eb) (eb) r (eb) (eb) (eb) r (eb) (eb) (dg) (dg) (ea) (ea) (f+b) (ea)
-B o2 (eb) (eb) (eb) r (eb) (eb) (eb) r (cg) (cg) (cg) (cg) (da) (da) (da) (da)
-B o2 (eb) (eb) (eb) r (eb) (eb) (eb) r (eb) (eb) (dg) (dg) (ea) (ea) (f+b) (ea)
-B o2 (eb) (eb) (eb) r (eb) (eb) (eb) r (cg) (cg) (cg) (cg) (da) (da) (da) (da)
-B o2 [(cg)8 (cg) (cg)]4 | o2 [(dg)8 (dg) (dg)]4 | o2 [(da)8 (da) (da)]4 | o2 [(eb)8 (eb) (eb)]4
-B o2 [(cg)8 (cg) (cg)]4 | o2 [(dg)8 (dg) (dg)]4 | o2 [(da)8 (da) (da)]4 | o2 [(eb)8 (eb) (eb)]4
+; ---- rhythm: the riff on palm-muted chugs, then chords ringing into gallops
+B l16
+B [@chug o2 e e e r e e e r e e g g a a b a | @chug o2 e e e r e e e r c c c c d d d d]4
+B [@chord o2 c4 @chug c8 c c c8 c c c8 c8 | @chord o2 g4 @chug g8 g g g8 g g g8 g8]1
+B [@chord o2 d4 @chug d8 d d d8 d d d8 d8 | @chord o2 e4 @chug e8 e e e8 e e e8 e8]1
+B [@chord o2 c4 @chug c8 c c c8 c c c8 c8 | @chord o2 g4 @chug g8 g g g8 g g g8 g8]1
+B [@chord o2 d4 @chug d8 d d d8 d d d8 d8 | @chord o2 e1]1
 
 ; ---- drums: double kick 16ths, snare on 2 and 4, a crash every 4 bars
 D o4 l16
