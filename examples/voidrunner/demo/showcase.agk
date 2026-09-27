@@ -1,0 +1,6 @@
+# The README video (agk record demo/showcase.agk): the last seconds of the
+# title, then the game playing itself - all of level 1, the Warden, STAGE
+# CLEAR (the attract-mode demo, driven by logicAutopilot()).
+wait-serial "AGK t0"
+wait-serial "frame=352" 600
+wait 5200

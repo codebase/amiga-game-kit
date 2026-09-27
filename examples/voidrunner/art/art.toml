@@ -1,0 +1,87 @@
+# VOIDRUNNER art, all drawn by hand as text art. Reference: agk help-art
+[art]
+depth = 3                 # playfield 1: enemies, shots, explosions, HUD
+
+[ship]
+source = "ship.txt"
+kind = "sprite"
+attached = true           # 15 colours: channels 0-3 (32 px)
+channel = 0
+
+[dart]
+source = "dart.txt"
+kind = "bob"
+
+[gunship]
+source = "gunship.txt"
+kind = "bob"
+
+[laser]
+source = "laser.txt"
+kind = "bob"
+
+[orb]
+source = "orb.txt"
+kind = "bob"
+
+[capsule]
+source = "capsule.txt"
+kind = "bob"
+
+# Drawn by art/tools/draw.py
+[rock]
+source = "rock.txt"
+kind = "bob"
+
+[pebble]
+source = "pebble.txt"
+kind = "bob"
+
+[mine]
+source = "mine.txt"
+kind = "bob"
+
+[boom]
+source = "boom.txt"
+kind = "bob"
+
+[pop]
+source = "pop.txt"
+kind = "bob"
+
+[boss]
+source = "boss.txt"
+kind = "bob"
+
+[backdrop]
+# playfield 2, drifting slowly: a gas giant, a moon, nebula (art/tools/draw.py)
+source = "backdrop.png"
+kind = "bitmap"
+depth = 2
+palette = "backdrop_palette.txt"
+wrap_x = 320
+
+# The title and the messages in the middle of the screen (art/tools/draw.py)
+[logo]
+source = "logo.txt"
+kind = "bob"
+
+[msg_stage]
+source = "msg_stage.txt"
+kind = "bob"
+
+[msg_warning]
+source = "msg_warning.txt"
+kind = "bob"
+
+[msg_clear]
+source = "msg_clear.txt"
+kind = "bob"
+
+[msg_over]
+source = "msg_over.txt"
+kind = "bob"
+
+[msg_fire]
+source = "msg_fire.txt"
+kind = "bob"

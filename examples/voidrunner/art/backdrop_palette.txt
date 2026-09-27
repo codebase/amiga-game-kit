@@ -1,0 +1,5 @@
+# The backdrop's colours: playfield 2, 2 bitplanes (screen colours 8-11)
+0  0x000  transparent (the stars and COLOR00 show)
+1  0x213  nebula, shadows
+2  0x425  planet
+3  0x749  highlights

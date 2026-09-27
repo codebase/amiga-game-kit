@@ -1,0 +1,15 @@
+# The player's laser bolt, 16x4.
+colors
+  .  transparent
+  K  0x112
+  D  0x446
+  M  0x88A
+  L  0xDDF
+  C  0x3BF
+  O  0xF92
+  R  0xE22
+frame
+..CCCCCCCCCC....
+.CLLLLLLLLLLLLC.
+.CLLLLLLLLLLLLC.
+..CCCCCCCCCC....

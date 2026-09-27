@@ -1,0 +1,14 @@
+# Left on the title, the game plays itself: the whole level, the Warden, and
+# STAGE CLEAR. The ship can't be hit in the demo; it picks up the capsules.
+wait-serial "AGK t0"
+wait-serial "phase=1" 1200
+wait-serial "boss=2" 5000
+wait 200
+screenshot warden
+wait-serial "phase=2" 3000
+wait 60
+screenshot clear
+expect-serial "weapon=2"
+expect-serial "AGK sfx warning"
+expect-serial "AGK sfx boom"
+expect-no-serial "ERR|STACK SMASHED"

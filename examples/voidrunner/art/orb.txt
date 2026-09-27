@@ -1,0 +1,28 @@
+# Enemy bullet: a hot orb, 8x8, pulsing.
+colors
+  .  transparent
+  K  0x112
+  D  0x446
+  M  0x88A
+  L  0xDDF
+  C  0x3BF
+  O  0xF92
+  R  0xE22
+frame
+..RRRR..
+.ROOOOR.
+ROOLLOOR
+ROLLLLOR
+ROLLLLOR
+ROOLLOOR
+.ROOOOR.
+..RRRR..
+frame
+........
+..RRRR..
+.ROOOOR.
+.ROLLOR.
+.ROLLOR.
+.ROOOOR.
+..RRRR..
+........

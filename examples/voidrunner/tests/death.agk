@@ -1,0 +1,15 @@
+# Into the first formation without firing: the ship blows up, a life goes,
+# and after two seconds it's back (blinking: invulnerable).
+wait-serial "AGK t0"
+press fire 2
+hold up
+wait 24
+release
+wait-serial "lives=2" 600
+wait 12
+screenshot boom
+wait 140
+screenshot back
+expect-serial "AGK sfx die"
+expect-serial "lives=2(.|\n)*x=48 y=140"
+expect-no-serial "ERR|STACK SMASHED"

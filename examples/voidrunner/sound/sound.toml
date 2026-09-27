@@ -1,0 +1,71 @@
+# VOIDRUNNER's sound. Reference: agk help-sound
+# Effects take Paula channel 3 (the tune's arpeggios): shots fire all the
+# time, so the drums (channel 2) are never interrupted.
+
+[sound]
+sfx_channels = [3]
+
+[sfx.shot]                # the laser: a short falling zap
+wave = "square"
+freq = [1800, 600]
+length = 0.07
+decay = 20
+volume = 26
+priority = 1
+
+[sfx.hit]                 # a shot hits armour or a tough enemy
+wave = "noise"
+freq = 6000
+length = 0.04
+decay = 30
+volume = 30
+priority = 1
+
+[sfx.pop]                 # a small enemy explodes
+wave = "noise"
+freq = [3000, 800]
+length = 0.2
+decay = 14
+volume = 48
+priority = 2
+
+[sfx.boom]                # a big one: rocks, gunships, the Warden
+wave = "noise"
+freq = [1600, 200]
+length = 0.6
+decay = 5
+volume = 60
+priority = 3
+
+[sfx.powerup]             # the capsule: a rising arpeggio
+wave = "square"
+steps = [[523, 0.05], [659, 0.05], [784, 0.05], [1047, 0.05], [1319, 0.2]]
+decay = 4
+volume = 44
+priority = 3
+
+[sfx.die]                 # the ship explodes
+wave = "noise"
+freq = [2400, 60]
+length = 1.0
+decay = 3
+volume = 64
+priority = 4
+
+[sfx.warning]             # the Warden is coming: an alarm
+wave = "square"
+steps = [[880, 0.12], [660, 0.12], [880, 0.12], [660, 0.12], [880, 0.12], [660, 0.3]]
+volume = 44
+priority = 3
+
+[sfx.bosshit]             # the core takes a hit
+wave = "square"
+freq = [400, 250]
+length = 0.06
+decay = 20
+volume = 34
+priority = 2
+
+[music.theme]
+source = "theme.mml"
+volume = 48

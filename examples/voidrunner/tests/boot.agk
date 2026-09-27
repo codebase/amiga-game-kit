@@ -1,0 +1,8 @@
+# The title: the logo, PRESS FIRE, the high score, the starfield and the planet.
+wait-serial "AGK t0"
+wait 30
+screenshot title
+expect-serial "AGK ready"
+expect-serial "phase=0"
+expect-no-serial "ERR|STACK SMASHED"
+expect-color title 160 82 0xDDF near 6        # the logo's light upper half

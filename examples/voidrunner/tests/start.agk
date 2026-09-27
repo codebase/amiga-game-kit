@@ -1,0 +1,17 @@
+# Fire starts the game ("STAGE 1 - OUTER BELT"); flying up into the first
+# formation with the gun going, darts go down.
+wait-serial "AGK t0"
+press fire 2
+wait 40
+screenshot stage
+hold up+fire
+wait 24
+release
+hold fire
+wait 200
+release
+screenshot fight
+expect-serial "phase=1"
+expect-serial "kills=[1-9]"
+expect-serial "AGK sfx shot"
+expect-no-serial "ERR|STACK SMASHED"

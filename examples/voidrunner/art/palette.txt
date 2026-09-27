@@ -1,0 +1,15 @@
+# VOIDRUNNER palette. Playfield 1 (0-7): enemies, shots, explosions, the HUD.
+# Playfield 2 (8-11): the backdrop. 17-31: the player's ship (attached
+# sprites; 29-31 are also the starfield's sprite colours).
+0  0x000  space (the copper colours it)
+1  0x112  outline
+2  0x446  dark metal
+3  0x88A  metal
+4  0xDDF  light
+5  0x3BF  cyan
+6  0xF92  orange
+7  0xE22  red
+8  0x000  (backdrop: transparent)
+9  0x213  backdrop dark
+10 0x425  backdrop mid
+11 0x749  backdrop light

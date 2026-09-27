@@ -1,0 +1,8 @@
+# Frame budget guard at 50 fps: the demo is the worst case - the spread gun
+# (three shots at a time), every wave, the Warden and its death, the music.
+# Measured: ~60-80% on average, peaks up to 100% (the Warden going down).
+wait-serial "AGK t0"
+wait-serial "phase=1" 1200
+wait 4800
+expect-no-dropped-frames
+expect-max-load 100

@@ -1,0 +1,10 @@
+# Moving the mouse (port 1) must not move the ship: the game reads only the
+# joystick in port 2 (ACE JOY1).
+wait-serial "AGK t0"
+press fire 2
+wait 20
+mouse 40 0
+wait 10
+mouse -60 30
+wait 10
+expect-no-serial "phase=1 .*x=(?!48 )\d+"

@@ -1,0 +1,32 @@
+; Outer Belt: level 1's tune. 16 bars in E minor at 150 BPM, loops (~26 s).
+; Sampled synths (sound/tools/make_samples.py): A lead, B a pulsing bass,
+; C drums, D plucked arpeggios. Sound effects borrow channel D (the shots
+; fire all the time), so the arpeggios are the part that drops out.
+#title Outer Belt
+#tempo 150
+#inst lead samples/lead.wav root=e5 vol=44
+#inst bass samples/bass.wav root=e2 vol=52
+#inst pluck samples/pluck.wav root=e4 vol=30
+#inst kick samples/kick.wav root=o4c vol=58
+#inst snare samples/snare.wav root=o4c vol=46
+#inst hat samples/hat.wav root=o4c vol=24
+
+; ---- lead: a heroic line, then running eighths
+A @lead l4
+A o4 e4 g4 b4 > e4     | o5 d4. c8 < b4 g4    | o4 a4. b8 > c4 d4     | o4 b1
+A o5 e4. f+8 g4 f+4    | o5 e4. d8 c4 < b4    | o5 c4 < b4 a4 > c4    | o4 b2 > d+4 f+4
+A o5 e8 d8 e8 f+8 g4 e4 | o5 e8 d8 c8 < b8 > c4 < g4 | o4 a8 b8 > c8 d8 e4 d4 | o5 f+2 d2
+A o5 g8 f+8 e8 d8 e4 b4 | o5 c8 d8 e8 g8 > c4 < b4   | o5 a4 g4 e4 c4        | o5 d+2 f+2
+
+; ---- bass: sixteenths, root and fifth, short
+B @bass l16 q5
+B [o2 [e e b e]4 | o2 [c c g c]4 | o2 [d d a d]4 | o1 [b b > f+ < b]4
+B  o2 [e e b e]4 | o2 [c c g c]4 | o1 [a a > e < a]4 | o1 [b b > f+ < b]4]2
+
+; ---- drums: kick, snare on 2 and 4, hats between
+C o4 l8 [@kick c @hat c @snare c @hat c @kick c @kick c @snare c @hat c]16
+
+; ---- arpeggios
+D @pluck l16
+D [o4 [e g b g]4 | o4 [c e g e]4 | o4 [d f+ a f+]4 | o3 [b > d f+ d <]4
+D  o4 [e g b g]4 | o4 [c e g e]4 | o4 [c e a e]4   | o3 [b > d+ f+ d+ <]4]2

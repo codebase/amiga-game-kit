@@ -50,6 +50,19 @@ It runs at 25 fps using about 74% of the time on a 7 MHz 68000. Its README
 covers the raster road and what it took to fit it all in: GCC's hidden
 library multiplies, bus contention, and bitplanes switched off in the sky.
 
+## Example: `examples/voidrunner`
+
+[![voidrunner](docs/img/voidrunner.gif)](docs/media/voidrunner.mp4)
+
+▶ [Watch level 1 with sound](docs/media/voidrunner.mp4): 104 s of its attract mode, recorded with `agk record`.
+
+A horizontal shoot-'em-up at 50 fps: level 1 of VOIDRUNNER, built by an AI agent that also made every sprite itself (text art and drawing code, no image generation):
+- A starfield from a single hardware sprite that the copper re-uses on every line, over a drifting gas giant.
+- Waves of darts, mines, asteroids and gunships, three guns, and the Warden: a boss you can only hurt at its core.
+- A sampled synth soundtrack and effects, and an attract mode that plays the whole level.
+
+Its README covers the tricks and what it took to hold 50 fps on a 7 MHz 68000.
+
 ## Quick start
 
 ```sh
