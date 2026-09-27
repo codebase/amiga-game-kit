@@ -1,35 +1,39 @@
-; Coast Road: 16 bars in D major at 150 BPM, loops (about 26 s).
-; A lead, B syncopated bass, D drums. Channel C is left out: Paula channel 2
-; is the engine. Sound effects borrow channel D, so the drums drop out then.
-#title Coast Road
-#tempo 150
-#inst lead square vol=36 decay=1
-#inst bass pulse25 vol=40 decay=1
-#inst kick kick vol=56
-#inst snare snare vol=38
-#inst hat hat vol=20
+; Redline: driving metal, 16 bars in E minor at 168 BPM, loops (about 23 s).
+; A lead, B rhythm guitar (saw power chords: root + fifth as fast arpeggios,
+; chugged short), D drums (double kick). Channel C is left out: Paula
+; channel 2 is the engine. Sound effects borrow D, so the drums drop out then.
+#title Redline
+#tempo 168
+#inst lead square vol=40 decay=1
+#inst rhy saw vol=46 decay=3
+#inst kick kick vol=60
+#inst snare snare vol=48
+#inst crash crash vol=34
 
-; ---- lead: D Bm G A | D Bm Em A || G A F#m Bm | G A D D
-A @lead l8
-A o5 a f+16 a16 > d < a b a f+4    | o5 f+ d16 f+16 b a f+4 d4
-A o5 g b16 > d16 g f+ e d < b4     | o5 a4. g+ a b > c+4
-A o5 f+ a16 > d16 f+ e d < a b4    | o5 b a16 f+16 d f+ a4 b4
-A o5 g f+16 e16 g b > e4 d c+      | o5 a2 r4 c+ e
-A o5 b4 > d < b a g a4             | o5 c+4 e c+ < a > c+ e4
-A o5 f+ a > c+ < a f+ a > c+ e     | o6 d4 c+ < b a4 f+4
-A o5 g b > d g f+ d < b > d        | o6 e4 c+ < a > e f+ e c+
-A o6 d4. c+ d f+ a4                | o6 a2 r < a b > c+
+; ---- lead: verse (the riff) twice, the second an octave up; chorus C G D Em
+A @lead l4
+A o4 e4. g8 b4 a8 g8        | o4 f+4 e8 d8 e2
+A o4 e4. g8 b4 > d8 < b8    | o4 a4 g8 f+8 e2
+A o5 e4. g8 b4 a8 g8        | o5 f+4 e8 d8 e2
+A o5 e4. g8 b4 > d8 < b8    | o5 a4 g8 f+8 e2
+A o5 g4 e4 g4 a4            | o5 b4. a8 g4 d4
+A o5 a4 f+4 a4 b4           | o5 b2. r4
+A o6 c4 < b4 g4 e4          | o5 d4 g4 b4 > d4
+A o6 d4 c+8 < a8 f+4 a4     | o5 e2 r4 < b4
 
-; ---- bass: root, octave, root, two sixteenths, octave, root, root, octave
-B @bass l8
-B o2 d > d < d d16 d16 > d < d d > d | o2 b > b < b b16 b16 > b < b b > b
-B o2 g > g < g g16 g16 > g < g g > g | o2 a > a < a a16 a16 > a < a a > a
-B o2 d > d < d d16 d16 > d < d d > d | o2 b > b < b b16 b16 > b < b b > b
-B o2 e > e < e e16 e16 > e < e e > e | o2 a > a < a a16 a16 > a < a a > a
-B o2 g > g < g g16 g16 > g < g g > g | o2 a > a < a a16 a16 > a < a a > a
-B o2 f+ > f+ < f+ f+16 f+16 > f+ < f+ f+ > f+ | o2 b > b < b b16 b16 > b < b b > b
-B o2 g > g < g g16 g16 > g < g g > g | o2 a > a < a a16 a16 > a < a a > a
-B o2 d > d < d d16 d16 > d < d d > d | o2 a > a < a a16 a16 > a < a a > a
+; ---- rhythm: the riff (chugs on E, a run up at the end), then gallops
+B @rhy l16 q3
+B o2 (eb) (eb) (eb) r (eb) (eb) (eb) r (eb) (eb) (dg) (dg) (ea) (ea) (f+b) (ea)
+B o2 (eb) (eb) (eb) r (eb) (eb) (eb) r (cg) (cg) (cg) (cg) (da) (da) (da) (da)
+B o2 (eb) (eb) (eb) r (eb) (eb) (eb) r (eb) (eb) (dg) (dg) (ea) (ea) (f+b) (ea)
+B o2 (eb) (eb) (eb) r (eb) (eb) (eb) r (cg) (cg) (cg) (cg) (da) (da) (da) (da)
+B o2 (eb) (eb) (eb) r (eb) (eb) (eb) r (eb) (eb) (dg) (dg) (ea) (ea) (f+b) (ea)
+B o2 (eb) (eb) (eb) r (eb) (eb) (eb) r (cg) (cg) (cg) (cg) (da) (da) (da) (da)
+B o2 (eb) (eb) (eb) r (eb) (eb) (eb) r (eb) (eb) (dg) (dg) (ea) (ea) (f+b) (ea)
+B o2 (eb) (eb) (eb) r (eb) (eb) (eb) r (cg) (cg) (cg) (cg) (da) (da) (da) (da)
+B o2 [(cg)8 (cg) (cg)]4 | o2 [(dg)8 (dg) (dg)]4 | o2 [(da)8 (da) (da)]4 | o2 [(eb)8 (eb) (eb)]4
+B o2 [(cg)8 (cg) (cg)]4 | o2 [(dg)8 (dg) (dg)]4 | o2 [(da)8 (da) (da)]4 | o2 [(eb)8 (eb) (eb)]4
 
-; ---- drums: kick on 1 and the "and" of 3, snare on 2 and 4, hats between
-D o4 l8 [@kick c @hat c @snare c @hat c @kick c @kick c @snare c @hat c]16
+; ---- drums: double kick 16ths, snare on 2 and 4, a crash every 4 bars
+D o4 l16
+D [@crash c @kick c c c @snare c @kick c c c c c c c @snare c @kick c c c [@kick c c c c @snare c @kick c c c c c c c @snare c @kick c c c]3]4

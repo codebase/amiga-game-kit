@@ -458,6 +458,10 @@ static inline UWORD *linesFill(UWORD *pVal, UWORD uwLines, UWORD uwCon1, UWORD u
 	return pStop;
 }
 
+// Per copper buffer: lines REGION_TOP..(this - 1) hold the sky's values
+// already (BPLCON1 for LEFT_MIN, no jump), so the sky run needn't rewrite them
+static WORD s_pSkyDone[2] = {REGION_TOP, REGION_TOP};
+
 static void copperUpdate(void) {
 	UBYTE n = logicRoadRuns(&s_sState, s_pRuns, &s_sView);
 	// The objects need this picture's road; queue their blits now so the
@@ -469,7 +473,10 @@ static void copperUpdate(void) {
 	// the wrap WAIT): stepping a pointer, not a table of them, halves the
 	// memory accesses (the program runs from slow RAM, which shares the bus
 	// with the display and the blitter)
-	UWORD **pBlock = s_pBlockVal[s_pView->pCopList->pBackBfr == s_pCopBfrA ? 0 : 1];
+	UBYTE ubBfr = s_pView->pCopList->pBackBfr == s_pCopBfrA ? 0 : 1;
+	UWORD **pBlock = s_pBlockVal[ubBfr];
+	WORD wSkyDone = s_pSkyDone[ubBfr];
+	s_pSkyDone[ubBfr] = REGION_TOP;
 	UWORD *pVal = pBlock[SCREEN_H - 1 - BLOCK_FIRST_LINE];    // line 255's block
 	WORD wOffsBelow = 0, wBottom = SCREEN_H - 1;
 	const tRoadRun *pRun = s_pRuns;
@@ -491,6 +498,15 @@ static void copperUpdate(void) {
 		}
 		pVal[0] = uwCon1;
 		pVal[2] = i ? (UWORD)(wOffsBelow - wOffsBottom - FETCH_BYTES) : (UWORD)-FETCH_BYTES;
+		if(pRun->row == ROW_SKY) {
+			// the sky, always last: only the lines that weren't sky in this
+			// buffer's last picture (between the road's top then and now)
+			if(wBottom > wSkyDone) linesFill(pVal, wBottom - wSkyDone, uwCon1, uwMod);
+			s_pSkyDone[ubBfr] = wBottom;
+			wOffsBelow = wOffs;
+			pVal = pBlock[0];                     // line REGION_TOP-1
+			break;
+		}
 		// the lines above it in the run
 		if(wBottom >= s_wWrapLine && wTop < s_wWrapLine) {
 			pVal = linesFill(pVal, wBottom - s_wWrapLine, uwCon1, uwMod) - 2;   // (- 2: over the wrap WAIT)
@@ -692,7 +708,7 @@ static UWORD s_pDouble[256];        // a byte with each pixel doubled
 // Letters per picture (a big one counts 4): a whole new screen of text is
 // spread over a few pictures instead of one slow one. What didn't fit is
 // still different from s_pHudShown, so it's drawn next time.
-#define HUD_BUDGET 16
+#define HUD_BUDGET 10
 static UBYTE s_ubHudBudget;
 // Per buffer and item, what it shows (a value, or the text's address) once
 // it's all drawn: unchanged items cost a compare

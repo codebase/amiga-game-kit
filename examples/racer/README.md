@@ -75,7 +75,7 @@ OCS dual playfield, 6 lowres planes, built from a raw copper list:
 
 `sound/sound.toml` + `sound/theme.mml`, converted by `agk sound`:
 
-- **Music:** "Coast Road", 16 bars in D major at 150 BPM (a 26 s loop). Lead, a syncopated bass and drums on Paula channels 0, 1 and 3.
+- **Music:** "Redline", driving metal: 16 bars in E minor at 168 BPM (a 23 s loop). A square-wave lead, sawtooth power-chord chugs and gallops (root and fifth as fast arpeggios), and double-kick drums, on Paula channels 0, 1 and 3.
 - **Effects** take channel 3 for a moment: crash (a long crunch), bump (a short one), checkpoint (a rising arpeggio), start, time up (a long fall), grass (a rumble).
 - **The engine** is channel 2, which ptplayer is told to leave alone:
   - A 64-sample waveform in chip RAM, looping.

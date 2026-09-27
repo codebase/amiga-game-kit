@@ -54,4 +54,4 @@ priority = 1
 
 [music.theme]
 source = "theme.mml"
-volume = 40               # under the engine and the effects
+volume = 50               # up front: it's metal
