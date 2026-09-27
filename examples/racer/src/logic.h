@@ -74,7 +74,8 @@
 #define X_MAX 400              // how far onto the grass you can go (the near rows
                                // shift by X_MAX * 200 / 256 = 312 px: inside LEFT_MIN..MAX)
 #define STEER 5                // x per frame at full speed
-#define CENTRIFUGAL 3          // how hard curves push you out (see logicUpdate)
+#define CENTRIFUGAL 5          // how hard curves push you out: curve * 5 / 16384 of the speed;
+                               // full steering just holds the sharpest (4) at full speed
 #define KMH_MAX 290            // speed shown for SPEED_MAX
 
 typedef struct {
@@ -125,6 +126,8 @@ typedef struct {
 #define TIME_MAX (99 * FPS)
 #define OVER_FRAMES (4 * FPS)  // time up -> title
 #define TITLE_WAIT FPS         // the title ignores fire this long (still held from the race)
+#define DEMO_WAIT (10 * FPS)   // on the title this long: a demo drive (the autopilot)
+#define DEMO_FRAMES (60 * FPS) // (then back to the title; fire, a crash or time up end it sooner)
 #define MESSAGE_FRAMES (2 * FPS)
 #define MSG_NONE 0
 #define MSG_EXTEND 1           // "EXTEND TIME!"
@@ -150,6 +153,9 @@ typedef struct {
 	uint8_t message;   // MSG_*, shown for messageFrames more frames
 	uint16_t messageFrames;
 	uint8_t extended;  // a checkpoint this frame (for the sound)
+	uint8_t isDemo;    // a race driven by logicAutopilot() (attract mode)
+	int8_t autoLane;   // the autopilot's lane
+	tInput autoInput;  // its last decision (it decides every other frame)
 	uint8_t crash;     // frames of crash left (0: driving)
 	uint8_t crashed;   // a crash this frame (for the sound)
 	uint16_t crashes;
@@ -210,6 +216,10 @@ void logicInit(tGameState *pState);
 /** The title (attract mode): a race's start, standing, rivals driving by;
  *  keeps the last race's score. Fire (tInput.accel) starts a race. */
 void logicTitle(tGameState *pState);
+/** The demo's driver: keeps a lane until a rival is close, then changes to
+ *  the one with the most room; steers against the bends' push, lifts off when
+ *  pushed wide. Also used by the host tool that writes scenarios. */
+void logicAutopilot(tGameState *pState, tInput *pOut);
 /** Seconds left on the clock, rounded up (what the HUD shows). */
 uint8_t logicTimeSeconds(const tGameState *pState);
 /** One frame of driving. Returns 1 if anything test-visible changed. */

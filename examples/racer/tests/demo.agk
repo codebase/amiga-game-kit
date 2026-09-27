@@ -1,0 +1,12 @@
+# Left on the title, the game drives itself (attract mode): the autopilot
+# races along without a crash; fire goes back to the title.
+wait-serial "AGK t0"
+wait-serial "phase=1" 1200
+wait 400
+screenshot driving
+expect-no-serial "crashes=[1-9]"
+press fire 2
+wait 10
+screenshot title
+expect-serial "phase=1(.|\n)*kmh=290(.|\n)*phase=0"
+expect-no-serial "ERR|STACK SMASHED"

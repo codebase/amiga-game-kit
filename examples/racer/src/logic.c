@@ -35,20 +35,20 @@ static const struct {
 	uint8_t palms;    // SCENERY_PALM_L | SCENERY_PALM_R: palm trees every PALM_EVERY segments
 } s_pParts[] = {
 	{ 45,  0,     0, 3},  // start straight (the whole view ahead is flat)
-	{ 30,  0,  8000, 3},  // climb
+	{ 30,  0,  5000, 3},  // climb
 	{ 35,  2,     0, 1},  // right sweeper over the top
-	{ 20,  0, -8000, 2},  // down
+	{ 20,  0, -5000, 2},  // down
 	{ 40, -3,     0, 3},  // long left
 	{ 10,  0,     0, 0},
-	{ 30,  4,  5000, 1},  // right, climbing
-	{ 30, -4, -5000, 2},  // left, falling: an S
-	{ 15,  0,  4000, 3},  // rolling hills
-	{ 15,  0, -4000, 3},
-	{ 15,  0,  4000, 3},
-	{ 15,  0, -4000, 3},
+	{ 30,  4,  3000, 1},  // right, climbing
+	{ 30, -4, -3000, 2},  // left, falling: an S
+	{ 15,  0,  1500, 3},  // rolling hills
+	{ 15,  0, -1500, 3},
+	{ 15,  0,  1500, 3},
+	{ 15,  0, -1500, 3},
 	{ 35,  1,     0, 1},  // gentle right
-	{ 25, -2, -3000, 2},  // left, down to the coast
-	{ 20,  0,  3000, 3},
+	{ 25, -2, -2000, 2},  // left, down to the coast
+	{ 20,  0,  2000, 3},
 	{ 20,  3,     0, 3},  // right, back to the start line
 };
 #define PART_COUNT (sizeof(s_pParts) / sizeof(s_pParts[0]))
@@ -241,6 +241,9 @@ void logicInit(tGameState *pState) {
 	pState->crash = 0;
 	pState->crashed = 0;
 	pState->crashes = 0;
+	pState->isDemo = 0;
+	pState->autoLane = 0;
+	pState->autoInput = (tInput){0};
 	// spread around the loop at irregular gaps (a fixed pseudo-random
 	// sequence: every game is the same), the first one ahead in our lane
 	uint16_t rnd = 0xACE1;
@@ -263,6 +266,51 @@ void logicTitle(tGameState *pState) {
 	pState->frame = frame;
 }
 
+void logicAutopilot(tGameState *pState, tInput *pOut) {
+	// the room ahead in each lane: the nearest rival's distance from our nose
+	int32_t pRoom[3] = {TRACK_LEN, TRACK_LEN, TRACK_LEN};
+	uint32_t nose = pState->pos + PLAYER_Z;
+	for(uint8_t i = 0; i < TRAFFIC_N; ++i) {
+		const tRival *pR = &pState->rivals[i];
+		int32_t d = trackDelta(pR->pos, nose);
+		if(d > -CAR_LEN && d < pRoom[pR->lane + 1]) pRoom[pR->lane + 1] = d;
+	}
+	int16_t x = pState->x;
+	int8_t lane = x < -LANE_X / 2 ? -1 : x > LANE_X / 2 ? 1 : 0;
+	int8_t target = pState->autoLane;
+	int8_t c = logicCurveAt(pState->pos);
+	// in a bend, the inside lane (the push is outwards) if it's clear
+	if(c) {
+		int8_t inward = lane + (c > 0 ? 1 : -1);   // a lane towards the inside
+		if(inward >= -1 && inward <= 1 && pRoom[inward + 1] > 900) target = inward;
+	}
+	if(pRoom[target + 1] < 450) {
+		// a rival close ahead: the neighbouring lane with (much) more room
+		for(int8_t l = -1; l <= 1; ++l) {
+			if(l - lane > 1 || lane - l > 1) continue;
+			if(pRoom[l + 1] > pRoom[target + 1] + 300) target = l;
+		}
+	}
+	pState->autoLane = target;
+	int16_t err = s_pLaneX[target + 1] - x + (int16_t)mul16(c, 12);   // lean against the bend's push
+	tInput in = {.steer = err > 40 ? 1 : err < -40 ? -1 : 0, .accel = 1, .brake = 0};
+	if(x > 220) in.steer = -1;
+	else if(x < -220) in.steer = 1;            // never near the objects
+	if(pRoom[lane + 1] < 220 && pState->speed > 8 << SPEED_SHIFT) {
+		in.accel = 0;                           // boxed in: brake behind it
+		in.brake = 1;
+	}
+	// in the sharpest bends steering can't beat the push at full speed: lift
+	// off when pushed out, brake when far out
+	int16_t out = c > 0 ? -x : c < 0 ? x : 0;
+	if(out > 180 && pState->speed > 13 << SPEED_SHIFT) in.accel = 0;
+	if(out > 230 && pState->speed > 10 << SPEED_SHIFT) {
+		in.accel = 0;
+		in.brake = 1;
+	}
+	*pOut = in;
+}
+
 uint8_t logicTimeSeconds(const tGameState *pState) {
 	return (uint8_t)div16u(pState->time + FPS - 1, FPS);
 }
@@ -276,13 +324,30 @@ uint8_t logicUpdate(tGameState *pState, const tInput *pInputIn) {
 	static const tInput sNone = {0};
 	const tInput *pInput = pInputIn;
 	if(pState->phase == PHASE_TITLE) {
-		if(pInputIn->accel && pState->phaseFrames > TITLE_WAIT) {
+		uint8_t isStart = pInputIn->accel && pState->phaseFrames > TITLE_WAIT;
+		if(isStart || pState->phaseFrames > DEMO_WAIT) {
 			uint16_t frame = pState->frame;
+			uint32_t score = pState->score;
 			logicInit(pState);   // (the score starts again)
 			pState->frame = frame;
+			if(!isStart) {
+				pState->isDemo = 1;
+				pState->score = score;   // (the title keeps showing the last race's)
+			}
 			return 1;
 		}
 		pInput = &sNone;
+	}
+	else if(pState->isDemo) {
+		// fire, a crash, time up or enough: back to the title
+		if(pInputIn->accel || pState->crash || pState->phase == PHASE_OVER || pState->phaseFrames >= DEMO_FRAMES) {
+			uint16_t frame = pState->frame;
+			logicTitle(pState);
+			pState->frame = frame;
+			return 1;
+		}
+		if(pState->frame & 1) logicAutopilot(pState, &pState->autoInput);
+		pInput = &pState->autoInput;
 	}
 	else if(pState->phase == PHASE_OVER) {
 		if(pState->phaseFrames >= OVER_FRAMES) {
@@ -327,7 +392,7 @@ uint8_t logicUpdate(tGameState *pState, const tInput *pInputIn) {
 	int16_t x = pState->x;
 	if(!pState->crash) {
 		x += (int16_t)(mul16(pInput->steer * STEER, s) >> 12);
-		x -= (int16_t)(mul16(curve * CENTRIFUGAL, s) >> 13);
+		x -= (int16_t)(mul16(curve * CENTRIFUGAL, s) >> 14);
 	}
 	if(x > X_MAX) x = X_MAX;
 	if(x < -X_MAX) x = -X_MAX;
@@ -376,7 +441,7 @@ uint8_t logicUpdate(tGameState *pState, const tInput *pInputIn) {
 	if(pState->pos > prePos + TRACK_LEN / 2) --pState->laps;   // bounced back over the start line
 
 	if(pState->phase == PHASE_RACE) {
-		pState->score += (uint16_t)pState->speed >> SPEED_SHIFT;
+		if(!pState->isDemo) pState->score += (uint16_t)pState->speed >> SPEED_SHIFT;   // (the title keeps the last race's)
 		if(trackDelta(pState->pos, pState->nextCheckpoint) >= 0) {
 			pState->nextCheckpoint = wrapPos(pState->nextCheckpoint + CHECKPOINT_LEN);
 			pState->time = pState->time + EXTEND_TIME > TIME_MAX ? TIME_MAX : pState->time + EXTEND_TIME;
@@ -407,6 +472,8 @@ uint16_t logicKmh(const tGameState *pState) {
 // Segments in view: the farthest row is ROAD_ZSCALE units ahead
 #define SEGS_AHEAD ((ROAD_ZSCALE >> SEG_SHIFT) + 2)
 
+#define FAR_ROWS 8
+#define FAR_LINES_MAX 4
 uint8_t logicRoadRuns(const tGameState *pState, tRoadRun *pRuns, tRoadView *pView) {
 	// This runs every picture for 80 rows, so a row costs only additions:
 	//  - within a segment the road is a straight line in 3D (height linear in
@@ -476,6 +543,11 @@ uint8_t logicRoadRuns(const tGameState *pState, tRoadRun *pRuns, tRoadView *pVie
 		else {
 			*pViewY = y;
 		}
+		// The farthest rows are 10-20 segments away and a few px wide: seen
+		// from high above (going down a long hill) one would stretch over many
+		// lines into a thin column. They keep a few; the horizon strip covers
+		// the rest.
+		if(r < FAR_ROWS && minY - y > FAR_LINES_MAX) y = minY - FAR_LINES_MAX;
 		int16_t left = ROAD_CX - SCREEN_W / 2 - cx;
 		if(left < LEFT_MIN) left = LEFT_MIN;
 		else if(left > LEFT_MAX) left = LEFT_MAX;

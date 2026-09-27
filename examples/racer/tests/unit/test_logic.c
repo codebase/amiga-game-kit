@@ -147,6 +147,15 @@ static void testHills(void) {
 		}
 		// the horizon strip sits right on top of the road
 		if(top - 1 >= REGION_TOP) CHECK(LINE(top - 1).row == ROW_BACK + BACK_H - 1);
+		// and the far road never stretches into a thin column (a far row on
+		// many lines: seen from high above, going down a long hill)
+		int stretch = 1;
+		for(int y = top + 1; y < SCREEN_H; ++y) {
+			if(LINE(y).row == LINE(y - 1).row && LINE(y).row < 40) {
+				CHECK(++stretch <= 5);
+			}
+			else stretch = 1;
+		}
 	}
 	printf("road top: %d..%d (flat %d)\n", topMin, topMax, HORIZON_Y + 1);
 	CHECK(topMin < HORIZON_Y - 10);   // uphill ahead
@@ -429,6 +438,37 @@ static void testTitleStartsARace(void) {
 	CHECK(s.phase == PHASE_RACE && s.score == 0 && s.time == START_TIME && s.pos == 0);
 }
 
+// ---------------------------------------------------------------- the demo
+
+static void testAutopilotDrivesALap(void) {
+	// A whole lap with the traffic, in time, without a crash
+	tGameState s;
+	logicInit(&s);
+	tInput in = {0};
+	uint32_t f = 0;
+	for(; f < 20000 && !s.laps && s.phase == PHASE_RACE; ++f) {
+		if(f & 1) logicAutopilot(&s, &in);
+		logicUpdate(&s, &in);
+	}
+	printf("autopilot lap: %u frames, %u bumps, %u s left\n", f, s.bumps, logicTimeSeconds(&s));
+	CHECK(s.laps == 1 && s.phase == PHASE_RACE && s.crashes == 0);
+	CHECK(s.bumps <= 3);
+}
+
+static void testTitleStartsADemo(void) {
+	tGameState s;
+	logicInit(&s);
+	logicTitle(&s);
+	drive(&s, (tInput){0}, DEMO_WAIT);
+	CHECK(s.phase == PHASE_TITLE);
+	drive(&s, (tInput){0}, 2);
+	CHECK(s.phase == PHASE_RACE && s.isDemo);
+	drive(&s, (tInput){0}, 300);
+	CHECK(s.speed > 0 && s.pos > 0);   // it drives itself
+	drive(&s, (tInput){.accel = 1}, 1);
+	CHECK(s.phase == PHASE_TITLE && !s.isDemo);   // fire: back to the title
+}
+
 static void testLap(void) {
 	tGameState s;
 	logicInit(&s);
@@ -460,6 +500,8 @@ int main(void) {
 	testCrashIntoAPalm();
 	testSlowIntoAPalmStops();
 	testTheRoadIsSafe();
+	testAutopilotDrivesALap();
+	testTitleStartsADemo();
 	testClockRunsOut();
 	testCheckpointExtendsTime();
 	testTitleStartsARace();

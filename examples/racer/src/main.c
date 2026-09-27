@@ -854,8 +854,9 @@ static void hudUpdate(UBYTE ubBfr, UBYTE ubBudget) {
 	else {
 		hudText(pFb, ubBfr, HUD_MSG,
 			pS->message == MSG_EXTEND ? "EXTEND TIME!" :
-			pS->message == MSG_TIMEUP ? "  TIME UP" : "");
-		hudText(pFb, ubBfr, HUD_SUB, "");
+			pS->message == MSG_TIMEUP ? "  TIME UP" :
+			pS->isDemo ? "    DEMO" : "");
+		hudText(pFb, ubBfr, HUD_SUB, pS->isDemo && isBlinkOn ? "PRESS FIRE" : "");
 		hudText(pFb, ubBfr, HUD_LABELS, "TIME          SCORE         SPEED");
 	}
 }
@@ -1000,6 +1001,11 @@ void genericProcess(void) {
 	isExtended |= s_sState.extended;
 	isCrashed |= s_sState.crashed;
 	playSounds(ubPhaseBefore, isBumped, isExtended, isOffBefore);
+	if(s_sState.isDemo) {
+		// the autopilot drives: the car leans and the engine pulls with it
+		sInput = s_sState.autoInput;
+		s_isThrottle = sInput.accel;
+	}
 	if(isCrashed) soundPlay(SOUND_SFX_CRASH);
 	engineUpdate();
 	copperUpdate();

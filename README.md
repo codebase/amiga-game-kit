@@ -38,7 +38,7 @@ frame. See its README for the register-level setup.
 
 [![racer](docs/img/racer.gif)](docs/media/racer.mp4)
 
-▶ [Watch it with sound](docs/media/racer.mp4): 36 s, recorded with `agk record`.
+▶ [Watch it with sound](docs/media/racer.mp4): a minute of its attract-mode demo, recorded with `agk record`.
 
 An arcade-style road racer for a stock A500, also built by an AI agent with the kit:
 - A copper raster road with hills and curves: every line of the road picks its row and scroll through the copper, and the CPU draws nothing.
