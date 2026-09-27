@@ -76,6 +76,7 @@ biggest harness change in this phase.
   - Its first finding was our own debug output. Serial printing cost up to 20% of a frame; an interrupt-driven ring buffer halved that.
   - That's still too slow, because each character costs a level-1 interrupt on a 68000.
 - **Host channel.** The default debug channel now hands strings straight to the emulator: three writes to the NOOP register, which do nothing on real hardware. A frame that prints status now costs 9% instead of 25%, against 4% for the game alone. The serial channel remains for debugging on real hardware.
+- **State records.** Formatting `k=v` text still cost the 68000 several raster lines per value under a 6-plane display (a 10-value line was ~9% of a picture in the racer). Now `agkState()` only records the key's address and the value, and `agkEnd()` hands the record to the emulator (0xA6E2, address high, address low). vAmiga formats the identical "AGK k=v ..." line.
 - **Tick sync.**
   - *The bug:* the BOB game uses about 24% of each frame, so its work straddles video line 0, where the harness used to apply input and check serial. Whether a line printed before or after line 0 depended on CPU speed, and CPU speed differs per profile because of RAM layout. So `hit.agk` passed on Kick 1.3 and failed on Kick 3.1 and AROS.
   - *The fix:* `agkPerfBegin()` now marks the start of each game frame (a NOOP "tick"). With `sync = "ticks"`, vAmiga runs pending script commands synchronously at that tick, right before the game reads input.

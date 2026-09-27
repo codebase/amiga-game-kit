@@ -164,7 +164,7 @@ void agkPrint(const char *szText) {
 // agkState() collects a whole "AGK k=v k=v" line here and agkEnd() sends it in
 // one go: one host transfer per line instead of four per value.
 #define AGK_LINE_MAX 200
-static char s_szLine[AGK_LINE_MAX + 2];
+static char s_szLine[AGK_LINE_MAX + 2] __attribute__((unused));   // (the serial channel)
 static UBYTE s_ubLineLen;
 
 static const ULONG s_pPowers[] = {
@@ -220,11 +220,55 @@ UBYTE agkIsReady(void) {
 	return s_isReady;
 }
 
-static void lineAppend(const char *sz) {
+__attribute__((unused)) static void lineAppend(const char *sz) {
 	while(*sz && s_ubLineLen < AGK_LINE_MAX) {
 		s_szLine[s_ubLineLen++] = *sz++;
 	}
 }
+
+#ifdef AGK_CHANNEL_HOST
+// The emulator formats state lines itself: agkState() only records the key's
+// address and the value, and agkEnd() hands the record over (0xA6E2, address
+// high, address low). Formatting "k=v" text on a 68000 costs several raster
+// lines a value when the display is busy; this costs a few instructions.
+#define AGK_STATE_MAX 24
+static struct {
+	ULONG ulCount;
+	struct { const char *szKey; LONG lValue; } pPairs[AGK_STATE_MAX];
+} s_sState;
+
+void agkState(const char *szKey, LONG lValue) {
+	if(!s_isLineOpen) {
+		s_sState.ulCount = 0;
+		s_isLineOpen = 1;
+	}
+	if(s_sState.ulCount == AGK_STATE_MAX) {
+		// full: send what's there, carry on in a new line
+		agkEnd();
+		s_sState.ulCount = 0;
+		s_isLineOpen = 1;
+	}
+	s_sState.pPairs[s_sState.ulCount].szKey = szKey;
+	s_sState.pPairs[s_sState.ulCount].lValue = lValue;
+	++s_sState.ulCount;
+}
+
+void agkEnd(void) {
+	if(s_isLineOpen) {
+		ULONG ulAddr = (ULONG)&s_sState;
+		UWORD uwIntEna = g_pCustom->intenar & INTF_INTEN;
+		g_pCustom->intena = INTF_INTEN;
+		NOOP = 0xA6E2;
+		NOOP = (UWORD)(ulAddr >> 16);
+		NOOP = (UWORD)ulAddr;
+		if(uwIntEna) {
+			g_pCustom->intena = INTF_SETCLR | INTF_INTEN;
+		}
+		s_isLineOpen = 0;
+	}
+}
+
+#else
 
 void agkState(const char *szKey, LONG lValue) {
 	if(!s_isLineOpen) {
@@ -250,3 +294,5 @@ void agkEnd(void) {
 		s_isLineOpen = 0;
 	}
 }
+
+#endif

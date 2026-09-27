@@ -478,10 +478,10 @@ index 92790b9..9592819 100644
      //
      // Methods
 diff --git a/Core/Ports/SerialPort.cpp b/Core/Ports/SerialPort.cpp
-index b8a0833..9e811a3 100644
+index b8a0833..56f31b0 100644
 --- a/Core/Ports/SerialPort.cpp
 +++ b/Core/Ports/SerialPort.cpp
-@@ -303,6 +303,37 @@ SerialPort::recordIncomingByte(int byte)
+@@ -303,6 +303,62 @@ SerialPort::recordIncomingByte(int byte)
      }
  }
  
@@ -493,14 +493,16 @@ index b8a0833..9e811a3 100644
 +        case 0: // Waiting for the magic word
 +            if (value == 0xA6E0) agkHostState = 1;
 +            if (value == 0xA6E1) { agkTicks++; retroShell.onAgkTick(); }
++            if (value == 0xA6E2) agkHostState = 3;
 +            break;
 +
 +        case 1: // Upper half of the string address
++        case 3: // Upper half of the state record's address
 +            agkHostPtr = u32(value) << 16;
-+            agkHostState = 2;
++            agkHostState++;
 +            break;
 +
-+        default: // Lower half: copy the NUL-terminated string into the log
++        case 2: // Lower half: copy the NUL-terminated string into the log
 +        {
 +            agkHostPtr |= value;
 +            agkHostState = 0;
@@ -513,13 +515,36 @@ index b8a0833..9e811a3 100644
 +            }
 +            break;
 +        }
++
++        default: // Lower half: a state record, formatted here as "AGK k=v k=v"
++        {        // (ULONG count, then count x { key string address, LONG value })
++            agkHostPtr |= value;
++            agkHostState = 0;
++            {   SYNCHRONIZED
++                u32 count = mem.spypeek32<Accessor::CPU>(agkHostPtr);
++                std::string line = "AGK";
++                for (u32 i = 0; i < count && i < 64; i++) {
++                    u32 key = mem.spypeek32<Accessor::CPU>(agkHostPtr + 4 + 8 * i);
++                    i32 val = i32(mem.spypeek32<Accessor::CPU>(agkHostPtr + 8 + 8 * i));
++                    line += ' ';
++                    for (isize k = 0; k < 64; k++) {
++                        auto c = mem.spypeek8<Accessor::CPU>(u32(key + k));
++                        if (c == 0) break;
++                        line += char(c);
++                    }
++                    line += '=' + std::to_string(val);
++                }
++                agkLog += line + '\n';
++            }
++            break;
++        }
 +    }
 +}
 +
  void
  SerialPort::recordOutgoingByte(int byte)
  {
-@@ -312,6 +343,7 @@ SerialPort::recordOutgoingByte(int byte)
+@@ -312,6 +368,7 @@ SerialPort::recordOutgoingByte(int byte)
  
          // Record the incoming byte
          outgoing += char(byte);
