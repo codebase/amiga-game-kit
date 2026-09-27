@@ -144,6 +144,41 @@ class BuildTests(unittest.TestCase):
             sound.build(d)
 
 
+class SampleTests(unittest.TestCase):
+    """#inst NAME FILE.wav root=NOTE: recordings as instruments."""
+
+    def setUp(self):
+        import math, tempfile
+        self.dir = tempfile.mkdtemp()
+        # a 0.5 s A3 (220 Hz) at 22050 Hz
+        pcm = [0.5 * math.sin(2 * math.pi * 220 * i / 22050) for i in range(11025)]
+        sound.write_wav(os.path.join(self.dir, "a3.wav"), pcm, 22050)
+
+    def test_root_plays_as_recorded(self):
+        mod, info = sound.compile_mml("#inst g a3.wav root=a3\nA @g o3 l4 a > e r r", "s", self.dir)
+        samples, order, pats = sound._parse_mod(mod)
+        self.assertEqual(samples[0]["replen"], 2)                  # one-shot
+        self.assertAlmostEqual(samples[0]["len"], 0.5 * sound.SFX_RATE, delta=4)   # resampled to 16.5 kHz
+        row0 = pats[0:4]
+        period = ((row0[0] & 0x0F) << 8) | row0[1]
+        self.assertEqual(period, 214)                              # the root: its own rate (C-3)
+        row4 = pats[4 * 16:4 * 16 + 4]
+        self.assertEqual(((row4[0] & 0x0F) << 8) | row4[1], sound.PERIODS[24 + 7])   # a fifth up
+
+    def test_gate_cuts_a_sample(self):
+        mod, _ = sound.compile_mml("#inst g a3.wav root=a3\nA @g o3 l4 q2 a a", "s", self.dir)
+        _, _, pats = sound._parse_mod(mod)
+        cell = pats[1 * 16:1 * 16 + 4]                             # row 1 of the first note
+        self.assertEqual((cell[2] & 0x0F, cell[3]), (0xC, 0))      # volume 0: cut
+
+    def test_errors(self):
+        for text, msg in (("#inst g a3.wav\nA @g c", "root=NOTE"),
+                          ("#inst g a3.wav root=a3\nA @g o5 a", "2 octaves down and 1 up"),
+                          ("#inst g nope.wav root=a3\nA @g o3 a", "not found")):
+            with self.assertRaisesRegex(sound.SoundError, msg):
+                sound.compile_mml(text, "s", self.dir)
+
+
 class RecordTests(unittest.TestCase):
     def test_every_frame_is_captured(self):
         from agk import record

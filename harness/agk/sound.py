@@ -62,6 +62,12 @@ are joined:
   Waves: square pulse25 pulse12 saw triangle sine (looped, any pitch within
   3 octaves per instrument) and drums kick snare hat tom crash (one-shot;
   `o4 c` is their natural pitch).
+
+  Samples: `#inst NAME FILE.wav root=NOTE [vol=0-64]` plays a recording
+  (a 16-bit WAV in sound/, resampled to 16.5 kHz) - a guitar, a real drum.
+  `root` is the note it was recorded at (e2, f+3, o4c...): that note plays it
+  as it is, others pitch it up or down (2 octaves down to 1 up). It plays
+  once, to its end or the next note; `q` cuts it short (palm mutes).
   Notes c d e f g a b, + or # sharp, - flat, then an optional length (4 =
   quarter, 8 = eighth, ... default `l`) and dots. `r` rest. `c4&c16` or
   `c4&16` tie. `o N` octave, `<` `>` octave down/up, `l N` default length,
@@ -245,8 +251,9 @@ def _base_note(n):
 
 
 class _Inst:
-    def __init__(self, name, wave_name, vol, decay):
+    def __init__(self, name, wave_name, vol, decay, root=None):
         self.name, self.wave, self.vol, self.decay = name, wave_name, vol, decay
+        self.root = root            # a sample's recorded pitch (MIDI), else None
         self.notes = set()
         self.sample_no = 0
         self.cycle = 0
@@ -255,6 +262,26 @@ class _Inst:
     @property
     def looped(self):
         return self.wave in LOOPED
+
+    @property
+    def is_sample(self):
+        return self.root is not None
+
+
+def _parse_note(text):
+    """'e2', 'f+3', 'b-1', 'o4c' -> MIDI note (o4 c = 60, like the MML)."""
+    t = text.lower().replace("#", "+")
+    if t.startswith("o") and len(t) > 2 and t[1].isdigit():
+        t = t[2:] + t[1]
+    if not t or t[0] not in NOTE_PC:
+        return None
+    pc, rest = NOTE_PC[t[0]], t[1:]
+    while rest[:1] in ("+", "-"):
+        pc += 1 if rest[0] == "+" else -1
+        rest = rest[1:]
+    if not rest.isdigit():
+        return None
+    return (int(rest) + 1) * 12 + pc
 
 
 def _parse_header(line, lineno, song):
@@ -277,19 +304,30 @@ def _parse_header(line, lineno, song):
         if len(toks) < 3:
             raise SoundError(f"line {lineno}: usage: #inst NAME WAVE [vol=0-64] [decay=0-15]")
         name, wave_name = toks[1], toks[2]
-        if wave_name not in LOOPED + DRUMS:
-            raise SoundError(f"line {lineno}: wave '{wave_name}' - use one of {', '.join(LOOPED + DRUMS)}")
+        is_sample = wave_name.lower().endswith(".wav")
+        if not is_sample and wave_name not in LOOPED + DRUMS:
+            raise SoundError(f"line {lineno}: wave '{wave_name}' - use one of {', '.join(LOOPED + DRUMS)} "
+                             f"or a FILE.wav")
         opts = {"vol": 48, "decay": 0}
+        root = None
         for kv in toks[3:]:
             k, _, v = kv.partition("=")
+            if is_sample and k == "root":
+                root = _parse_note(v)
+                if root is None:
+                    raise SoundError(f"line {lineno}: root={v}: use a note like e2, f+3 or o4c")
+                continue
             if k not in opts or not v.isdigit():
-                raise SoundError(f"line {lineno}: bad option '{kv}' (use vol=0-64, decay=0-15)")
+                raise SoundError(f"line {lineno}: bad option '{kv}' (use vol=0-64, decay=0-15"
+                                 f"{', root=NOTE' if is_sample else ''})")
             opts[k] = int(v)
+        if is_sample and root is None:
+            raise SoundError(f"line {lineno}: a sample needs root=NOTE, the pitch it was recorded at (e.g. root=e2)")
         if opts["vol"] > 64 or opts["decay"] > 15:
             raise SoundError(f"line {lineno}: vol is 0-64, decay 0-15")
         if name in song["insts"]:
             raise SoundError(f"line {lineno}: instrument '{name}' defined twice")
-        song["insts"][name] = _Inst(name, wave_name, opts["vol"], opts["decay"])
+        song["insts"][name] = _Inst(name, wave_name, opts["vol"], opts["decay"], root)
     else:
         raise SoundError(f"line {lineno}: unknown directive #{key} (use #title #tempo #grid #inst)")
 
@@ -471,8 +509,8 @@ class _Track:
             self.err(f"missing '{end}'")
 
 
-def parse_mml(text, name="song"):
-    song = {"title": name[:20], "tempo": 125, "grid": 4, "insts": {}}
+def parse_mml(text, name="song", base_dir="."):
+    song = {"title": name[:20], "tempo": 125, "grid": 4, "insts": {}, "dir": base_dir}
     chans = {c: [] for c in CHANNELS}
     for lineno, raw in enumerate(text.splitlines(), 1):
         line = raw.split(";", 1)[0].strip()
@@ -527,6 +565,24 @@ def _assign_samples(song):
                                  f"one instrument covers 3 octaves - split it into two #inst lines")
             # ptplayer zeroes every sample's first word: a silent word, then the loop
             inst.data = b"\0\0" + waveform(inst.wave, inst.cycle)
+        elif inst.is_sample:
+            if lo - inst.root < -24 or hi - inst.root > 11:
+                raise SoundError(f"sample '{inst.name}' (root {_note_name(inst.root)}) is played at "
+                                 f"{_note_name(lo)}..{_note_name(hi)}: a sample reaches 2 octaves down "
+                                 f"and 1 up from its root")
+            path = os.path.join(song["dir"], inst.wave)
+            if not os.path.exists(path):
+                raise SoundError(f"sample '{inst.name}': {inst.wave} not found next to the song")
+            try:
+                pcm, rate = read_wav(path)
+            except (wave.Error, struct.error, EOFError) as e:
+                raise SoundError(f"sample '{inst.name}': {inst.wave} isn't a 16-bit WAV ({e})")
+            data = bytearray(_to_s8(resample(pcm, rate, SFX_RATE), gain=1.0))
+            if len(data) > 131070:
+                raise SoundError(f"sample '{inst.name}': {len(data)} bytes at 16.5 kHz; "
+                                 f"ProTracker's limit is 128 KB - shorten it")
+            data[0:2] = b"\0\0"      # ptplayer: a one-shot's first word is its silent loop
+            inst.data = bytes(data)
         else:
             if lo < 36 or hi > 71:
                 raise SoundError(f"drum '{inst.name}' is played at {_note_name(lo)}..{_note_name(hi)}: "
@@ -540,12 +596,14 @@ def _note_name(midi):
 
 
 def _period_index(inst, midi):
+    if inst.is_sample:
+        return midi - inst.root + 24           # the root plays at C-3 (the sample's own rate)
     return midi - (_base_note(inst.cycle) if inst.looped else 36)
 
 
-def compile_mml(text, name="song"):
-    """MML -> (MOD file bytes, info dict)."""
-    song = parse_mml(text, name)
+def compile_mml(text, name="song", base_dir="."):
+    """MML -> (MOD file bytes, info dict). Sample files are looked up in base_dir."""
+    song = parse_mml(text, name, base_dir)
     used = _assign_samples(song)
     rows = song["rows"]
     # cells[row][ch] = [sample, period, cmd, param]
@@ -577,9 +635,9 @@ def compile_mml(text, name="song"):
             if inst.decay and not arp and inst.looped:
                 for k in range(r + 1, r + n):
                     cells[k][ci][2:] = [0xA, inst.decay]
-            sounding = inst.looped
+            sounding = inst.looped or inst.is_sample
             cut = r + max(1, (n * gate + 7) // 8)
-            if inst.looped and cut < r + n:
+            if (inst.looped or inst.is_sample) and cut < r + n:
                 cells[cut][ci][2:] = [0xC, 0]
                 for k in range(cut + 1, r + n):
                     cells[k][ci][2:] = [0, 0]
@@ -901,7 +959,7 @@ def build(project_dir, out_dir=None, previews=True):
         if not os.path.exists(path):
             raise SoundError(f"music.{name}: {src} not found in sound/")
         try:
-            mod, info = compile_mml(open(path).read(), name)
+            mod, info = compile_mml(open(path).read(), name, sdir)
         except SoundError as e:
             raise SoundError(f"{src}: {e}")
         _write_if_changed(os.path.join(out_dir, f"{name}.mod"), mod)

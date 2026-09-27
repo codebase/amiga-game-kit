@@ -96,6 +96,12 @@ has both formats.
   `NAME.wav` and `NAME.png`, a spectrogram over the waveform. **Look at the
   spectrogram** after every change: a sweep, a melody, drums and silence are
   easy to see.
+- Songs can use **sampled instruments** as well as the chip waves: `#inst
+  guitar samples/guitar.wav root=e2` plays a 16-bit WAV (resampled to
+  16.5 kHz), pitched from the note it was recorded at. That's what makes an
+  Amiga song sound like real instruments rather than beeps. Samples cost chip
+  RAM (`agk sound` prints the total). `{{kit}}/examples/racer/sound/tools/make_samples.py`
+  synthesizes distorted guitars and drums with no recordings at all.
 - C code includes `sound.h`: `soundCreate()` (after the system is set up),
   `soundPlay(SOUND_SFX_JUMP)`, `soundMusicStart(SOUND_MUSIC_THEME)`,
   `soundMusicStop()`, `soundDestroy()`.
