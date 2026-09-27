@@ -35,6 +35,10 @@
 #include "art.h"      // generated from art/ by agk (agk help-art)
 #include "gen_palm.h"  // the palm tree's and the rival's sizes (art/tools/scale_sheet.py)
 #include "gen_rival.h"
+#include "gen_bush.h"   // roadside props (art/tools/props.py)
+#include "gen_sign_l.h"
+#include "gen_sign_r.h"
+#include "gen_gate.h"
 #include "gen_font.h"   // the HUD's letters (art/tools/font.py)
 #include "sound.h"      // generated from sound/ by agk (agk help-sound)
 #include <ace/managers/ptplayer.h>
@@ -92,11 +96,12 @@ static UBYTE *s_pBlankRow;        // FETCH_BYTES of zeros
 #define FB_ROW_BYTES (FB_PLANE_BYTES * FB_BPP)        // interleaved: all planes of a row
 #define FB_FETCH_OFFS ((FB_X0 - 16) / 8)
 static tBitMap *s_pFb[2];
-// Objects (tObject.type: OBJ_PALM, OBJ_RIVAL) come in OBJ_LEVELS pre-scaled
-// sizes, stacked in one bitmap (and its mask) per type
-#define OBJ_TYPES 2
+// Objects (tObject.type: OBJ_*) come in OBJ_LEVELS pre-scaled sizes, stacked
+// in one bitmap (and its mask) per type
 #define OBJ_LEVELS 10
-_Static_assert(PALM_LEVELS == OBJ_LEVELS && RIVAL_LEVELS == OBJ_LEVELS, "one scale table for all");
+_Static_assert(PALM_LEVELS == OBJ_LEVELS && RIVAL_LEVELS == OBJ_LEVELS && BUSH_LEVELS == OBJ_LEVELS &&
+	SIGN_L_LEVELS == OBJ_LEVELS && SIGN_R_LEVELS == OBJ_LEVELS && GATE_LEVELS == OBJ_LEVELS,
+	"one scale table for all");
 static tBitMap *s_pObjBm[OBJ_TYPES], *s_pObjMask[OBJ_TYPES];
 static struct { UWORD y, w, h; } s_pObjSize[OBJ_TYPES][OBJ_LEVELS];
 static tRoadView s_sView;
@@ -127,6 +132,13 @@ static UWORD s_uwCopUsed;
 #define CAR_Y 212
 #define CAR_FRAME_LEFT 1
 #define CAR_FRAME_RIGHT 2
+#define CAR_FRAME_TUMBLE 3    // 3 frames: rolled right, upside down, rolled left (art/tools/car_crash.py)
+// A crash: two hops (heights per frame of the crash), tumbling while in the air
+#define HOP1_FRAMES 40
+#define HOP1_H 26
+#define HOP2_FRAMES 24
+#define HOP2_H 9
+static UBYTE s_pHop[HOP1_FRAMES + HOP2_FRAMES];
 static tBitMap *s_pCarFrames[ART_CAR_FRAMES][ART_CAR_PARTS];
 static tSprite *s_pCar[ART_CAR_PARTS];
 static UBYTE s_ubCarFrame = 0xFF;
@@ -280,14 +292,15 @@ static void copperTablesCreate(void) {
 // -------------------------------------------------------------- objects ---
 
 static void objectsInit(void) {
-	for(UBYTE l = 0; l < OBJ_LEVELS; ++l) {
-		s_pObjSize[OBJ_PALM][l].y = g_pPalmLevel[l].y;
-		s_pObjSize[OBJ_PALM][l].w = g_pPalmLevel[l].w;
-		s_pObjSize[OBJ_PALM][l].h = g_pPalmLevel[l].h;
-		s_pObjSize[OBJ_RIVAL][l].y = g_pRivalLevel[l].y;
-		s_pObjSize[OBJ_RIVAL][l].w = g_pRivalLevel[l].w;
-		s_pObjSize[OBJ_RIVAL][l].h = g_pRivalLevel[l].h;
-	}
+#define OBJ_SIZES(t, table) for(UBYTE l = 0; l < OBJ_LEVELS; ++l) { \
+		s_pObjSize[t][l].y = table[l].y; s_pObjSize[t][l].w = table[l].w; s_pObjSize[t][l].h = table[l].h; }
+	OBJ_SIZES(OBJ_PALM, g_pPalmLevel)
+	OBJ_SIZES(OBJ_RIVAL, g_pRivalLevel)
+	OBJ_SIZES(OBJ_BUSH, g_pBushLevel)
+	OBJ_SIZES(OBJ_SIGN_L, g_pSign_lLevel)
+	OBJ_SIZES(OBJ_SIGN_R, g_pSign_rLevel)
+	OBJ_SIZES(OBJ_GATE, g_pGateLevel)
+#undef OBJ_SIZES
 	// For each scale (1/256 of the nearest row's size), the size whose height
 	// is closest to that fraction of the full size (the sheets all use the
 	// same steps: the palm's stand for all)
@@ -556,6 +569,7 @@ static void readInput(tInput *pInput) {
 
 static void hudInit(void);
 static void engineCreate(void);
+static void hopInit(void);
 static UBYTE s_isThrottle;
 static void hudUpdate(UBYTE ubBfr, UBYTE ubBudget);
 
@@ -582,6 +596,14 @@ void genericCreate(void) {
 	s_pObjMask[OBJ_PALM] = artPalmCreateMask();
 	s_pObjBm[OBJ_RIVAL] = artRivalCreate();
 	s_pObjMask[OBJ_RIVAL] = artRivalCreateMask();
+	s_pObjBm[OBJ_BUSH] = artBushCreate();
+	s_pObjMask[OBJ_BUSH] = artBushCreateMask();
+	s_pObjBm[OBJ_SIGN_L] = artSignLCreate();
+	s_pObjMask[OBJ_SIGN_L] = artSignLCreateMask();
+	s_pObjBm[OBJ_SIGN_R] = artSignRCreate();
+	s_pObjMask[OBJ_SIGN_R] = artSignRCreateMask();
+	s_pObjBm[OBJ_GATE] = artGateCreate();
+	s_pObjMask[OBJ_GATE] = artGateCreateMask();
 	objectsInit();
 	blitTemplatesCreate();
 	rowOffsCreate();
@@ -593,6 +615,7 @@ void genericCreate(void) {
 	logicTitle(&s_sState);
 	s_sState.phaseFrames = TITLE_WAIT;   // (fire isn't held over from a race at boot)
 	hudInit();
+	hopInit();
 	hudUpdate(0, 255);   // the first screen whole (at boot there's time)
 	hudUpdate(1, 255);
 
@@ -907,14 +930,33 @@ static void playSounds(UBYTE ubPhaseBefore, UBYTE isBumped, UBYTE isExtended, UB
 	if(pS->offroad && !isOffBefore && pS->phase == PHASE_RACE) soundPlay(SOUND_SFX_GRASS);
 }
 
+static void hopInit(void) {
+	for(UBYTE t = 0; t < HOP1_FRAMES; ++t)
+		s_pHop[t] = (UBYTE)(4 * HOP1_H * t * (HOP1_FRAMES - t) / (HOP1_FRAMES * HOP1_FRAMES));
+	for(UBYTE t = 0; t < HOP2_FRAMES; ++t)
+		s_pHop[HOP1_FRAMES + t] = (UBYTE)(4 * HOP2_H * t * (HOP2_FRAMES - t) / (HOP2_FRAMES * HOP2_FRAMES));
+}
+
 static void carUpdate(BYTE bSteer) {
 	UBYTE ubFrame = bSteer < 0 ? CAR_FRAME_LEFT : bSteer > 0 ? CAR_FRAME_RIGHT : 0;
+	WORD wHop = 0;
+	if(s_sState.crash) {
+		UBYTE t = CRASH_FRAMES - s_sState.crash;
+		if(t < HOP1_FRAMES + HOP2_FRAMES) {
+			wHop = s_pHop[t];
+			UBYTE ubRoll = (t >> 2) & 3;          // a quarter turn every 4 frames
+			ubFrame = ubRoll == 3 ? 0 : CAR_FRAME_TUMBLE + ubRoll;
+		}
+		else {
+			ubFrame = 0;
+		}
+	}
 	// On the grass the car shakes (1 px, every other picture). Written without
 	// branches: as "offroad && speed && (frame & 2) ? 1 : 0" GCC 6.5 (-O3) left
 	// the register for the 0 case uninitialised - the car jumped around the top
 	// of the screen whenever it was on the road.
 	WORD wBounce = (WORD)(s_sState.offroad & (s_sState.speed != 0) & ((s_sState.frame >> 1) & 1));
-	WORD wY = CAR_Y + wBounce;
+	WORD wY = CAR_Y + wBounce - wHop;
 	// The sprite headers only when something changed (the sprite manager's work
 	// costs ~3% a picture); the channel update always - it fills in the sprite
 	// pointers of both copper buffers over two pictures after a change.
@@ -952,10 +994,13 @@ void genericProcess(void) {
 	UBYTE ubPhaseBefore = s_sState.phase, isOffBefore = s_sState.offroad;
 	UBYTE isChanged = logicUpdate(&s_sState, &sInput);
 	UBYTE isBumped = s_sState.bumped, isExtended = s_sState.extended;   // (each lasts a frame)
+	UBYTE isCrashed = s_sState.crashed;
 	isChanged |= logicUpdate(&s_sState, &sInput);   // 50 Hz rules, 25 fps pictures
 	isBumped |= s_sState.bumped;
 	isExtended |= s_sState.extended;
+	isCrashed |= s_sState.crashed;
 	playSounds(ubPhaseBefore, isBumped, isExtended, isOffBefore);
+	if(isCrashed) soundPlay(SOUND_SFX_CRASH);
 	engineUpdate();
 	copperUpdate();
 	hudUpdate(s_pView->pCopList->pBackBfr == s_pCopBfrA ? 0 : 1, HUD_BUDGET);
@@ -965,7 +1010,7 @@ void genericProcess(void) {
 	// and every 32 frames otherwise. Serial output isn't free: a character is
 	// an interrupt, and a line keeps the CPU busy for a while.
 	(void)isChanged;
-	if(s_sState.offroad != s_ubLastOff || s_sState.phase != ubPhaseBefore ||
+	if(s_sState.offroad != s_ubLastOff || s_sState.phase != ubPhaseBefore || isCrashed ||
 		!(s_sState.frame & 31) || s_sState.frame <= 3) {
 		s_wLastX = s_sState.x;
 		s_ubLastOff = s_sState.offroad;
@@ -976,6 +1021,7 @@ void genericProcess(void) {
 		agkState("off", s_sState.offroad);
 		agkState("laps", s_sState.laps);
 		agkState("bumps", s_sState.bumps);
+		agkState("crashes", s_sState.crashes);
 		agkState("phase", s_sState.phase);
 		agkState("time", logicTimeSeconds(&s_sState));
 		agkEnd();

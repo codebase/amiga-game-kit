@@ -1,0 +1,15 @@
+# Full speed, then hard right onto the grass into the palms: a crash (and its
+# sound), the car tumbles through the air, then stands on the road again.
+wait-serial "AGK t0"
+press fire 2
+press up 100
+hold up+right
+wait-serial "crashes=1" 200
+release
+wait 3
+screenshot tumble
+wait 60
+screenshot back
+expect-serial "AGK sfx crash"
+expect-serial "crashes=1(.|\n)*kmh=0 x=0 off=0"
+expect-no-serial "ERR|STACK SMASHED"

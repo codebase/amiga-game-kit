@@ -230,4 +230,4 @@ press up+right 3
 press up 49
 wait 50
 expect-serial "AGK sfx checkpoint"
-expect-no-serial "ERR|STACK SMASHED"
+expect-no-serial "ERR|STACK SMASHED|crashes=[1-9]"

@@ -31,3 +31,21 @@ kind = "bob"
 # in 10 sizes by art/tools/scale_sheet.py (src/gen_rival.h)
 source = "rival_sheet.png"
 kind = "bob"
+
+# Roadside props drawn by art/tools/props.py, in 10 sizes by scale_sheet.py
+# (src/gen_NAME.h): drawn with the blitter like the palms
+[bush]
+source = "bush_sheet.png"
+kind = "bob"
+
+[sign_l]
+source = "sign_l_sheet.png"
+kind = "bob"
+
+[sign_r]
+source = "sign_r_sheet.png"
+kind = "bob"
+
+[gate]
+source = "gate_sheet.png"
+kind = "bob"

@@ -14,6 +14,14 @@ decay = 9
 volume = 60
 priority = 3
 
+[sfx.crash]               # into a palm at speed: a long crunch
+wave = "noise"
+freq = [2400, 300]
+length = 0.7
+decay = 4
+volume = 64
+priority = 4
+
 [sfx.checkpoint]          # EXTEND TIME!: a bright rising arpeggio
 wave = "square"
 steps = [[784, 0.06], [988, 0.06], [1175, 0.06], [1568, 0.3]]

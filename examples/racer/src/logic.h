@@ -96,6 +96,13 @@ typedef struct {
 #define CAR_HIT_X 72
 #define BUMP_SLOW (3 << SPEED_SHIFT)   // the one behind drops to the front's speed minus this
 
+// Roadside objects stand OBJ_SIDE_X from the centre (x units, like the car's
+// x): driving into one faster than CRASH_SPEED is a crash - the car tumbles
+// for CRASH_FRAMES and is put back on the road, standing. Slower, it stops.
+#define OBJ_HIT_X 40           // car's half width + a trunk's, x units
+#define CRASH_SPEED (6 << SPEED_SHIFT)
+#define CRASH_FRAMES (2 * FPS)
+
 typedef struct {
 	uint32_t pos;      // along the track, units
 	uint8_t posFrac;
@@ -143,6 +150,9 @@ typedef struct {
 	uint8_t message;   // MSG_*, shown for messageFrames more frames
 	uint16_t messageFrames;
 	uint8_t extended;  // a checkpoint this frame (for the sound)
+	uint8_t crash;     // frames of crash left (0: driving)
+	uint8_t crashed;   // a crash this frame (for the sound)
+	uint16_t crashes;
 } tGameState;
 
 typedef struct {
@@ -175,10 +185,19 @@ typedef struct {
 #define OBJ_MAX 14            // the nearest ones: every blit has a fixed cost, far ones are tiny
 #define OBJ_PALMS_MAX 10      // of which palms
 #define OBJ_SIDE_X 360        // lateral position, 1/256 road half widths from the centre
-#define SCENERY_PALM_L 1
+#define SCENERY_PALM_L 1      // (the track parts table: palm rows on the left/right)
 #define SCENERY_PALM_R 2
+// Object types (tObject.type); the roadside ones are also the scenery
 #define OBJ_PALM 0
 #define OBJ_RIVAL 1
+#define OBJ_BUSH 2
+#define OBJ_SIGN_L 3            // curve warning: chevrons pointing left
+#define OBJ_SIGN_R 4
+#define OBJ_GATE 5              // checkpoint pillar
+#define OBJ_TYPES 6
+// A segment's scenery byte: left object type + 1 | (right type + 1) << 4, 0 = none
+#define SCENERY_LEFT(b) (((b) & 15) - 1)
+#define SCENERY_RIGHT(b) (((b) >> 4) - 1)
 typedef struct {
 	int16_t x;         // screen x of the object's centre
 	int16_t y;         // screen line of its foot
@@ -203,7 +222,7 @@ void logicRoadLines(const tGameState *pState, tRoadLine *pOut, tRoadView *pView)
 /** The roadside objects and rivals in view, farthest first (draw them in this order).
  *  Needs this picture's tRoadView. Returns how many. */
 uint8_t logicObjects(const tGameState *pState, const tRoadView *pView, tObject *pOut);
-/** Scenery flags (SCENERY_*) of the segment at pos. */
+/** Scenery of the segment at pos: see SCENERY_LEFT/RIGHT (-1: nothing). */
 uint8_t logicSceneryAt(uint32_t pos);
 
 /** Half the road's width in row r, px. */

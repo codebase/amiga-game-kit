@@ -324,6 +324,59 @@ static void testOtherLanesPass(void) {
 	CHECK(s.pos + PLAYER_Z > s.rivals[0].pos + CAR_LEN);
 }
 
+// ---------------------------------------------------------------- crashes
+
+static void testCrashIntoAPalm(void) {
+	// Full speed along the palms on the start straight: a crash, no control
+	// while tumbling, then standing in the middle of the road
+	tGameState s;
+	initNoTraffic(&s);
+	s.x = OBJ_SIDE_X;
+	s.speed = SPEED_MAX;
+	int frames = 0;
+	while(!s.crashed && frames < 30) {
+		logicUpdate(&s, &(tInput){.accel = 1});
+		++frames;
+	}
+	CHECK(s.crashed && s.crash == CRASH_FRAMES && s.crashes == 1);
+	int16_t x0 = s.x;
+	drive(&s, (tInput){.accel = 1, .steer = -1}, CRASH_FRAMES - 1);
+	CHECK(s.crash == 1 && s.x == x0 && s.speed < SPEED_MAX / 8);
+	drive(&s, (tInput){0}, 1);
+	CHECK(!s.crash && s.x == 0 && s.speed == 0 && !s.offroad && s.crashes == 1);
+	drive(&s, (tInput){.accel = 1}, 20);
+	CHECK(s.speed > 0);
+}
+
+static void testSlowIntoAPalmStops(void) {
+	tGameState s;
+	initNoTraffic(&s);
+	s.x = -OBJ_SIDE_X;
+	s.speed = 3 << SPEED_SHIFT;
+	s.pos = 2 * SEG_LEN - PLAYER_Z - 5;           // just before a palm
+	drive(&s, (tInput){0}, 10);
+	CHECK(s.crashes == 0 && !s.crash && s.speed == 0);
+	CHECK(s.x == -(OBJ_SIDE_X - OBJ_HIT_X - 1));   // nudged clear of the trunk
+	CHECK(s.pos + PLAYER_Z == 2 * SEG_LEN - 1);    // stopped against it
+	// and it drives on past
+	drive(&s, (tInput){.accel = 1}, 100);
+	CHECK(s.pos + PLAYER_Z > 3 * SEG_LEN && s.crashes == 0);
+}
+
+static void testTheRoadIsSafe(void) {
+	// On the road and on the grass up to the objects: no crash in a whole lap
+	tGameState s;
+	initNoTraffic(&s);
+	s.x = OBJ_SIDE_X - OBJ_HIT_X - 10;
+	for(uint32_t f = 0; f < 6000 && !s.laps; ++f) {
+		s.speed = SPEED_MAX;
+		s.x = OBJ_SIDE_X - OBJ_HIT_X - 10;
+		s.time = START_TIME;
+		logicUpdate(&s, &(tInput){0});
+	}
+	CHECK(s.laps == 1 && s.crashes == 0);
+}
+
 // ---------------------------------------------------------------- game flow
 
 static void testClockRunsOut(void) {
@@ -404,6 +457,9 @@ int main(void) {
 	testRivalsDrive();
 	testRearEndSlowsYouDown();
 	testOtherLanesPass();
+	testCrashIntoAPalm();
+	testSlowIntoAPalmStops();
+	testTheRoadIsSafe();
 	testClockRunsOut();
 	testCheckpointExtendsTime();
 	testTitleStartsARace();

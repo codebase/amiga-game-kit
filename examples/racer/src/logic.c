@@ -86,7 +86,13 @@ static void tablesInit(void) {
 			int32_t t = ((int32_t)i << 8) / n;
 			int32_t ease = (t * t * (768 - 2 * t)) >> 16;   // 0..256
 			s_pCurve[seg] = s_pParts[p].curve;
-			s_pScenery[seg] = (seg % PALM_EVERY) ? 0 : s_pParts[p].palms;
+			// palm rows (a bush every 5th), bushes along the bare parts
+			uint8_t palms = s_pParts[p].palms, l = 0, r = 0;
+			if(palms & SCENERY_PALM_L) l = (seg % 5 == 2 ? OBJ_BUSH : OBJ_PALM) + 1;
+			else if(seg % 3 == 0) l = OBJ_BUSH + 1;
+			if(palms & SCENERY_PALM_R) r = (seg % 5 == 4 ? OBJ_BUSH : OBJ_PALM) + 1;
+			else if(seg % 3 == 1) r = OBJ_BUSH + 1;
+			s_pScenery[seg] = (seg % PALM_EVERY) ? 0 : (uint8_t)(l | r << 4);
 			s_pHeight[seg] = (int16_t)(h + ((s_pParts[p].hill * ease) >> 8));
 		}
 		h += s_pParts[p].hill;
@@ -95,6 +101,21 @@ static void tablesInit(void) {
 		s_pCurve[seg] = 0;
 		s_pScenery[seg] = 0;
 		s_pHeight[seg++] = h;
+	}
+	// Curve warnings on the outside of each bend, from 8 segments before it,
+	// arrows pointing into it; the checkpoints' pillars on both sides
+	seg = 0;
+	for(uint16_t p = 0; p < PART_COUNT; seg += s_pParts[p++].len) {
+		int8_t c = s_pParts[p].curve;
+		if(!c || (p && s_pParts[p - 1].curve)) continue;   // (not where a bend goes on)
+		for(int16_t k = -8; k <= 6; k += 2) {
+			uint16_t i = (uint16_t)((seg + k + TRACK_SEGS) % TRACK_SEGS);
+			if(c > 0) s_pScenery[i] = (s_pScenery[i] & 0xF0) | (OBJ_SIGN_R + 1);      // left side
+			else s_pScenery[i] = (s_pScenery[i] & 0x0F) | (OBJ_SIGN_L + 1) << 4;     // right side
+		}
+	}
+	for(uint16_t i = 0; i < TRACK_SEGS; i += CHECKPOINT_SEGS) {
+		s_pScenery[i] = (OBJ_GATE + 1) | (OBJ_GATE + 1) << 4;
 	}
 }
 
@@ -217,6 +238,9 @@ void logicInit(tGameState *pState) {
 	pState->message = MSG_NONE;
 	pState->messageFrames = 0;
 	pState->extended = 0;
+	pState->crash = 0;
+	pState->crashed = 0;
+	pState->crashes = 0;
 	// spread around the loop at irregular gaps (a fixed pseudo-random
 	// sequence: every game is the same), the first one ahead in our lane
 	uint16_t rnd = 0xACE1;
@@ -267,6 +291,17 @@ uint8_t logicUpdate(tGameState *pState, const tInput *pInputIn) {
 		}
 		pInput = &sNone;    // coast to a stop
 	}
+	pState->crashed = 0;
+	if(pState->crash) {
+		// tumbling: no control, sliding to a stop, then back on the road
+		pInput = &sNone;
+		pState->speed -= pState->speed >> 3;
+		if(!--pState->crash) {
+			pState->speed = 0;
+			pState->x = 0;
+			pState->offroad = 0;
+		}
+	}
 	int16_t oldSpeed = pState->speed, oldX = pState->x;
 	uint32_t oldPos = pState->pos;
 
@@ -290,8 +325,10 @@ uint8_t logicUpdate(tGameState *pState, const tInput *pInputIn) {
 	// Steering works in proportion to speed; curves push you outwards.
 	int8_t curve = logicCurveAt(pState->pos);
 	int16_t x = pState->x;
-	x += (int16_t)(mul16(pInput->steer * STEER, s) >> 12);
-	x -= (int16_t)(mul16(curve * CENTRIFUGAL, s) >> 13);
+	if(!pState->crash) {
+		x += (int16_t)(mul16(pInput->steer * STEER, s) >> 12);
+		x -= (int16_t)(mul16(curve * CENTRIFUGAL, s) >> 13);
+	}
 	if(x > X_MAX) x = X_MAX;
 	if(x < -X_MAX) x = -X_MAX;
 	pState->x = x;
@@ -307,6 +344,31 @@ uint8_t logicUpdate(tGameState *pState, const tInput *pInputIn) {
 	}
 	// The scenery on the horizon drifts against the curve
 	pState->bgX -= (uint16_t)(mul16(curve, s) >> 10);   // 1/16 px
+
+	// Into a roadside object? They stand at the start of their segment: see
+	// if the car's wheels crossed one this frame, on the side it's on
+	if(!pState->crash && (x > OBJ_SIDE_X - OBJ_HIT_X || x < -(OBJ_SIDE_X - OBJ_HIT_X))) {
+		uint32_t carNew = wrapPos(pState->pos + PLAYER_Z), carOld = wrapPos(oldPos + PLAYER_Z);
+		if((carNew >> SEG_SHIFT) != (carOld >> SEG_SHIFT)) {
+			uint8_t b = s_pScenery[carNew >> SEG_SHIFT];
+			if((x > 0 && SCENERY_RIGHT(b) >= 0) || (x < 0 && SCENERY_LEFT(b) >= 0)) {
+				if(s > CRASH_SPEED) {
+					pState->crash = CRASH_FRAMES;
+					pState->crashed = 1;
+					++pState->crashes;
+				}
+				else {
+					// too slow to crash: it stops against it, nudged clear to
+					// the road side (steering needs speed: it would be stuck)
+					uint32_t stop = (carNew & ~(uint32_t)(SEG_LEN - 1)) + TRACK_LEN - PLAYER_Z - 1;
+					pState->pos = wrapPos(stop);
+					pState->posFrac = 0;
+					pState->speed = 0;
+					pState->x = x > 0 ? OBJ_SIDE_X - OBJ_HIT_X - 1 : -(OBJ_SIDE_X - OBJ_HIT_X - 1);
+				}
+			}
+		}
+	}
 
 	uint32_t prePos = pState->pos;
 	pState->bumped = 0;
@@ -331,7 +393,7 @@ uint8_t logicUpdate(tGameState *pState, const tInput *pInputIn) {
 	}
 
 	return pState->speed != oldSpeed || pState->x != oldX || (pState->pos >> STRIPE_SHIFT) != (oldPos >> STRIPE_SHIFT) ||
-		pState->bumped;
+		pState->bumped || pState->crash;
 }
 
 uint16_t logicKmh(const tGameState *pState) {
@@ -488,13 +550,15 @@ uint8_t logicObjects(const tGameState *pState, const tRoadView *pView, tObject *
 		if(i < 0) continue;
 		int16_t y = pView->y[i], side = s_pRowSide[i];
 		uint16_t scale = s_pRowScale[i];
-		if(flags & SCENERY_PALM_L) {
+		int8_t t = SCENERY_LEFT(flags);
+		if(t >= 0) {
 			pZ[n] = z;
-			pAll[n++] = (tObject){.x = pView->cx[i] - side, .y = y, .scale = scale, .type = OBJ_PALM};
+			pAll[n++] = (tObject){.x = pView->cx[i] - side, .y = y, .scale = scale, .type = (uint8_t)t};
 		}
-		if(flags & SCENERY_PALM_R) {
+		t = SCENERY_RIGHT(flags);
+		if(t >= 0) {
 			pZ[n] = z;
-			pAll[n++] = (tObject){.x = pView->cx[i] + side, .y = y, .scale = scale, .type = OBJ_PALM};
+			pAll[n++] = (tObject){.x = pView->cx[i] + side, .y = y, .scale = scale, .type = (uint8_t)t};
 		}
 	}
 	for(uint8_t c = 0; c < TRAFFIC_N; ++c) {
