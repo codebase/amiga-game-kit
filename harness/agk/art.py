@@ -35,7 +35,8 @@ TEXT FORMAT (one char per pixel, frames separated by `frame` lines):
     ...
 
 Sprite options:
-  attached = true   15 colours (+ transparent) from pairs of channels; width
+  attached = true   15 colours (+ transparent) from pairs of channels (text art:
+                    in the order its colors section lists them); width
                     up to 64 (each 16 px column uses 2 channels, from an even
                     `channel`). Colours go to slots 17-31, shared by all
                     attached sprites. artXCreate(frame, part), part p ->
@@ -157,6 +158,24 @@ def parse_text_art(path):
     return w, h, frames
 
 
+def text_art_colors(path):
+    """The colours of a text art file in the order its 'colors' section lists them."""
+    order, mode = [], None
+    with open(path) as f:
+        for raw in f:
+            s = raw.strip()
+            if not s or s.startswith("#"):
+                continue
+            if s in ("colors", "frame"):
+                mode = s
+                continue
+            if mode == "colors":
+                parts = s.split()
+                if len(parts) == 2 and parts[1] != "transparent":
+                    order.append(int(parts[1], 0))
+    return order
+
+
 def load_png_art(path, frame_width=None, frame_height=None):
     from .image import load_png_rgba
     W, H, px = load_png_rgba(path)
@@ -186,8 +205,10 @@ class Asset:
         self.source = os.path.join(art_dir, src)
         if not os.path.exists(self.source):
             raise ArtError(f"[{name}]: {src} not found in art/")
+        self.declared = []
         if src.endswith(".txt"):
             self.w, self.h, self.frames = parse_text_art(self.source)
+            self.declared = text_art_colors(self.source)
         elif src.endswith(".png"):
             self.w, self.h, self.frames = load_png_art(self.source, cfg.get("frame_width"), cfg.get("frame_height"))
         else:
@@ -254,8 +275,10 @@ class Asset:
             remap = {c: min(keep, key=lambda k: dist(c, k)) for c in used}
             self.frames = [[[None if c is None else remap[c] for c in row] for row in fr] for fr in self.frames]
             used = {c: 0 for c in keep}
-        # Colour order: as first seen (text art: declaration order is usually that too)
-        order = []
+        # Colour order: text art as its 'colors' section lists them (so the art
+        # decides which slot is which, e.g. colours shared with another
+        # sprite channel), then any others as first seen
+        order = [c for c in self.declared if c in used]
         for fr in self.frames:
             for row in fr:
                 for c in row:

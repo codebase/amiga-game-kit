@@ -225,13 +225,14 @@ class AttachedSpriteTests(unittest.TestCase):
                      "h.txt": text})
         (a,) = art.build(d)
         self.assertEqual((a.columns, len(a.frames), a.mirror_offset), (2, 2, 1))
-        self.assertEqual(a.index[0x500], 1)          # E first seen -> index 1
+        # text art: colours in declaration order (A before E), unused ones skipped
+        self.assertEqual((a.index[0x100], a.index[0x500]), (1, 2))
         data = a.planar()                             # frame, part, row: 2 words
-        self.assertEqual(data[0:2], [0x8000, 0])      # part 0 (col 0 even): index 1 -> bit 0
-        self.assertEqual(data[2:4], [0, 0])           # part 1 (col 0 odd): bits 2-3 of 1 = 0
-        self.assertEqual(data[4:6], [0, 0x8000])      # part 2 (col 1 even): A = index 2 (0b10)
+        self.assertEqual(data[0:2], [0, 0x8000])      # part 0 (col 0 even): E = index 2 (0b10)
+        self.assertEqual(data[2:4], [0, 0])           # part 1 (col 0 odd): bits 2-3 of 2 = 0
+        self.assertEqual(data[4:6], [0x8000, 0])      # part 2 (col 1 even): A = index 1 -> bit 0
         # mirrored frame: A now at x=0, E at x=16
-        self.assertEqual(data[8:10], [0, 0x8000])
+        self.assertEqual(data[8:10], [0x8000, 0])
         h = open(os.path.join(d, "build", "art", "art.h")).read()
         self.assertIn("ART_H_PARTS 4", h)
         self.assertIn("ART_H_MIRROR 1", h)
