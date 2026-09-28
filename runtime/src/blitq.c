@@ -29,22 +29,6 @@ void agkBlitBob(tAgkBlit pTpl[2], const tBitMap *pBm, const tBitMap *pMask,
 	}
 }
 
-void agkBlitGo(const tAgkBlit *pB) {
-	g_pCustom->bltcon0 = pB->uwCon0;
-	g_pCustom->bltcon1 = pB->uwCon1;
-	g_pCustom->bltafwm = 0xFFFF;
-	g_pCustom->bltalwm = pB->uwAlwm;
-	g_pCustom->bltapt = pB->pA;
-	g_pCustom->bltbpt = pB->pB;
-	g_pCustom->bltcpt = pB->pCD;
-	g_pCustom->bltdpt = pB->pCD;
-	g_pCustom->bltamod = pB->wSrcMod;
-	g_pCustom->bltbmod = pB->wSrcMod;
-	g_pCustom->bltcmod = pB->wDstMod;
-	g_pCustom->bltdmod = pB->wDstMod;
-	g_pCustom->bltsize = pB->uwSize;     // starts it
-}
-
 void agkBlitqFull(void) {
 	if(!s_isFull) {
 		s_isFull = 1;

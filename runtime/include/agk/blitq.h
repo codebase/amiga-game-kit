@@ -16,12 +16,13 @@
  *   agkBlitBob(pTpl, pBm, pMask, W, H, frame, pFb->BytesPerRow / pFb->Depth);
  *   // every frame
  *   agkBlitqReset();
- *   for each erase from last time in this buffer: agkBlitqAdd(&erase);   // starts at once
+ *   for each area drawn last time in this buffer:     // (starts at once)
+ *     agkBlitClear(agkBlitqSlot(), &area); agkBlitqPush();
  *   ... game logic (the blitter erases meanwhile) ...
  *   for each object:
  *     tAgkBlit *pB = agkBlitqSlot();
  *     agkBlitPlace(pB, pTpl, W, pFb->Planes[0] + y * pFb->BytesPerRow, x);
- *     erase[n++] = *pB;                  // what to agkBlitClear next time
+ *     agkBlitArea(&area[n++], pB);       // what to clear next time
  *     agkBlitqPush();
  *   ... more work, calling agkBlitqPoll() now and then ...
  *   agkBlitqFinish();
@@ -31,6 +32,8 @@
 
 #include <ace/types.h>
 #include <ace/utils/bitmap.h>
+#include <ace/utils/custom.h>
+#include <hardware/dmabits.h>
 
 #ifndef AGK_BLITQ_MAX
 #define AGK_BLITQ_MAX 160            // blits per frame (-DAGK_BLITQ_MAX=... for more)
@@ -63,15 +66,48 @@ static inline void agkBlitPlace(tAgkBlit *pOut, const tAgkBlit pTpl[2], UWORD uw
 	pOut->pCD = pDstRow + ((uwX >> 4) << 1);
 }
 
-/** A blit that clears (to colour 0) the area pDrawn drew: D only. */
-static inline void agkBlitClear(tAgkBlit *pOut, const tAgkBlit *pDrawn) {
-	*pOut = *pDrawn;
-	pOut->uwCon0 = 0x0100;                  // USED, minterm 0
-	pOut->uwCon1 = 0;
+/** Where a blit drew: all a later clear needs (8 bytes, not a whole blit's 32). */
+typedef struct {
+	UBYTE *pD;
+	UWORD uwSize;
+	WORD wMod;
+} tAgkBlitArea;
+
+static inline void agkBlitArea(tAgkBlitArea *pOut, const tAgkBlit *pDrawn) {
+	pOut->pD = pDrawn->pCD;
+	pOut->uwSize = pDrawn->uwSize;
+	pOut->wMod = pDrawn->wDstMod;
 }
 
-/** Start one blit now (the blitter must be idle). */
-void agkBlitGo(const tAgkBlit *pB);
+/** A blit that clears an area to colour 0: D only. */
+static inline void agkBlitClear(tAgkBlit *pOut, const tAgkBlitArea *pArea) {
+	pOut->uwCon0 = 0x0100;                  // USED, minterm 0
+	pOut->uwCon1 = 0;
+	pOut->uwAlwm = 0xFFFF;
+	pOut->pA = pOut->pB = 0;
+	pOut->pCD = pArea->pD;
+	pOut->wSrcMod = 0;
+	pOut->wDstMod = pArea->wMod;
+	pOut->uwSize = pArea->uwSize;
+}
+
+/** Start one blit now (the blitter must be idle). Inline: it's most of what
+ *  starting a queued blit costs. */
+static inline void agkBlitGo(const tAgkBlit *pB) {
+	g_pCustom->bltcon0 = pB->uwCon0;
+	g_pCustom->bltcon1 = pB->uwCon1;
+	g_pCustom->bltafwm = 0xFFFF;
+	g_pCustom->bltalwm = pB->uwAlwm;
+	g_pCustom->bltapt = pB->pA;
+	g_pCustom->bltbpt = pB->pB;
+	g_pCustom->bltcpt = pB->pCD;
+	g_pCustom->bltdpt = pB->pCD;
+	g_pCustom->bltamod = pB->wSrcMod;
+	g_pCustom->bltbmod = pB->wSrcMod;
+	g_pCustom->bltcmod = pB->wDstMod;
+	g_pCustom->bltdmod = pB->wDstMod;
+	g_pCustom->bltsize = pB->uwSize;     // starts it
+}
 
 // The queue. The per-object calls are inline: at 60+ objects a frame, a
 // function call and a copy each cost ~4% of an A500 frame.
@@ -83,7 +119,7 @@ void agkBlitqFull(void);
 static inline void agkBlitqPoll(void) {
 	// (the first read of DMACONR after a start can lie on OCS Agnus: read twice)
 	if(g_uwAgkBlitqNext < g_uwAgkBlitqCount &&
-		((void)(*(volatile UWORD *)0xDFF002), !(*(volatile UWORD *)0xDFF002 & (1 << 14)))) {   // DMACONR, BBUSY
+		((void)g_pCustom->dmaconr, !(g_pCustom->dmaconr & DMAF_BLTDONE))) {
 		agkBlitGo(&g_pAgkBlitq[g_uwAgkBlitqNext++]);
 	}
 }
