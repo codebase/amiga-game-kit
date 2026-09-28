@@ -81,8 +81,18 @@ def frame_rate(count, audio_seconds):
     return fps
 
 
-def encode(outdir, count, mp4, gif=None, gif_seconds=None, scale=4):
-    """Returns the frame rate used (see frame_rate())."""
+def _size(text):
+    m = re.fullmatch(r"(\d+)x(\d+)", str(text))
+    if not m:
+        raise RecordError(f"size '{text}' isn't WIDTHxHEIGHT, e.g. 640x512")
+    return int(m.group(1)), int(m.group(2))
+
+
+def encode(outdir, count, mp4, gif=None, gif_seconds=None, scale=4, size=None, crf=16,
+           gif_start=None, gif_size="640x512", gif_colors=64):
+    """Returns the frame rate used (see frame_rate()).
+    size "WxH" overrides scale for the MP4 (e.g. 640x512 with crf 24 for a README);
+    the GIF is gif_seconds from gif_start, at gif_size with gif_colors colours."""
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RecordError("ffmpeg not found - install it (e.g. brew install ffmpeg)")
@@ -108,11 +118,26 @@ def encode(outdir, count, mp4, gif=None, gif_seconds=None, scale=4):
         pcm, _rate = sound.read_wav(wav)
         peak = max((abs(v) for v in pcm), default=0.0)
         gain = -1 - 20 * math.log10(peak) if peak > 1e-4 else 0.0
-        cmd += ["-ss", f"{offset:.4f}", "-i", wav, "-map", "0:v", "-map", "1:a",
-                "-af", f"volume={gain:.1f}dB", "-c:a", "aac", "-b:a", "192k"]
-    cmd += ["-vf", f"scale={SCREEN_W * scale}:{SCREEN_H * scale}:flags=neighbor",
-            "-c:v", "libx264", "-preset", "slow", "-crf", "16", "-pix_fmt", "yuv420p",
+        cmd += ["-ss", f"{offset:.4f}", "-i", wav]
+        audio = ["-map", "1:a", "-af", f"volume={gain:.1f}dB", "-c:a", "aac", "-b:a", "192k"]
+    else:
+        audio = []
+    w, h = _size(size) if size else (SCREEN_W * scale, SCREEN_H * scale)
+    graph = f"[0:v]scale={w}:{h}:flags=neighbor[mp4]"
+    if gif:
+        # The GIF comes from the same clean frames (not the compressed MP4):
+        # 64 colours and only changed rectangles per frame, ~0.5 MB per second at 640x512
+        gw, gh = _size(gif_size)
+        cut = f"trim=start={gif_start or 0}" + (f":duration={gif_seconds}" if gif_seconds else "")
+        graph = (f"[0:v]split[v1][v2];[v1]scale={w}:{h}:flags=neighbor[mp4];"
+                 f"[v2]{cut},setpts=PTS-STARTPTS,fps={min(25.0, fps):g},scale={gw}:{gh}:flags=neighbor,"
+                 f"split[a][b];[a]palettegen=max_colors={gif_colors}:stats_mode=diff[p];"
+                 "[b][p]paletteuse=dither=none:diff_mode=rectangle[gif]")
+    cmd += ["-filter_complex", graph, "-map", "[mp4]", *audio,
+            "-c:v", "libx264", "-preset", "slow", "-crf", str(crf), "-pix_fmt", "yuv420p",
             "-movflags", "+faststart", "-shortest", mp4]
+    if gif:
+        cmd += ["-map", "[gif]", gif]
     p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     try:
         for frame in _frames(outdir, count):
@@ -122,14 +147,4 @@ def encode(outdir, count, mp4, gif=None, gif_seconds=None, scale=4):
         rc = p.wait()
     if rc:
         raise RecordError(f"ffmpeg failed ({rc})")
-    if gif:
-        fps_gif = min(25.0, fps)
-        limit = ["-t", str(gif_seconds)] if gif_seconds else []
-        # 64 colours and only changed rectangles per frame: ~0.5 MB per second
-        vf = (f"fps={fps_gif:g},scale=640:512:flags=neighbor,split[a][b];"
-              "[a]palettegen=max_colors=64:stats_mode=diff[p];"
-              "[b][p]paletteuse=dither=none:diff_mode=rectangle")
-        r = subprocess.run([ffmpeg, "-y", "-loglevel", "error", *limit, "-i", mp4, "-vf", vf, gif])
-        if r.returncode:
-            raise RecordError("ffmpeg failed making the GIF")
     return fps

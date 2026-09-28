@@ -499,7 +499,15 @@ def cmd_record(args):
             _report(res, False)
             return 1
         try:
-            fps = record.encode(outdir, frames, mp4, gif=args.gif, gif_seconds=args.gif_seconds)
+            opts = {}
+            if args.readme:       # small enough to commit: 640x512 MP4, a 6 s 480x384 GIF
+                opts = dict(size="640x512", crf=24, gif_size="480x384", gif_seconds=6)
+            if args.size:
+                opts["size"] = args.size
+            for k in ("gif_seconds", "gif_start", "gif_size", "gif_colors"):
+                if getattr(args, k) is not None:
+                    opts[k] = getattr(args, k)
+            fps = record.encode(outdir, frames, mp4, gif=args.gif, **opts)
         except record.RecordError as e:
             raise SystemExit(f"record: {e}")
     print(f"wrote {rel(mp4)} ({os.path.getsize(mp4) // 1024} KB, {frames / fps:.1f} s at {fps:g} fps)")
@@ -754,7 +762,13 @@ def main(argv=None):
     p.add_argument("project", nargs="?")
     p.add_argument("-o", "--out", help="MP4 path (default build/SCENARIO.mp4)")
     p.add_argument("--gif", help="also write a silent GIF (640x512, 25 fps)")
-    p.add_argument("--gif-seconds", type=float, help="only the first N seconds in the GIF")
+    p.add_argument("--gif-seconds", type=float, help="N seconds in the GIF (from --gif-start)")
+    p.add_argument("--gif-start", type=float, metavar="S", help="the GIF starts S seconds in")
+    p.add_argument("--gif-size", metavar="WxH", help="GIF size (default 640x512)")
+    p.add_argument("--gif-colors", type=int, metavar="N", help="GIF colours (default 64; fewer = smaller)")
+    p.add_argument("--size", metavar="WxH", help="MP4 size (default 1280x1024)")
+    p.add_argument("--readme", action="store_true",
+                   help="sizes for a README: 640x512 MP4 (crf 24), 6 s 480x384 GIF (add --gif-start)")
     p.add_argument("-p", "--profile")
     p.add_argument("--no-build", action="store_true")
 

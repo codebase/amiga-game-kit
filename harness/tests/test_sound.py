@@ -191,6 +191,12 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(len(vsc.lines), len(vsc.origins))
         self.assertEqual(vsc.screenshots, ["s"])
 
+    def test_sizes(self):
+        from agk import record
+        self.assertEqual(record._size("640x512"), (640, 512))
+        with self.assertRaisesRegex(record.RecordError, "WIDTHxHEIGHT"):
+            record._size("640")
+
     def test_nothing_to_record(self):
         from agk import record
         with self.assertRaises(record.RecordError):

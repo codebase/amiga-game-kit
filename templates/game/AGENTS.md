@@ -122,7 +122,9 @@ has both formats.
 a scenario in the emulator and encodes every frame plus the sound into an
 MP4 (needs ffmpeg). Frames are captured during `wait` and `press`, not during
 `wait-serial`. Good for showing the game off, and for looking at motion that
-single screenshots miss.
+single screenshots miss. For a README, `--readme --gif game.gif --gif-start 60` makes a 640x512
+MP4 and a 6 s 480x384 GIF from the same frames (about 1 MB); `--size`,
+`--gif-size` and `--gif-colors` tune them.
 
 ## Telling the harness what happens: serial debug
 
