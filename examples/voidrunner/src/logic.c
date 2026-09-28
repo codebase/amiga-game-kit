@@ -61,7 +61,7 @@ static inline int16_t sinAmp(uint16_t i, int16_t amp) {   // amp * sin(i/64 turn
 // glide for slow movements - whole steps are ~6 px jumps on a big sweep)
 static inline int16_t sinAmpFine(uint16_t i, int16_t amp) {
 	int16_t a = s_pSin[(i >> 2) & 63], b = s_pSin[((i >> 2) + 1) & 63];
-	int16_t v = a + (int16_t)(((b - a) * (int16_t)(i & 3)) >> 2);
+	int16_t v = a + (int16_t)(mul16((int16_t)(b - a), (int16_t)(i & 3)) >> 2);
 	return (int16_t)(mul16(v, amp) >> 7);
 }
 
