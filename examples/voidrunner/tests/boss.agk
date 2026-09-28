@@ -1,0 +1,8 @@
+# The Warden fight on its own, from the checkpoint in demo.agk (the level up
+# to it takes 70 s to play): the heaviest part of the game holds 50 fps.
+start-at warden
+wait-serial "phase=2" 3000
+expect-no-dropped-frames
+expect-max-load 100
+expect-serial "AGK sfx boom"
+expect-no-serial "ERR|STACK SMASHED"

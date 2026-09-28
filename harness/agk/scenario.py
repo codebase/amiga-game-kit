@@ -49,6 +49,13 @@ Commands:
                                     jump or stall, which screenshots can't. DX 0 = holds still.
                                     Pick a region of just the scrolling layer; sprites and objects
                                     crossing it are outvoted.
+    checkpoint NAME                 save the whole machine here (cached per build): other
+                                    scenarios can start from this point with start-at
+    start-at NAME                   (first line) start from checkpoint NAME instead of the boot:
+                                    skip the minutes it takes to reach a boss. The checkpoint
+                                    comes from whichever tests/ or demo/ scenario has
+                                    'checkpoint NAME'; it's made again (by playing that
+                                    scenario up to there) when the build or those lines change
     expect-no-dropped-frames        the game never missed a frame (needs agk/perf.h in the game)
     expect-max-load PERCENT         no frame used more than PERCENT of the frame time (agk/perf.h)
 
@@ -115,6 +122,8 @@ class Scenario:
     perf: list = field(default_factory=list)          # ("dropped", 0, lineno) / ("maxload", pct, lineno)
     marks: list = field(default_factory=list)         # audio mark names
     motions: list = field(default_factory=list)       # (id, (x0, y0, x1, y1), frames, dx, dy, lineno)
+    checkpoints: dict = field(default_factory=dict)   # name -> index in lines just after its snapsave
+    start_at: tuple = None                            # (checkpoint name, lineno)
     audio: list = field(default_factory=list)         # ("sound"|"silence", from, to, lineno)
     origins: list = field(default_factory=list)       # scenario line number of each entry in lines
     frames: int = 0                                   # frames of scenario time
@@ -149,7 +158,7 @@ def _name(tok, lineno, seen):
 
 def parse(text, name="scenario"):
     sc = Scenario(name)
-    held, names = set(), set()
+    held, names, checkpoint_names = set(), set(), set()
 
     def run_frames(n):
         if n > 0:
@@ -267,6 +276,28 @@ def parse(text, name="scenario"):
             if len(args) != 2:
                 raise ScenarioError(f"line {lineno}: usage: {cmd} FROM TO (mark names, or start / end)")
             sc.audio.append((cmd[7:], args[0], args[1], lineno))
+
+        elif cmd == "checkpoint":
+            if len(args) != 1:
+                raise ScenarioError(f"line {lineno}: usage: checkpoint NAME")
+            if held:
+                raise ScenarioError(f"line {lineno}: release {'+'.join(sorted(held))} before a checkpoint "
+                                    f"(held inputs aren't part of the saved machine)")
+            n = _name(args[0], lineno, checkpoint_names)   # (kept apart from screenshots: its own files)
+            # Snapshots restore reliably from a video-frame boundary (like the boot
+            # snapshot): 'wait 1 frame' (singular) stays a video frame in tick sync
+            sc.lines.append("wait 1 frame")
+            sc.frames += 1
+            sc.lines.append(f"agk serial {{ckpt:{n}}}.serial.txt")
+            sc.lines.append(f"agk snapsave {{ckpt:{n}}}")
+            sc.checkpoints[n] = len(sc.lines)
+
+        elif cmd == "start-at":
+            if len(args) != 1:
+                raise ScenarioError(f"line {lineno}: usage: start-at CHECKPOINT")
+            if sc.lines or sc.start_at:
+                raise ScenarioError(f"line {lineno}: start-at must be the scenario's first command")
+            sc.start_at = (args[0], lineno)
 
         elif cmd == "expect-scroll":
             from .motion import parse_speed

@@ -39,6 +39,7 @@ the screenshots as images. If `agk` isn't on your PATH, it's `{{kit}}/tools/agk`
 - `expect-serial "x=224"`: a regex over the whole serial log
 - `expect-color NAME 44 44 0xFC0`: the pixel at game (44,44) in screenshot NAME must be Amiga colour $FC0. Use this to prove something is or isn't drawn; a golden only proves "same as last time".
 - `expect-scroll 0 30 319 250 136 -1/4`: over the next 136 frames that region moves -1/4 px a frame, smoothly (each step 0 or -1, the total within 1 px). Screenshots can't see a scroll that jumps or stalls; this can. Give every scrolling layer one, over a stretch long enough to cross its 16 px word boundaries.
+- `checkpoint boss` saves the whole machine at that point (cached per build); a test that starts with `start-at boss` resumes there instead of replaying the level. It's made again, by playing the defining scenario up to that line, when the build or those lines change. Use it for tests of late parts of the game.
 - `wait-serial "score=1"`: literal text, not a regex. It resumes one frame after the text arrives, so the game has usually run one more frame with the old input.
 - `regs NAME cpu copper`
 - `dump-mem NAME 0x0 0x80000`

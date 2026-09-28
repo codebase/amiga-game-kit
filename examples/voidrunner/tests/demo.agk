@@ -3,6 +3,7 @@
 wait-serial "AGK t0"
 wait-serial "phase=1" 1200
 wait-serial "boss=2" 5000
+checkpoint warden          # tests/boss.agk starts here
 wait 200
 screenshot warden
 wait-serial "phase=2" 3000

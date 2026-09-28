@@ -182,6 +182,73 @@ def _ensure_boot_locked(adf, profile_name, profile, rom, ext, boot_text, boot_ti
     return snap, secs
 
 
+CHECKPOINT_FORMAT = "2"   # bump when how checkpoints are saved changes: old ones are made again
+
+
+def checkpoint_path(adf, profile_name, boot_text, name, prefix_lines):
+    """Where checkpoint NAME is cached: per build, machine, ROM, emulator, and
+    the scenario lines that lead to it."""
+    _, rom, _ = profiles.resolve(profile_name)
+    key = hashlib.sha256("\0".join([CHECKPOINT_FORMAT, boot_key(adf, profile_name, rom, boot_text), name,
+                                     *prefix_lines]).encode()).hexdigest()[:20]
+    return os.path.join(CACHE, f"ckpt-{name}-{key}.vasnap")
+
+
+def _checkpoint_lines(sc, adf, profile_name, boot_text):
+    """Scenario lines with {ckpt:NAME} replaced by the checkpoint's cache path"""
+    # (the key covers the lines before the checkpoint's own three: wait, serial, snapsave)
+    paths = {n: checkpoint_path(adf, profile_name, boot_text, n, sc.lines[:i - 3])
+             for n, i in sc.checkpoints.items()}
+    return [re.sub(r"\{ckpt:([^}]+)\}", lambda m: paths[m.group(1)], l) for l in sc.lines]
+
+
+def find_checkpoint(project_dir, name):
+    """-> (parsed scenario that defines checkpoint NAME, its file)"""
+    from . import scenario as scn
+    for sub in ("tests", "demo"):
+        d = os.path.join(project_dir, sub)
+        for f in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+            path = os.path.join(d, f)
+            if f.endswith(".agk") and re.search(rf"^\s*checkpoint\s+{re.escape(name)}\b",
+                                                open(path).read(), re.M):
+                try:
+                    return scn.parse(open(path).read(), os.path.splitext(f)[0]), path
+                except scn.ScenarioError as e:
+                    raise RunError(f"checkpoint {name} is in {os.path.relpath(path, project_dir)}, "
+                                   f"which has an error: {e}")
+    raise RunError(f"start-at {name}: no scenario in tests/ or demo/ has 'checkpoint {name}' - add that line "
+                   f"where the game should be saved")
+
+
+def ensure_checkpoint(adf, profile_name, boot_text, sync, name):
+    """-> (snapshot path, seconds spent making it or None). Plays the defining
+    scenario up to the checkpoint when it isn't cached for this build."""
+    project_dir = os.path.dirname(os.path.dirname(os.path.abspath(adf)))
+    sc, path = find_checkpoint(project_dir, name)
+    if sc.start_at:
+        raise RunError(f"checkpoint {name} is in {os.path.basename(path)}, which itself uses start-at: "
+                       f"define checkpoints in scenarios that start from the boot")
+    end = sc.checkpoints[name]
+    snap = checkpoint_path(adf, profile_name, boot_text, name, sc.lines[:end - 3])
+    os.makedirs(CACHE, exist_ok=True)
+    with open(snap + ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if os.path.exists(snap):
+            os.utime(snap)
+            return snap, None
+        sc.lines, sc.origins = sc.lines[:end], sc.origins[:end]
+        sc.screenshots = [n for n in sc.screenshots if any(f"/{n}.raw" in l for l in sc.lines)]
+        sc.motions, sc.expects, sc.colors, sc.rgbs, sc.perf, sc.audio = [], [], [], [], [], []
+        work = os.path.join(CACHE, f"ckpt-run-{name}")
+        os.makedirs(work, exist_ok=True)
+        t0 = time.time()
+        res = run(adf, profile_name, sc, work, boot_text, sync=sync)
+        if not os.path.exists(snap):
+            raise RunError(f"checkpoint {name}: playing {os.path.basename(path)} up to it failed: "
+                           + "; ".join(res["failures"]) + f" (see {work})")
+        return snap, round(time.time() - t0, 1)
+
+
 def _prune_cache(keep=24, min_age=3600):
     """Boot snapshots are ~17MB each; keep the most recently used ones, and
     never delete one used in the last hour (another run may be using it)."""
@@ -241,7 +308,20 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
               "ok": True, "failures": [], "screenshots": {}, "boot_seconds": None}
 
     lines = _setup_lines(profile, rom, ext)
-    if fresh:
+    ckpt = None
+    if scenario.start_at:
+        try:
+            ckpt, ckpt_secs = ensure_checkpoint(adf, profile_name, boot_text, sync, scenario.start_at[0])
+        except RunError as e:
+            result.update(ok=False, failures=[f"line {scenario.start_at[1]}: {e}"])
+            return result
+        result["checkpoint_seconds"] = ckpt_secs
+        fresh = False
+    if ckpt:
+        # Like a boot snapshot: display settings, a full frame, then a frame start
+        snap = ensure_boot(adf, profile_name, boot_text)[0]
+        lines += [f"agk snapload {ckpt}", *_display_lines()]
+    elif fresh:
         # Boot inside this run (no snapshot) - used to verify snapshot parity.
         lines += [f"regression run {os.path.abspath(adf)}",
                   f"waitserial {serial_text(boot_text)} {DEFAULT_BOOT_TIMEOUT}", "wait 1 frames"]
@@ -265,7 +345,8 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
         lines.append("wait 1 frames")
     lines.append("agk audio start")   # audio.wav starts at scenario time 0
     first = len(lines) + 1   # script line number (1-based) of the scenario's first line
-    lines += _sync_lines([l.replace("{out}", outdir) for l in scenario.lines], sync)
+    lines += _sync_lines([l.replace("{out}", outdir) for l in _checkpoint_lines(scenario, adf, profile_name,
+                                                                             boot_text)], sync)
     lines.append(f"agk audio save {outdir}/audio.wav")
 
     def line_to_source(n):
@@ -283,6 +364,8 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
     if not fresh and os.path.exists(f"{snap}.serial.txt"):
         # The serial log isn't part of the snapshot: prepend the boot output
         serial = open(f"{snap}.serial.txt", errors="replace").read()
+    if ckpt and os.path.exists(f"{ckpt}.serial.txt"):
+        serial += open(f"{ckpt}.serial.txt", errors="replace").read()   # ... and up to the checkpoint
     if os.path.exists(os.path.join(outdir, "serial.txt")):
         serial += open(os.path.join(outdir, "serial.txt"), errors="replace").read()
     serial = serial.replace("\r\n", "\n").replace("\r", "")
