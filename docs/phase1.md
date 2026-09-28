@@ -101,7 +101,8 @@ These are fixed by `patches/vamiga-agk.patch`, where not noted otherwise.
    - The harness sets `monitor set PALETTE RGB` explicitly.
    - OCS/ECS colours then come out as n×16 and AGA as n×17. The harness canonicalises to n×17, which makes 12-bit colours identical on every chipset.
 7. **No way to hear what the game plays.** Added `agk audio start`, `agk audio mark NAME` and `agk audio save PATH`: while recording, every sample Paula produces is kept at a fixed 44.1 kHz (the adaptive host sample rate is off), independent of the host audio buffer. A mark first brings Paula's lazy synthesis up to the current cycle. The sub-sample position isn't part of snapshots, so `start` resets it: recordings are bit-identical between a fresh boot and a restored snapshot.
-8. **Small quirks:**
+8. **No profiler.** Added `agk profile start` and `agk profile save PATH` (`agk profile` in the harness). At the end of every raster line, the emulator records the CPU's program counter and the line's bus cycles by owner (CPU, blitter, bitplanes, copper, sprites, other, free), plus whether the game is working on a frame: from agkPerfBegin's tick (0xA6E1) to agkPerfEnd (0xA6E3). None of this is machine state, so recording changes nothing. The harness finds where the code was loaded from the address of the runtime's `g_szAgkPerfKey`, which the emulator notes from the first perf report.
+9. **Small quirks:**
    - `snapload` requires a `.vasnap` extension.
    - The console treats `\r` as "clear line", which wiped the serial tail.
    - The `waitserial` pause prints a harmless `std::exception` line.

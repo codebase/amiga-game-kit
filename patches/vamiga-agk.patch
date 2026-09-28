@@ -1,3 +1,75 @@
+diff --git a/Core/Components/Agnus/Agnus.cpp b/Core/Components/Agnus/Agnus.cpp
+index 3c22e6c..6ed7cc1 100644
+--- a/Core/Components/Agnus/Agnus.cpp
++++ b/Core/Components/Agnus/Agnus.cpp
+@@ -867,6 +867,9 @@ Agnus::eolHandler()
+     // Pass control to the DMA debugger
+     dmaDebugger.eolHandler();
+ 
++    // AGK profiler: this line's bus usage and where the CPU is
++    if (agkProfile.active) agkProfileLine();
++
+     // Move to the next line
+     pos.eol();
+ 
+@@ -909,6 +912,32 @@ Agnus::eolHandler()
+     scheduleFirstDasEvent();
+ }
+ 
++void
++Agnus::agkProfileLine()
++{
++    using P = AgkProfile;
++    u8 bus[P::KINDS] = { };
++    for (isize i = 0; i < HPOS_CNT; i++) {
++
++        auto o = busOwner[i];
++        int kind =
++        o == BusOwner::NONE ? P::FREE :
++        o == BusOwner::CPU ? P::CPU :
++        o == BusOwner::BLITTER ? P::BLITTER :
++        o == BusOwner::COPPER ? P::COPPER :
++        o == BusOwner::BLOCKED ? P::BLOCKED :
++        (o >= BusOwner::BPL1 && o <= BusOwner::BPL8) ? P::BITPLANES :
++        (o >= BusOwner::SPRITE0 && o <= BusOwner::SPRITE7) ? P::SPRITES : P::OTHER;
++        bus[kind]++;
++    }
++    auto &p = agkProfile;
++    u32 flags = (serialPort.agkWorking ? P::WORKING : 0) | (p.tick ? P::TICK : 0) | (pos.v == 0 ? P::NEW_FRAME : 0);
++    p.tick = false;
++    p.data.push_back((cpu.getPC0() & 0xFFFFFF) | flags);
++    p.data.push_back(u32(bus[0]) | u32(bus[1]) << 8 | u32(bus[2]) << 16 | u32(bus[3]) << 24);
++    p.data.push_back(u32(bus[4]) | u32(bus[5]) << 8 | u32(bus[6]) << 16 | u32(bus[7]) << 24);
++}
++
+ void
+ Agnus::eofHandler()
+ {
+diff --git a/Core/Components/Agnus/Agnus.h b/Core/Components/Agnus/Agnus.h
+index 13d1452..8e1a2cb 100644
+--- a/Core/Components/Agnus/Agnus.h
++++ b/Core/Components/Agnus/Agnus.h
+@@ -204,6 +204,20 @@ public:
+     // Recorded data bus for all cycles in the current rasterline
+     u16 busData[HPOS_CNT] = { };
+ 
++    // AGK profiler: at the end of every line, where the CPU is and who used
++    // the bus. Outside the machine state (not serialized): recording never
++    // changes what the emulation does.
++    struct AgkProfile {
++        enum { FREE, CPU, BLITTER, BITPLANES, COPPER, SPRITES, OTHER, BLOCKED, KINDS };
++        static constexpr u32 WORKING = 1 << 24;   // between agkPerfBegin and agkPerfEnd
++        static constexpr u32 TICK = 1 << 25;      // a game frame started in this line
++        static constexpr u32 NEW_FRAME = 1 << 26; // the first line of a video frame
++        bool active = false;
++        bool tick = false;
++        std::vector<u32> data;          // per line: PC | flags, bus cycles by kind (8 x u8 in 2 u32)
++    } agkProfile;
++    void agkProfileLine();
++
+     // Remembers the last write to SPRxCTL (EXPERIMENTAL)
+     u8 lastCtlWrite[8] = { };
+ 
 diff --git a/Core/Components/Denise/Denise.cpp b/Core/Components/Denise/Denise.cpp
 index 87200c4..8aa833f 100644
 --- a/Core/Components/Denise/Denise.cpp
@@ -26,10 +98,10 @@ index 1b7087b..a316d29 100644
      }
      
 diff --git a/Core/Misc/RetroShell/Console.cpp b/Core/Misc/RetroShell/Console.cpp
-index b661c82..75d53bd 100644
+index b661c82..6f3fb98 100644
 --- a/Core/Misc/RetroShell/Console.cpp
 +++ b/Core/Misc/RetroShell/Console.cpp
-@@ -1185,16 +1185,211 @@ Console::initCommonCommands(RSCommand &root)
+@@ -1185,16 +1185,249 @@ Console::initCommonCommands(RSCommand &root)
              .flags  = vAmigaDOS ? rs::disabled : rs::hidden,
              .args   = {
                  { .name = { "seconds", "Delay" } },
@@ -213,6 +285,44 @@ index b661c82..75d53bd 100644
 +                std::ofstream file(path, std::ios::binary);
 +                if (!file.is_open()) throw IOError(IOError::FILE_CANT_CREATE, path);
 +                file << serialPort.agkLog;
++            }
++        });
++
++        root.add({
++
++            .tokens = { "agk", "profile" },
++            .ghelp  = { "Sample the CPU's PC and bus cycles by owner at the end of every line" },
++            .func   = [] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) { }
++        });
++
++        root.add({
++
++            .tokens = { "agk", "profile", "start" },
++            .chelp  = { "Start profiling (clears earlier samples)" },
++            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
++
++                auto &p = agnus.agkProfile;
++                p = {};
++                p.active = true;
++            }
++        });
++
++        root.add({
++
++            .tokens = { "agk", "profile", "save" },
++            .chelp  = { "Write the samples so far: 'AGKP', version, perf key address, then per line (little-endian u32s) PC | flags, 8 bus counts as bytes" },
++            .args   = { { .name = { "path", "File path" } } },
++            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
++
++                auto path = host.makeAbsolute(args.at("path"));
++                std::ofstream file(path, std::ios::binary);
++                if (!file.is_open()) throw IOError(IOError::FILE_CANT_CREATE, path);
++                auto put = [&](u32 v) { for (int i = 0; i < 4; i++) file.put(char((v >> (8 * i)) & 0xFF)); };
++                // Header: "AGKP", version, the runtime's perf key address (places the code)
++                file.write("AGKP", 4);
++                put(2);
++                put(serialPort.agkPerfKeyAddr);
++                for (auto v : agnus.agkProfile.data) put(v);
 +            }
 +        });
 +
@@ -478,10 +588,10 @@ index 92790b9..9592819 100644
      //
      // Methods
 diff --git a/Core/Ports/SerialPort.cpp b/Core/Ports/SerialPort.cpp
-index b8a0833..56f31b0 100644
+index b8a0833..bfc4077 100644
 --- a/Core/Ports/SerialPort.cpp
 +++ b/Core/Ports/SerialPort.cpp
-@@ -303,6 +303,62 @@ SerialPort::recordIncomingByte(int byte)
+@@ -303,6 +303,68 @@ SerialPort::recordIncomingByte(int byte)
      }
  }
  
@@ -492,7 +602,8 @@ index b8a0833..56f31b0 100644
 +
 +        case 0: // Waiting for the magic word
 +            if (value == 0xA6E0) agkHostState = 1;
-+            if (value == 0xA6E1) { agkTicks++; retroShell.onAgkTick(); }
++            if (value == 0xA6E1) { agkTicks++; agkWorking = true; agnus.agkProfile.tick = true; retroShell.onAgkTick(); }
++            if (value == 0xA6E3) agkWorking = false;   // agkPerfEnd: the frame's work is done
 +            if (value == 0xA6E2) agkHostState = 3;
 +            break;
 +
@@ -534,6 +645,11 @@ index b8a0833..56f31b0 100644
 +                    }
 +                    line += '=' + std::to_string(val);
 +                }
++                // agkPerfReport's first key is the runtime's global g_szAgkPerfKey:
++                // its address places the game's code for agk profile
++                if (line.rfind("AGK perf frames=", 0) == 0) {
++                    agkPerfKeyAddr = mem.spypeek32<Accessor::CPU>(agkHostPtr + 4);
++                }
 +                agkLog += line + '\n';
 +            }
 +            break;
@@ -544,7 +660,7 @@ index b8a0833..56f31b0 100644
  void
  SerialPort::recordOutgoingByte(int byte)
  {
-@@ -312,6 +368,7 @@ SerialPort::recordOutgoingByte(int byte)
+@@ -312,6 +374,7 @@ SerialPort::recordOutgoingByte(int byte)
  
          // Record the incoming byte
          outgoing += char(byte);
@@ -553,10 +669,10 @@ index b8a0833..56f31b0 100644
          // Inform the GUI if the record buffer had been empty
          if (outgoing.length() == 1) msgQueue.put(Msg::SER_OUT);
 diff --git a/Core/Ports/SerialPort.h b/Core/Ports/SerialPort.h
-index db191e4..e7197e6 100644
+index db191e4..2de9650 100644
 --- a/Core/Ports/SerialPort.h
 +++ b/Core/Ports/SerialPort.h
-@@ -57,6 +57,24 @@ public:
+@@ -57,6 +57,30 @@ public:
      std::u16string incoming;
      std::u16string outgoing;
  
@@ -570,6 +686,12 @@ index db191e4..e7197e6 100644
 +
 +    // AGK: number of game-frame marks (ticks) seen
 +    i64 agkTicks = 0;
++
++    // AGK: where the runtime's "perf frames" key string is (0 until a perf report)
++    u32 agkPerfKeyAddr = 0;
++
++    // AGK: the game is working on a frame (from agkPerfBegin's tick to agkPerfEnd)
++    bool agkWorking = false;
 +
 +private:
 +

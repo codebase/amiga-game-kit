@@ -77,7 +77,12 @@ void agkPerfEnd(void) {
 	if(++s_uwFrames >= REPORT_EVERY) {
 		agkPerfReport();
 	}
+	agkTickEnd();
 }
+
+// Global (not a literal) so the linker map has it: the emulator notes its
+// address from the report, and agk profile places the game's code with it.
+const char g_szAgkPerfKey[] = "perf frames";
 
 void agkPerfReport(void) {
 	if(!s_uwFrames) {
@@ -86,7 +91,7 @@ void agkPerfReport(void) {
 	// Percentages via 16-bit math where possible (68000 has no 32-bit divide).
 	// Runs once a second, so libgcc divides are fine here.
 	UWORD uwAvgLines = (UWORD)(s_ulSumLines / s_uwFrames);
-	agkState("perf frames", s_uwFrames);
+	agkState(g_szAgkPerfKey, s_uwFrames);
 	agkState("dropped", s_uwDropped);
 	agkState("load", (uwAvgLines * 100) / (PAL_LINES * s_ubFrameVbls));
 	agkState("maxload", (s_uwMaxLines * 100) / (PAL_LINES * s_ubFrameVbls));

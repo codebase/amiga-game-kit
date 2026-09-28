@@ -10,6 +10,7 @@ PAL 50 Hz, Kickstart 1.3**. It's built and tested with the Amiga Game Kit (`agk`
 agk unit        # game rules only, on the host, in milliseconds - run after editing src/logic.c
 agk build       # cross-compile in Docker -> build/{{name}}.adf (a bootable floppy)
 agk lint        # per-frame functions that call the slow 68000 maths library
+agk profile tests/perf.agk   # where the frame time goes: functions, blitter, DMA
 agk test        # boot on every profile, play tests/*.agk, compare screenshots to goldens
 agk run -s "press right 20" -s "screenshot moved"   # try something ad hoc
 agk play        # let the human play it in FS-UAE (arrow keys + Space)
@@ -157,6 +158,18 @@ frames this prints `AGK perf frames=50 dropped=0 load=9 maxload=11`:
   - avoid `int`/`long` multiply and divide
   - draw only what changed
 - Measure again after each fix.
+
+When `maxload` is too high, don't guess which part is slow; profile it:
+`agk profile tests/perf.agk` plays the scenario with the emulator sampling
+every raster line. It reports:
+- the load per game frame, and bus use (CPU, blitter, bitplanes, copper, sprites, free)
+- the functions that take the working time, and the heaviest frames with their functions
+- `build/agk-profile/<profile>/<test>/load.png`, a chart of the load over the run
+
+A frame that's mostly `blitter` on the bus is blitter-bound: blit less (copies instead of
+cookie-cuts, smaller areas). One that's mostly `CPU` is code: look at its
+functions. Static functions inlined into a bigger one count as that one, so
+`agk profile tests/perf.agk --disasm FUNC` shows the samples per instruction.
 
 Baseline: the template uses about 4% idle and about 9% while moving.
 

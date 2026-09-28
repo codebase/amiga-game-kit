@@ -9,6 +9,7 @@ JSON-RPC 2.0 on stdin/stdout, as the MCP stdio transport specifies.
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -53,6 +54,16 @@ TOOLS = [
      "description": "List the game's per-frame functions whose C compiles to slow 68000 maths library calls "
                     "(32-bit multiply/divide/%, 64-bit, float), with the fix for each. Setup code is left out.",
      "inputSchema": {"type": "object", "properties": {"project": PROJECT}}},
+    {"name": "agk_profile",
+     "description": "Play a scenario (e.g. tests/perf.agk) with the emulator sampling the CPU and the bus on "
+                    "every raster line. Returns the load per game frame, bus use (CPU/blitter/bitplanes/...), "
+                    "the functions that take the time, the heaviest frames, and a load chart. With disasm=FUNC: "
+                    "samples per instruction of one function.",
+     "inputSchema": {"type": "object", "properties": {
+         "project": PROJECT, "profile": PROFILE,
+         "scenario": {"type": "string", "description": "Scenario file, e.g. tests/perf.agk."},
+         "disasm": {"type": "string", "description": "Function name from the report."}},
+         "required": ["scenario"]}},
     {"name": "agk_doctor",
      "description": "Check that Docker, the emulator and Kickstart ROMs are set up; list usable profiles.",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -95,6 +106,17 @@ def call(name, a):
     if name == "agk_build":
         rc, out = _agk("build", project)
         return [_text(out or ("build ok" if rc == 0 else "build failed"))], rc != 0
+    if name == "agk_profile":
+        args = ["profile", a["scenario"], project] + (["-p", a["profile"]] if a.get("profile") else [])
+        args += ["--disasm", a["disasm"]] if a.get("disasm") else []
+        rc, out = _agk(*args)
+        content = [_text(out)]
+        m = re.search(r"chart: (\S+\.png)", out)
+        if m and rc == 0:
+            png = m.group(1) if os.path.isabs(m.group(1)) else os.path.join(os.getcwd(), m.group(1))
+            if os.path.exists(png):
+                content.append(_image(png))
+        return content, rc != 0
     if name == "agk_lint":
         rc, out = _agk("lint", project)
         return [_text(out)], rc != 0

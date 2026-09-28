@@ -32,6 +32,9 @@ void agkDebugAsync(UBYTE isOn);
 void agkDebugFlush(void);
 /** Mark the start of a game frame for the harness (agkPerfBegin calls it). */
 void agkTick(void);
+/** Mark the end of the frame's work (agkPerfEnd calls it): agk profile counts
+ *  the time between agkTick and this as the frame's load. */
+void agkTickEnd(void);
 void agkPrint(const char *szText);
 void agkPrintNum(LONG lValue);
 void agkReady(void);
@@ -47,6 +50,7 @@ void agkEnd(void);
 #define agkDebugAsync(on) do { (void)(on); } while(0)
 #define agkDebugFlush() do {} while(0)
 #define agkTick() do {} while(0)
+#define agkTickEnd() do {} while(0)
 #define agkPrint(sz) do { (void)(sz); } while(0)
 #define agkPrintNum(l) do { (void)(l); } while(0)
 #define agkReady() do {} while(0)

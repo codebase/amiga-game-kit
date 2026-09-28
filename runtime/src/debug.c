@@ -36,6 +36,10 @@ void agkTick(void) {
 	NOOP = 0xA6E1;
 }
 
+void agkTickEnd(void) {
+	NOOP = 0xA6E3;
+}
+
 void agkPrint(const char *szText) {
 	ULONG ulAddr = (ULONG)szText;
 	// Keep interrupts from splitting the 3-word sequence.
@@ -98,6 +102,9 @@ void agkTick(void) {
 		s_isReadyPending = 0;
 		agkPrint("AGK ready\n");
 	}
+}
+
+void agkTickEnd(void) {
 }
 
 void agkDebugAsync(UBYTE isOn) {

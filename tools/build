@@ -33,7 +33,8 @@ docker run --rm -u "$(id -u):$(id -g)" \
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_TOOLCHAIN_FILE=/opt/m68k-amigaos/lib/m68k-amigaos.cmake \
     -DM68K_CPU=68000 -DM68K_FPU=soft -DM68K_CRT=nix13 \
-    -DACE_DIR=/kit/third_party/ACE -DAGK_KIT=/kit $EXTRA >/dev/null
+    -DACE_DIR=/kit/third_party/ACE -DAGK_KIT=/kit \
+    -DCMAKE_EXE_LINKER_FLAGS_RELEASE=-Wl,-Map,$NAME.map $EXTRA >/dev/null
   cmake --build build -j
   m68k-amigaos-strip build/$NAME 2>/dev/null || true
 

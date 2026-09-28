@@ -23,13 +23,22 @@ fetch https://github.com/AmigaPorts/ACE.git "$TP/ACE" "$ACE_REV"
 
 # Local patches (all intended for upstream):
 #   vamiga-agk.patch    wait N frames, waitserial, agk screenshot/serial/snapsave/snapload,
-#                       frame-skip reset fix
+#                       agk profile (PC + bus sampling per line), frame-skip reset fix
 #   ace-agk.patch       PAL detection on Kickstart 1.x, TBE (serial) interrupt dispatch
 apply_patch() { # repo patch
   if git -C "$1" apply --check "$ROOT/patches/$2" 2>/dev/null; then
     git -C "$1" apply "$ROOT/patches/$2"
   elif ! git -C "$1" apply --reverse --check "$ROOT/patches/$2" 2>/dev/null; then
-    echo "error: patches/$2 does not apply to $1 (local changes?)" >&2; exit 1
+    # Usually an older version of our patch (the kit was updated). Set the
+    # checkout's changes aside in a stash (recoverable) and apply the new one.
+    if [ -n "$(git -C "$1" status --porcelain)" ] &&
+       git -C "$1" stash push -q -m "agk setup: before applying the current patches/$2" &&
+       git -C "$1" apply --check "$ROOT/patches/$2" 2>/dev/null; then
+      git -C "$1" apply "$ROOT/patches/$2"
+      echo "note: $1 had other changes (an older patches/$2?); they're in its git stash"
+    else
+      echo "error: patches/$2 does not apply to $1" >&2; exit 1
+    fi
   fi
 }
 apply_patch "$TP/vAmiga" vamiga-agk.patch

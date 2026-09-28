@@ -478,6 +478,64 @@ def cmd_record(args):
     return 0
 
 
+def cmd_profile(args):
+    from . import profile as prof
+    path = args.scenario
+    proj = load_project(args.project or os.path.dirname(os.path.dirname(os.path.abspath(path))))
+    need_adf(proj, not args.no_build)
+    name = os.path.splitext(os.path.basename(path))[0]
+    try:
+        sc = scenario.parse(open(path).read(), name)
+    except scenario.ScenarioError as e:
+        raise SystemExit(f"scenario error: {e}")
+    # Sample the whole scenario
+    sc.lines = ["agk profile start"] + sc.lines + ["agk profile save {out}/profile.bin"]
+    sc.origins = [0] + sc.origins + [0]
+    machine = args.profile or proj["profile"]
+    outdir = os.path.abspath(os.path.join(proj["dir"], "build", "agk-profile", machine, name))
+    image = os.environ.get("AGK_TOOLCHAIN_IMAGE", "amigadev/crosstools:m68k-amigaos")
+    with runner.outdir_lock(outdir):
+        binf = os.path.join(outdir, "profile.bin")
+        if (args.disasm and os.path.exists(binf) and os.path.getmtime(binf) > os.path.getmtime(proj["adf"])
+                and os.path.getmtime(binf) > os.path.getmtime(path)):
+            print(f"(reusing {rel(binf)}: the build and the scenario haven't changed)", file=sys.stderr)
+            res = {"ok": True, "failures": []}
+        else:
+            res = runner.run(proj["adf"], machine, sc, outdir, proj["boot"], sync=proj["sync"])
+        if not os.path.exists(binf):
+            _report(res, False)
+            return 1
+        try:
+            anchor, lines = prof.load(binf)
+            syms = prof.symbols_for(proj, image)
+            if args.disasm:
+                start = syms.start(args.disasm)
+                if start is None:
+                    raise prof.ProfileError(f"no function '{args.disasm}' (names as in the report)")
+                _, obj = syms.object_of(start)
+                build = os.path.join(proj["dir"], "build")
+                dis = subprocess.run(["docker", "run", "--rm", "-v", f"{build}:/b", "-w", "/b", image,
+                                      "m68k-amigaos-objdump", "-d", obj], capture_output=True, text=True,
+                                     errors="replace").stdout
+                for line in prof.annotate(lines, anchor, syms, args.disasm, dis):
+                    print(line)
+                return 0
+            a = prof.analyse(anchor, lines, syms)
+        except prof.ProfileError as e:
+            raise SystemExit(f"profile: {e}")
+        text = prof.report(a, top=args.top)
+        prof.chart(a, os.path.join(outdir, "load.png"))
+        with open(os.path.join(outdir, "report.txt"), "w") as f:
+            f.write("\n".join(text) + "\n")
+    for line in text:
+        print(line)
+    print(f"\nchart: {rel(os.path.join(outdir, 'load.png'))} (load per game frame; line = 100%; "
+          f"orange = blitter-bound, blue = CPU-bound, red = over budget)")
+    if not res["ok"]:
+        print("(the scenario itself failed: " + "; ".join(res["failures"]) + ")")
+    return 0
+
+
 def _check_goldens(res, golden_dir, profile, update, refreshed):
     """Goldens live in tests/golden/<test>/<shot>.png, shared by all profiles.
     A profile that legitimately renders differently gets an override in
@@ -670,6 +728,18 @@ def main(argv=None):
     p.add_argument("-p", "--profile")
     p.add_argument("--no-build", action="store_true")
 
+    p = sub.add_parser("profile", help="where the frame time goes: functions, blitter, DMA (runs a scenario)",
+                       description="Plays SCENARIO.agk with the emulator sampling the CPU and the bus on every "
+                                   "raster line, then reports the load per game frame, the bus use, the "
+                                   "functions that take the time and the heaviest frames, and draws "
+                                   "load.png. Needs agk/perf.h in the game.")
+    p.add_argument("scenario", help="scenario file, e.g. tests/perf.agk")
+    p.add_argument("project", nargs="?")
+    p.add_argument("-p", "--profile", help="machine profile")
+    p.add_argument("--top", type=int, default=12, help="functions to list (default 12)")
+    p.add_argument("--disasm", metavar="FUNC", help="samples per instruction of one function")
+    p.add_argument("--no-build", action="store_true")
+
     p = sub.add_parser("play", help="play the game in FS-UAE (arrow keys + Space)")
     p.add_argument("project", nargs="?")
     p.add_argument("-p", "--profile")
@@ -769,7 +839,8 @@ def main(argv=None):
                 "unit": cmd_unit, "new": cmd_new, "art": cmd_art, "art-gen": cmd_art_gen,
                 "art-export": cmd_art_export, "art-animate": cmd_art_animate,
                 "play": cmd_play, "art-clean": cmd_art_clean, "sound": cmd_sound,
-                "record": cmd_record, "lint": cmd_lint}[args.cmd](args)
+                "record": cmd_record, "lint": cmd_lint,
+                "profile": cmd_profile}[args.cmd](args)
     except runner.RunError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
