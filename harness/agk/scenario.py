@@ -41,6 +41,14 @@ Commands:
     mark NAME                       remember this moment of the audio recording
     expect-sound FROM TO            something is audible between two marks (or start / end)
     expect-silence FROM TO          nothing is audible between them (e.g. after the music stops)
+    expect-scroll X0 Y0 X1 Y1 FRAMES DX [DY]
+                                    over the next FRAMES frames, the region (game coordinates,
+                                    corners inclusive) moves DX px per frame (and DY; default 0),
+                                    smoothly: every step is DX rounded down or up (-1/4: 0 or -1
+                                    each frame) and the total is within 1 px. Catches scrolls that
+                                    jump or stall, which screenshots can't. DX 0 = holds still.
+                                    Pick a region of just the scrolling layer; sprites and objects
+                                    crossing it are outvoted.
     expect-no-dropped-frames        the game never missed a frame (needs agk/perf.h in the game)
     expect-max-load PERCENT         no frame used more than PERCENT of the frame time (agk/perf.h)
 
@@ -106,6 +114,7 @@ class Scenario:
     rgbs: list = field(default_factory=list)          # exact RGB8, same tuple shape as colors
     perf: list = field(default_factory=list)          # ("dropped", 0, lineno) / ("maxload", pct, lineno)
     marks: list = field(default_factory=list)         # audio mark names
+    motions: list = field(default_factory=list)       # (id, (x0, y0, x1, y1), frames, dx, dy, lineno)
     audio: list = field(default_factory=list)         # ("sound"|"silence", from, to, lineno)
     origins: list = field(default_factory=list)       # scenario line number of each entry in lines
     frames: int = 0                                   # frames of scenario time
@@ -258,6 +267,26 @@ def parse(text, name="scenario"):
             if len(args) != 2:
                 raise ScenarioError(f"line {lineno}: usage: {cmd} FROM TO (mark names, or start / end)")
             sc.audio.append((cmd[7:], args[0], args[1], lineno))
+
+        elif cmd == "expect-scroll":
+            from .motion import parse_speed
+            if len(args) not in (6, 7):
+                raise ScenarioError(f"line {lineno}: usage: expect-scroll X0 Y0 X1 Y1 FRAMES DX [DY]")
+            x0, y0, x1, y1 = (_int(a, lineno, w) for a, w in zip(args[:4], ("x0", "y0", "x1", "y1")))
+            if not (x0 < x1 < 320 and y0 < y1 < 256):
+                raise ScenarioError(f"line {lineno}: the region must be inside 320x256 with x0 < x1, y0 < y1")
+            frames = _int(args[4], lineno, "frames")
+            if not 2 <= frames <= 500:
+                raise ScenarioError(f"line {lineno}: frames must be 2-500")
+            speeds = [parse_speed(a) for a in args[5:]] + ([0] if len(args) == 6 else [])
+            if None in speeds:
+                raise ScenarioError(f"line {lineno}: DX and DY are px per frame: 2, -1, 1/4, -1/2 ...")
+            k = len(sc.motions)
+            sc.motions.append((k, (x0, y0, x1, y1), frames, speeds[0], speeds[1], lineno))
+            for i in range(frames + 1):
+                sc.lines.append(f"agk screenshot {{out}}/_scroll{k}_{i}.raw")
+                if i < frames:
+                    run_frames(1)
 
         elif cmd == "expect-no-dropped-frames":
             if args:

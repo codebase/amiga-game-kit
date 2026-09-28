@@ -1,0 +1,6 @@
+# The backdrop drifts a pixel every 4 frames, never jumping: 136 frames
+# cross two of the 16 px word boundaries where it once skipped 16 px.
+wait-serial "AGK t0"
+press fire 2
+wait 40
+expect-scroll 0 30 319 250 136 -1/4

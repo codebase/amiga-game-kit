@@ -98,6 +98,7 @@ The demo is the worst case: the spread gun, every wave, the Warden's death, the 
 | `demo` | the attract mode plays the whole level: the Warden, then STAGE CLEAR (with its sounds) |
 | `perf` | the same, with no dropped frames and at most 100% of a frame |
 | `mouse` | the mouse doesn't move the ship |
+| `scroll` | the backdrop drifts a pixel every 4 frames without a jump (`expect-scroll`; it catches the old 16 px skip) |
 
 `agk unit` covers the rules on the host:
 - the title and the start

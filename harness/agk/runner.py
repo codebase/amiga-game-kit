@@ -351,6 +351,7 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
                 f"expected 0x{want[0]:X}{want[1]:X}{want[2]:X}" + hint)
 
     _check_rgb24(scenario, result)
+    _check_motion(scenario, outdir, profile, result)
     _check_audio(scenario, outdir, result)
 
     for name, comps in scenario.regs:
@@ -368,6 +369,38 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
             result["failures"].append(f"line {lineno}: {what} /{pattern}/"
                                       + (f"; last serial lines: {' | '.join(last)}" if last else ""))
     return result
+
+
+def _check_motion(scenario, outdir, profile, result):
+    from . import motion
+    for k, box, frames, dx, dy, lineno in scenario.motions:
+        rows = []
+        for i in range(frames + 1):
+            raw = os.path.join(outdir, f"_scroll{k}_{i}.raw")
+            if not os.path.exists(raw):
+                break
+            img = Image.from_raw_file(raw)
+            if not profile.aga:
+                img = img.canonical12()
+            if i == 0:
+                img.save_png(os.path.join(outdir, f"scroll{k}_first.png"))
+            rows.append(motion.region(img, *box))
+            os.remove(raw)
+        if len(rows) < frames + 1:
+            if result["ok"]:
+                result["ok"] = False
+                result["failures"].append(f"line {lineno}: expect-scroll got {len(rows)} of {frames + 1} frames")
+            continue
+        ok, steps, problems = motion.check(rows, dx, dy)
+        result.setdefault("motion", []).append({"line": lineno, "ok": ok, "steps": [s[:2] for s in steps]})
+        if not ok:
+            result["ok"] = False
+            x0, y0, x1, y1 = box
+            seq = " ".join(f"{s[0]:+d}" if not s[1] else f"{s[0]:+d},{s[1]:+d}" for s in steps[:40])
+            result["failures"].append(
+                f"line {lineno}: region ({x0},{y0})-({x1},{y1}) should move {dx} px/frame in x"
+                + (f" and {dy} in y" if dy else "") + ": " + "; ".join(problems)
+                + f". Steps: {seq}{' ...' if len(steps) > 40 else ''}")
 
 
 def _check_audio(scenario, outdir, result):
