@@ -15,4 +15,4 @@ the work lands; the commit that finishes an item names it.
 | 7 | `runtime/`: blit queue, double-buffered copper lists, HUD split, sprite starfield | Each game rebuilt them from scratch. | planned |
 | 8 | Perf chart per test run (load over time, with the game's state) | Seeing where the peak is, at a glance. | done with #4: `load.png`, one column per game frame (blue CPU-bound, orange blitter-bound, red over budget). |
 | 9 | Scenarios that start from a checkpoint (a saved state mid-level) | `perf` plays the whole level to reach the boss. | planned |
-| 10 | Warn when two sprite channels need the same colour registers with different colours | Sprites share colour registers in pairs. | planned |
+| 10 | Warn when two sprite channels need the same colour registers with different colours | Sprites share colour registers in pairs. | done: a 3-colour sprite inside an attached sprite's registers 17-31 with other colours, and palette.txt setting those registers to others (black placeholders aside), both warn with the fix (pin). Same-pair sprites were already an error. |

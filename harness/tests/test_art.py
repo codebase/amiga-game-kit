@@ -387,3 +387,23 @@ class FitTests(unittest.TestCase):
         rows = open(dst).read().split("frame\n")[1].split()
         self.assertEqual(rows, ["..", "AA"])                    # 2 off the top and the bottom
         self.assertIn("trimmed 2 blank rows", warnings[0])
+
+
+class SharedRegisterTests(unittest.TestCase):
+    def test_small_sprite_inside_an_attached_sprites_registers(self):
+        ship = "colors\n  A 0xF00\n  G 0x446 @29\n  H 0x99B @30\n  W 0xFFF @31\nframe\nA\n"
+        star = "colors\n  G 0x446\n  H 0x99B\n  W 0xFFF\nframe\nGHW\n"
+        odd = "colors\n  X 0x0F0\nframe\nX\n"
+        toml = '[ship]\nsource = "ship.txt"\nattached = true\n[s]\nsource = "s.txt"\nchannel = 6\n'
+        _, s = art.build(project({"art.toml": toml, "ship.txt": ship, "s.txt": star}))
+        self.assertEqual(s.warnings, [])                     # pinned to match: fine
+        _, s = art.build(project({"art.toml": toml, "ship.txt": ship, "s.txt": odd}))
+        self.assertTrue(any("registers 29-31" in w and "[ship]" in w for w in s.warnings))
+
+    def test_palette_txt_inside_attached_registers(self):
+        d = project({"art.toml": '[ship]\nsource = "ship.txt"\nattached = true\n',
+                     "ship.txt": "colors\n  A 0xF00\nframe\nA\n",
+                     "palette.txt": "0 0x000\n17 0xF00\n18 0x000\n19 0x0F0\n"})
+        (a,) = art.build(d)
+        # 17 agrees, 18 is a black placeholder; 19 clashes
+        self.assertTrue(any("palette.txt sets registers 19 to" in w for w in a.warnings))

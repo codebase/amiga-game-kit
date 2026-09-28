@@ -578,6 +578,26 @@ def build(project_dir, out_dir=None):
             a.warnings.append(f"palette.txt also defines slots {SPRITE_BASE[a.channel]}-{SPRITE_BASE[a.channel] + 2}; "
                               f"art{a.c_name()}ApplyColors() will overwrite them")
 
+    # Attached sprites use registers 17-31: a 3-colour sprite on any channel
+    # shows its colours from inside that range too, and palette.txt can set them
+    for at in attached[:1]:   # they share one set of registers: checking one is enough
+        for o in assets:
+            if o.kind == "sprite" and not o.attached:
+                base = SPRITE_BASE[o.channel]
+                theirs = at.sprite_colors[base - 17:base - 14]
+                if theirs != o.sprite_colors:
+                    o.warnings.append(
+                        f"channel {o.channel} shows registers {base}-{base + 2}, which the attached sprite "
+                        f"[{at.name}] sets to {_hex(theirs)}, not this sprite's {_hex(o.sprite_colors)}: "
+                        f"on screen together, one of them has the wrong colours. Pin [{at.name}]'s colours "
+                        f"{base}-{base + 2} to these ('X 0xRGB @{base}'), or draw both with the same three")
+        # (black entries are a full palette's placeholders, not a clash)
+        regs = [i for i in range(17, 32) if palette and palette.get(i, 0) not in (0, at.sprite_colors[i - 17])]
+        if regs:
+            at.warnings.append(f"palette.txt sets registers {', '.join(map(str, regs))} to other colours than this "
+                               f"attached sprite's; art{at.c_name()}ApplyColors() and artPaletteApply() "
+                               f"overwrite each other")
+
     os.makedirs(os.path.join(out_dir, "preview"), exist_ok=True)
     for a in assets:
         a.preview(palette=getattr(a, "own_palette", None) or palette).save_png(
