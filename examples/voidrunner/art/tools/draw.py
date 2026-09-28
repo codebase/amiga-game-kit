@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Draws VOIDRUNNER's round and animated objects as text art (art/*.txt), in
-the playfield palette: rotating asteroids, the spinning mine, explosions and
-the boss. Hand-made sprites live in art/*.txt too; this is the rest.
+the playfield palette: rotating asteroids, the spinning mine, explosions,
+the backdrop, the logo and the messages. Hand-made sprites live in art/*.txt
+too, and the ship and the Warden come from Retro Diffusion (art/tools/from_rd.py).
 
     python3 art/tools/draw.py
 """
@@ -143,79 +144,6 @@ def explosion(size, frames, seed):
     return out
 
 
-# ----------------------------------------------------------------- boss
-def boss():
-    """The Warden: a 96x64 battleship guarding the belt. Frames: normal, and
-    the core flashing when hit."""
-    W, H = 96, 64
-    g = [['.'] * W for _ in range(H)]
-
-    def fill(x0, y0, x1, y1, ch):
-        for y in range(max(0, y0), min(H, y1 + 1)):
-            for x in range(max(0, x0), min(W, x1 + 1)):
-                g[y][x] = ch
-
-    # the hull: a wedge pointing left, thick at the back
-    for y in range(8, 56):
-        dy = abs(y - 31.5)
-        x0 = int(10 + dy * 1.25)
-        x1 = 88 - int(max(0, dy - 18) * 1.5)
-        for x in range(x0, x1):
-            light = 0.75 - (y - 8) / 48 * 0.8 + (0.12 if (x // 8 + y // 6) % 2 else 0)
-            g[y][x] = shade(light)
-    # armour seams
-    for x in range(20, 88, 12):
-        for y in range(10, 54):
-            if g[y][x] != '.':
-                g[y][x] = 'D'
-    # upper and lower fins
-    for i in range(10):
-        fill(58 + i, 1 + i // 2 * 0, 70 - i // 3, 7 + i // 2, '.')
-    for y in range(0, 10):
-        for x in range(56 + y, 80):
-            g[y][x] = 'M' if y > 2 else 'L'
-    for y in range(54, 64):
-        for x in range(56 + (63 - y), 80):
-            g[y][x] = 'D' if y < 61 else 'M'
-    # engine block at the back, glowing
-    fill(86, 18, 91, 45, 'D')
-    for y in range(20, 44, 5):
-        fill(90, y, 95, y + 2, 'O')
-        fill(92, y + 1, 95, y + 1, 'L')
-    # gun turrets top and bottom (they fire the spreads)
-    for ty in (12, 46):
-        fill(34, ty, 44, ty + 5, 'M')
-        fill(36, ty + 1, 42, ty + 4, 'D')
-        fill(24, ty + 2, 35, ty + 3, 'L')       # the barrel
-        g[ty + 2][24] = g[ty + 3][24] = 'K'
-    # the core: the weak spot, an eye in the middle
-    core = []
-    for y in range(22, 42):
-        for x in range(44, 64):
-            d = math.hypot((x - 53.5) / 1.1, y - 31.5)
-            if d < 9.5:
-                core.append((x, y, d))
-    base = [r[:] for r in g]
-    frames = []
-    for hit in (False, True):
-        g = [r[:] for r in base]
-        for x, y, d in core:
-            if d > 8:
-                g[y][x] = 'K'
-            elif d > 6.5:
-                g[y][x] = 'D'
-            else:
-                g[y][x] = ('L' if d < 2.5 else 'O' if d < 4.5 else 'R') if not hit else ('L' if d < 5 else 'C')
-        frames.append(outline(g))
-    return frames
-
-
-def small_frames(frames):
-    return frames
-
-
-
-
 # ------------------------------------------------------------- the backdrop
 def backdrop():
     """The far view, 640x232 looping (playfield 2, 2 bitplanes: 3 colours +
@@ -346,7 +274,6 @@ if __name__ == '__main__':
     save('mine', 'Spinning mine, 16x16 (4 frames): stops, stares, fires at you.', mine())
     save('boom', 'Explosion, 32x32, 6 frames.', explosion(32, 6, 3))
     save('pop', 'Small explosion, 16x16, 5 frames.', explosion(16, 5, 8))
-    save('boss', 'The Warden, 96x64: the belt\'s guardian. Frames: normal, the core flashing when hit.', boss())
     backdrop()
     save('logo', 'The title: VOIDRUNNER in big chunky letters.', [words(['VOIDRUNNER'], 3, 'L', 'C', 208)])
     save('msg_stage', '"STAGE 1 - OUTER BELT"', [words(['STAGE 1', 'OUTER BELT'], 2, 'L', 'C')])

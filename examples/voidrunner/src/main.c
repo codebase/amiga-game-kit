@@ -279,7 +279,7 @@ static void backdropUpdate(UBYTE ubBfr) {
 #define BOBS (BOB_TYPES + 6)
 #define DRAWS_MAX (DRAW_MAX + 4)
 
-static tAgkBlit s_pErase[2][DRAWS_MAX];
+static tAgkBlitArea s_pErase[2][DRAWS_MAX];
 static UBYTE s_pErased[2];
 
 static tBitMap *s_pBobBm[BOBS], *s_pBobMask[BOBS];
@@ -348,7 +348,7 @@ static void bobsCreate(void) {
 #define BOSS_PAD_H (ART_BOSS_H + 2 * BOSS_PAD_Y)
 static tBitMap *s_pBossPad[ART_BOSS_FRAMES];
 static tAgkBlit s_pBossTpl[ART_BOSS_FRAMES][2];
-static tAgkBlit s_pBossErase[2];                // per buffer: where it was, to clear once it's gone
+static tAgkBlitArea s_pBossErase[2];                // per buffer: where it was, to clear once it's gone
 static UBYTE s_pBossShown[2];
 
 static void bossPadCreate(void) {
@@ -413,7 +413,7 @@ static UBYTE messagesDraw(tDraw *pOut) {
 // the game logic runs
 static void erasesQueue(UBYTE ubBfr) {
 	agkBlitqReset();
-	const tAgkBlit *pDrawn = s_pErase[ubBfr];
+	const tAgkBlitArea *pDrawn = s_pErase[ubBfr];
 	for(UBYTE i = s_pErased[ubBfr]; i--; ++pDrawn) {
 		agkBlitClear(agkBlitqSlot(), pDrawn);   // the same place, D only: zeros
 		agkBlitqPush();
@@ -424,7 +424,7 @@ static void objectsQueue(UBYTE ubBfr) {
 	tBitMap *pFb = s_pFb[ubBfr];
 	UBYTE n = logicDraw(&s_sGame, s_pDraw);
 	n += messagesDraw(&s_pDraw[n]);
-	tAgkBlit *pErase = s_pErase[ubBfr];
+	tAgkBlitArea *pErase = s_pErase[ubBfr];
 	UBYTE ubDrawn = 0, isBoss = 0;
 	const tDraw *pD = s_pDraw;
 	for(UBYTE i = n; i--; ++pD) {
@@ -434,7 +434,7 @@ static void objectsQueue(UBYTE ubBfr) {
 			if(x < 0 || y < 0 || x + BOSS_PAD_W + 16 > FB_W || y + BOSS_PAD_H > FB_H) continue;
 			tAgkBlit *pB = agkBlitqSlot();
 			agkBlitPlace(pB, s_pBossTpl[pD->frame], BOSS_PAD_W, pFb->Planes[0] + s_pFbRowOffs[y], (UWORD)x);
-			s_pBossErase[ubBfr] = *pB;
+			agkBlitArea(&s_pBossErase[ubBfr], pB);
 			agkBlitqPush();
 			isBoss = 1;
 			continue;
@@ -443,7 +443,7 @@ static void objectsQueue(UBYTE ubBfr) {
 		if(x < 0 || y < 0 || x + s_pBobW[b] > FB_W || y + s_pBobH[b] > FB_H) continue;
 		tAgkBlit *pB = agkBlitqSlot();
 		agkBlitPlace(pB, s_pTpl[s_pTplFirst[b] + pD->frame], s_pBobW[b], pFb->Planes[0] + s_pFbRowOffs[y], (UWORD)x);
-		*pErase++ = *pB;
+		agkBlitArea(pErase++, pB);
 		agkBlitqPush();                    // (starts it, or the next one, if the blitter is free)
 		++ubDrawn;
 	}

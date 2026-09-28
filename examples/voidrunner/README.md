@@ -7,10 +7,12 @@ game playing itself (its attract mode), recorded with `agk record demo/showcase.
 
 Level 1, **Outer Belt**: fly the VR-1 fighter through a scripted run of
 enemy waves in an asteroid belt, past a ringed gas giant, to the Warden, a
-battleship guarding the belt. Every sprite, object, the backdrop, the logo
-and the font were made for this game, by hand as text art or by the drawing
-code in `art/tools/draw.py`. No AI image generation, and no assets from
-anywhere else.
+battleship guarding the belt. The enemies, the asteroids, the explosions,
+the backdrop, the logo and the font were made for this game, by hand as text
+art or by the drawing code in `art/tools/draw.py`. The VR-1 and the Warden
+were generated with Retro Diffusion (`art/rd/`) and fitted to the game's
+colours by `art/tools/from_rd.py` (the Warden's 7 playfield colours; the
+ship's 15, three of them shared with the starfield). No assets from anywhere else.
 
 Controls (joystick in port 2): move in 8 directions, hold fire to shoot.
 Fire starts a game. Left on the title for 10 s, the game plays itself (a
@@ -52,12 +54,12 @@ OCS dual playfield, 5 bitplanes, at 50 frames a second:
   - The copper sets its position and data at the start of each line, so the CPU writes nothing per star.
   - Stars move a whole layer at a time: one byte decrement per star per step. Near stars move 2 px a frame, mid ones 1 px, far ones ½ px.
   - Sprites 6–7 sit behind both playfields, so the planet hides the stars behind it.
-- **The ship** is four attached sprites (two 16 px columns, 15 colours). Its last three colours are the starfield's three, because they share hardware registers. The text art lists colours in register order, which is what makes that work (see the kit note below).
+- **The ship** is four attached sprites (two 16 px columns, 15 colours). Its last three colours are the starfield's three, because they share hardware registers: `art/ship.txt` pins them there (`W 0xFFF @31`).
 - **Everything else** is the blitter:
   - A queue: this buffer's erasures start first thing in the frame, then each object is queued and the blitter is kept fed.
   - The 3 planes are interleaved, so one blit covers all of them.
   - Most objects are cookie-cut. Shots and bullets are plain copies at half the cost.
-  - The Warden (96×64) is copied from an image with a blank border, which wipes where it has just been, so it needs no erase blit.
+  - The Warden (96×46) is copied from an image with a blank border, which wipes where it has just been, so it needs no erase blit.
 - **The HUD** has its own bitmap; the copper switches PF1 to the game at line 24, so objects never erase the score.
 
 Everything the display reads is double-buffered: the frame buffers, the HUD, the star copper lists, and the ship's sprite data. So a picture never depends on how fast the CPU got somewhere, and Kickstart 1.3, 3.1 and AROS give pixel-identical results.
@@ -116,7 +118,8 @@ The demo is the worst case: the spread gun, every wave, the Warden's death, the 
 | `src/logic.c`, `src/logic.h` | the rules, the level script, the demo's pilot (host-testable) |
 | `src/main.c` | display, copper lists, starfield, blit queue, HUD, sprites, sound |
 | `art/*.txt` | the sprites and objects as text art (`agk help-art`) |
-| `art/tools/draw.py` | draws the asteroids, mine, explosions, the Warden, the backdrop, the logo and messages |
+| `art/tools/draw.py` | draws the asteroids, mine, explosions, the backdrop, the logo and messages |
+| `art/rd/`, `art/tools/from_rd.py` | the ship and the Warden from Retro Diffusion, and their fitting to the game's colours (with the Warden's flash frame and the ship's flame flicker) |
 | `art/tools/font.py` | the HUD font |
 | `sound/` | effects, the tune, `tools/make_samples.py` |
 | `tests/` | scenarios, goldens, `unit/test_logic.c` |

@@ -43,7 +43,7 @@ static inline uint16_t modu(uint16_t a, uint16_t b) {
 }
 
 const uint8_t g_pBobW[BOB_TYPES] = {16, 32, 16, 8, 16, 32, 16, 16, 32, 16, 96};
-const uint8_t g_pBobH[BOB_TYPES] = {12, 16, 4, 8, 16, 32, 16, 16, 32, 16, 64};
+const uint8_t g_pBobH[BOB_TYPES] = {12, 16, 4, 8, 16, 32, 16, 16, 32, 16, 46};
 const uint8_t g_pBobFrames[BOB_TYPES] = {2, 2, 1, 2, 2, 4, 4, 4, 6, 5, 2};
 
 // sin(i * 2pi / 64) * 127
@@ -400,8 +400,8 @@ static void bossUpdate(tGame *g) {
 			b->pattern = (uint8_t)modu(divu(b->t, 240), 3);
 			if(b->pattern == 0 && modu(p, 40) == 0) {
 				// a fan from the top or the bottom turret
-				int16_t ty = b->y + (divu(b->t, 40) & 1 ? 17 : -17) * FIX;
-				for(int16_t vy = -16; vy <= 16; vy += 8) bulletAdd(g, b->x - 30 * FIX, ty, -28, vy);
+				int16_t ty = b->y + (divu(b->t, 40) & 1 ? 19 : -20) * FIX;   // the barrels' muzzles
+				for(int16_t vy = -16; vy <= 16; vy += 8) bulletAdd(g, b->x - 7 * FIX, ty, -28, vy);
 			}
 			else if(b->pattern == 1 && modu(p, 60) < 13 && modu(p, 6) == 0) {
 				bulletAimed(g, cx - 10 * FIX, b->y, 36);        // aimed bursts from the core
@@ -519,7 +519,8 @@ static void collide(tGame *g) {
 		if(!isBoss) continue;
 		tBoss *b = &g->boss;
 		if(s->alive) {
-			if(boxHit(s->x, s->y, 7 * FIX, 2 * FIX, b->x - BOSS_CORE_DX * FIX, b->y, BOSS_CORE_R * FIX, BOSS_CORE_R * FIX)) {
+			if(boxHit(s->x, s->y, 7 * FIX, 2 * FIX, b->x - (BOSS_CORE_DX + BOSS_CORE_REACH / 2) * FIX, b->y,
+			          (BOSS_CORE_R + BOSS_CORE_REACH / 2) * FIX, BOSS_CORE_R * FIX)) {
 				s->alive = 0;
 				if(b->state == BOSS_FIGHT) {
 					g->evBossHit = 1;
@@ -529,6 +530,7 @@ static void collide(tGame *g) {
 						b->state = BOSS_DYING;
 						b->t = 0;
 						g->evBigKill = 1;
+						for(uint8_t k = 0; k < BULLETS_MAX; ++k) g->bullets[k].alive = 0;   // its fire dies with it
 					}
 				}
 			}

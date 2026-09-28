@@ -70,10 +70,11 @@ typedef struct {
 
 // -------------------------------------------------------------- the boss
 #define BOSS_W 96
-#define BOSS_H 64
+#define BOSS_H 46
 #define BOSS_HP 90
-#define BOSS_CORE_DX 6            // the core's centre from the boss's centre, px
+#define BOSS_CORE_DX (-13)        // the core's centre left of the boss's centre, px (it's right of it)
 #define BOSS_CORE_R 8
+#define BOSS_CORE_REACH 20        // shots hit the core in the channel in front of it, this far out: where the old core was (fewer shots in flight)
 typedef struct {
 	uint8_t state;                 // BOSS_*
 	uint8_t flash;
