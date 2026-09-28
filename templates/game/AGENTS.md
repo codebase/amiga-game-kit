@@ -162,6 +162,11 @@ frames this prints `AGK perf frames=50 dropped=0 load=9 maxload=11`:
   - draw only what changed
 - Measure again after each fix.
 
+Drawing many BOBs: `agk/blitq.h` (in the runtime) is a blit queue. Blits are
+worked out at startup and placed per frame, and the CPU keeps working while the
+blitter draws; `examples/voidrunner` draws ~60 objects a frame with it at 50 fps.
+Its header has the recipe.
+
 When `maxload` is too high, don't guess which part is slow; profile it:
 `agk profile tests/perf.agk` plays the scenario with the emulator sampling
 every raster line. It reports:

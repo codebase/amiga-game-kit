@@ -9,7 +9,7 @@ option(AGK_SERIAL "Enable the AGK debug channel (off: every agk* call compiles t
 set(AGK_DEBUG_CHANNEL "host" CACHE STRING "AGK debug channel: host or serial")
 set_property(CACHE AGK_DEBUG_CHANNEL PROPERTY STRINGS host serial)
 
-add_library(agk STATIC src/debug.c src/perf.c)
+add_library(agk STATIC src/debug.c src/perf.c src/blitq.c)
 target_include_directories(agk PUBLIC include)
 target_link_libraries(agk PUBLIC ace)
 if(AGK_SERIAL)

@@ -30,6 +30,7 @@
 #include <ace/utils/custom.h>
 #include <ace/utils/extview.h>
 #include <hardware/dmabits.h>
+#include <agk/blitq.h>
 #include <agk/debug.h>
 #include <agk/perf.h>
 #include "art.h"        // generated from art/ by agk (agk help-art)
@@ -277,57 +278,15 @@ static void backdropUpdate(UBYTE ubBfr) {
 #define BOB_MSG_FIRE (BOB_TYPES + 5)
 #define BOBS (BOB_TYPES + 6)
 #define DRAWS_MAX (DRAW_MAX + 4)
-#define BLIT_MAX (2 * DRAWS_MAX)
 
-typedef struct {
-	UWORD uwCon0, uwCon1, uwAlwm, uwSize;
-	UBYTE *pA, *pB, *pCD;
-	WORD wSrcMod, wDstMod;
-} tBlit;
-static tBlit s_pBlits[BLIT_MAX];
-static UBYTE s_ubBlitNext, s_ubBlitCount;
-static tBlit s_pErase[2][DRAWS_MAX];
+static tAgkBlit s_pErase[2][DRAWS_MAX];
 static UBYTE s_pErased[2];
 
 static tBitMap *s_pBobBm[BOBS], *s_pBobMask[BOBS];
 static UBYTE s_pBobW[BOBS], s_pBobH[BOBS], s_pBobFrames[BOBS], s_pTplFirst[BOBS];
 #define TPL_MAX 64
-static tBlit s_pTpl[TPL_MAX][2];         // per BOB frame, per "one more word for the shift"
+static tAgkBlit s_pTpl[TPL_MAX][2];         // per BOB frame, per "one more word for the shift"
 static UWORD s_pFbRowOffs[FB_H];
-
-static void blitGo(const tBlit *pB) {
-	g_pCustom->bltcon0 = pB->uwCon0;
-	g_pCustom->bltcon1 = pB->uwCon1;
-	g_pCustom->bltafwm = 0xFFFF;
-	g_pCustom->bltalwm = pB->uwAlwm;
-	g_pCustom->bltapt = pB->pA;
-	g_pCustom->bltbpt = pB->pB;
-	g_pCustom->bltcpt = pB->pCD;
-	g_pCustom->bltdpt = pB->pCD;
-	g_pCustom->bltamod = pB->wSrcMod;
-	g_pCustom->bltbmod = pB->wSrcMod;
-	g_pCustom->bltcmod = pB->wDstMod;
-	g_pCustom->bltdmod = pB->wDstMod;
-	g_pCustom->bltsize = pB->uwSize;     // starts it
-}
-
-static inline void blitQueuePoll(void) {
-	// (blitIsIdle() inline: the first read after a start can lie on OCS Agnus)
-	if(s_ubBlitNext < s_ubBlitCount &&
-		((void)g_pCustom->dmaconr, !(g_pCustom->dmaconr & DMAF_BLTDONE))) {
-		blitGo(&s_pBlits[s_ubBlitNext++]);
-	}
-}
-
-static void blitQueueWait(void) {
-	// the CPU only waits now: the blitter gets the bus first (BLTPRI)
-	g_pCustom->dmacon = DMAF_SETCLR | DMAF_BLITHOG;
-	while(s_ubBlitNext < s_ubBlitCount) blitQueuePoll();
-	blitWait();
-	g_pCustom->dmacon = DMAF_BLITHOG;
-	s_ubBlitCount = 0;
-	s_ubBlitNext = 0;
-}
 
 static void bobAdd(UBYTE ubBob, tBitMap *pBm, tBitMap *pMask, UBYTE ubW, UBYTE ubH, UBYTE ubFrames) {
 	s_pBobBm[ubBob] = pBm;
@@ -365,28 +324,13 @@ static void bobsCreate(void) {
 	UBYTE t = 0;
 	for(UBYTE b = 0; b < BOBS; ++b) {
 		s_pTplFirst[b] = t;
-		const tBitMap *pBm = s_pBobBm[b];
-		UWORD uwSrcWords = pBm->BytesPerRow / (2 * FB_BPP);
 		for(UBYTE f = 0; f < s_pBobFrames[b]; ++f, ++t) {
-			ULONG ulSrc = (ULONG)f * s_pBobH[b] * pBm->BytesPerRow;
 			// Shots and bullets - most of what's on screen - are small and
 			// nearly solid: a plain copy (A -> D) costs half a cookie cut
 			// (A, B, C -> D); their corners blank a pixel or two of what they
 			// cross, which nobody sees
 			UBYTE isCopy = b == BOB_LASER || b == BOB_ORB;
-			for(UBYTE e = 0; e < 2; ++e) {
-				UWORD uwWords = ((s_pBobW[b] + 15) >> 4) + e;
-				tBlit *pT = &s_pTpl[t][e];
-				pT->uwCon0 = isCopy ? USEA | USED | 0xF0 : USEA | USEB | USEC | USED | 0xCA;
-				pT->uwCon1 = 0;
-				pT->uwAlwm = uwWords > uwSrcWords ? 0x0000 : 0xFFFF;   // (the extra word reads past the row)
-				pT->pA = (isCopy ? pBm : s_pBobMask[b])->Planes[0] + ulSrc;
-				pT->pB = pBm->Planes[0] + ulSrc;
-				pT->pCD = 0;
-				pT->wSrcMod = (WORD)(uwSrcWords * 2 - uwWords * 2);
-				pT->wDstMod = (WORD)(FB_PLANE_BYTES - uwWords * 2);
-				pT->uwSize = (UWORD)(((s_pBobH[b] * FB_BPP) << 6) | uwWords);
-			}
+			agkBlitBob(s_pTpl[t], s_pBobBm[b], isCopy ? 0 : s_pBobMask[b], s_pBobW[b], s_pBobH[b], f, FB_PLANE_BYTES);
 		}
 	}
 	if(t > TPL_MAX) agkPrint("AGK ERR too many BOB frames: raise TPL_MAX\n");
@@ -403,8 +347,8 @@ static void bobsCreate(void) {
 #define BOSS_PAD_W (ART_BOSS_W + 2 * BOSS_PAD_X)
 #define BOSS_PAD_H (ART_BOSS_H + 2 * BOSS_PAD_Y)
 static tBitMap *s_pBossPad[ART_BOSS_FRAMES];
-static tBlit s_pBossTpl[ART_BOSS_FRAMES][2];
-static tBlit s_pBossErase[2];                // per buffer: where it was, to clear once it's gone
+static tAgkBlit s_pBossTpl[ART_BOSS_FRAMES][2];
+static tAgkBlit s_pBossErase[2];                // per buffer: where it was, to clear once it's gone
 static UBYTE s_pBossShown[2];
 
 static void bossPadCreate(void) {
@@ -422,7 +366,7 @@ static void bossPadCreate(void) {
 		}
 		for(UBYTE e = 0; e < 2; ++e) {
 			UWORD uwWords = BOSS_PAD_W / 16 + e;
-			tBlit *pT = &s_pBossTpl[f][e];
+			tAgkBlit *pT = &s_pBossTpl[f][e];
 			pT->uwCon0 = USEA | USED | 0xF0;      // D = A (+ shift)
 			pT->uwCon1 = 0;
 			pT->uwAlwm = e ? 0x0000 : 0xFFFF;
@@ -468,25 +412,19 @@ static UBYTE messagesDraw(tDraw *pOut) {
 // in the frame (they don't depend on the game), so the blitter works while
 // the game logic runs
 static void erasesQueue(UBYTE ubBfr) {
-	tBlit *pQ = &s_pBlits[0];
-	tBlit *pErase = s_pErase[ubBfr];
-	for(UBYTE i = s_pErased[ubBfr]; i--; ++pErase, ++pQ) {
-		*pQ = *pErase;                     // the same place, D only: zeros
-		pQ->uwCon0 = USED;
-		pQ->uwCon1 = 0;
+	agkBlitqReset();
+	const tAgkBlit *pDrawn = s_pErase[ubBfr];
+	for(UBYTE i = s_pErased[ubBfr]; i--; ++pDrawn) {
+		agkBlitClear(agkBlitqSlot(), pDrawn);   // the same place, D only: zeros
+		agkBlitqPush();
 	}
-	s_ubBlitCount = (UBYTE)(pQ - s_pBlits);
-	s_ubBlitNext = 0;
-	blitQueuePoll();
 }
 
 static void objectsQueue(UBYTE ubBfr) {
 	tBitMap *pFb = s_pFb[ubBfr];
-	tBlit *pQ = &s_pBlits[s_ubBlitCount];
-	tBlit *pErase;
 	UBYTE n = logicDraw(&s_sGame, s_pDraw);
 	n += messagesDraw(&s_pDraw[n]);
-	pErase = s_pErase[ubBfr];
+	tAgkBlit *pErase = s_pErase[ubBfr];
 	UBYTE ubDrawn = 0, isBoss = 0;
 	const tDraw *pD = s_pDraw;
 	for(UBYTE i = n; i--; ++pD) {
@@ -494,37 +432,27 @@ static void objectsQueue(UBYTE ubBfr) {
 		if(b == BOB_BOSS) {
 			WORD x = pD->x - BOSS_PAD_X + FB_X0, y = pD->y - BOSS_PAD_Y + FB_Y0;
 			if(x < 0 || y < 0 || x + BOSS_PAD_W + 16 > FB_W || y + BOSS_PAD_H > FB_H) continue;
-			UBYTE ubShift = x & 15;
-			*pQ = s_pBossTpl[pD->frame][ubShift != 0];
-			pQ->uwCon0 |= ubShift << ASHIFTSHIFT;
-			pQ->pCD = pFb->Planes[0] + s_pFbRowOffs[y] + ((x >> 4) << 1);
-			s_pBossErase[ubBfr] = *pQ;
-			++pQ;
+			tAgkBlit *pB = agkBlitqSlot();
+			agkBlitPlace(pB, s_pBossTpl[pD->frame], BOSS_PAD_W, pFb->Planes[0] + s_pFbRowOffs[y], (UWORD)x);
+			s_pBossErase[ubBfr] = *pB;
+			agkBlitqPush();
 			isBoss = 1;
 			continue;
 		}
 		WORD x = pD->x + FB_X0, y = pD->y + FB_Y0;
 		if(x < 0 || y < 0 || x + s_pBobW[b] > FB_W || y + s_pBobH[b] > FB_H) continue;
-		UBYTE ubShift = x & 15;
-		UBYTE ubExtra = ((ubShift + s_pBobW[b] + 15) >> 4) > ((s_pBobW[b] + 15) >> 4);
-		*pQ = s_pTpl[s_pTplFirst[b] + pD->frame][ubExtra];
-		pQ->uwCon0 |= ubShift << ASHIFTSHIFT;
-		pQ->uwCon1 = ubShift << BSHIFTSHIFT;   // (B's shift; unused by the copies)
-		pQ->pCD = pFb->Planes[0] + s_pFbRowOffs[y] + ((x >> 4) << 1);
-		*pErase++ = *pQ++;
+		tAgkBlit *pB = agkBlitqSlot();
+		agkBlitPlace(pB, s_pTpl[s_pTplFirst[b] + pD->frame], s_pBobW[b], pFb->Planes[0] + s_pFbRowOffs[y], (UWORD)x);
+		*pErase++ = *pB;
+		agkBlitqPush();                    // (starts it, or the next one, if the blitter is free)
 		++ubDrawn;
-		s_ubBlitCount = (UBYTE)(pQ - s_pBlits);
-		blitQueuePoll();                   // keep the blitter going while queueing
 	}
 	if(!isBoss && s_pBossShown[ubBfr]) {
 		// the Warden is gone: clear where this buffer last showed it
-		*pQ = s_pBossErase[ubBfr];
-		pQ->uwCon0 = USED;
-		pQ->uwCon1 = 0;
-		++pQ;
+		agkBlitClear(agkBlitqSlot(), &s_pBossErase[ubBfr]);
+		agkBlitqPush();
 	}
 	s_pBossShown[ubBfr] = isBoss;
-	s_ubBlitCount = (UBYTE)(pQ - s_pBlits);
 	s_pErased[ubBfr] = ubDrawn;
 }
 
@@ -721,15 +649,15 @@ void genericProcess(void) {
 	erasesQueue(ubBfr);
 	UBYTE ubPhaseBefore = s_sGame.phase, ubLivesBefore = s_sGame.lives, ubMsgBefore = s_sGame.message;
 	logicUpdate(&s_sGame, &sIn);
-	blitQueuePoll();
+	agkBlitqPoll();
 	playSounds(ubMsgBefore);
 	objectsQueue(ubBfr);
-	blitQueuePoll();
+	agkBlitqPoll();
 	starsUpdate(ubBfr);
-	blitQueuePoll();
+	agkBlitqPoll();
 	backdropUpdate(ubBfr);
 	hudUpdate(ubBfr);
-	blitQueuePoll();
+	agkBlitqPoll();
 	shipUpdate(ubBfr);
 
 	// State for tests: on events, and every 32 frames
@@ -750,7 +678,7 @@ void genericProcess(void) {
 		agkEnd();
 	}
 
-	blitQueueWait();
+	agkBlitqFinish();
 	copProcessBlocks();
 	agkPerfEnd();
 	while((UWORD)(timerGet() - s_ulFrameVbl) < FRAME_VBLS) continue;
@@ -766,7 +694,7 @@ void genericProcess(void) {
 
 void genericDestroy(void) {
 	agkDebugAsync(0);
-	blitQueueWait();
+	agkBlitqFinish();
 	systemUse();
 	soundDestroy();
 	systemSetDmaBit(DMAB_SPRITE, 0);

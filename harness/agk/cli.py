@@ -392,7 +392,11 @@ def cmd_build(args):
         return 1
     rc = subprocess.run(_build_cmd(proj, args.define or [])).returncode
     if rc == 0:
-        items, _ = _lint(proj)
+        try:
+            items, _ = _lint(proj)
+        except (SystemExit, OSError) as e:        # the build is fine; say why the check didn't run
+            print(f"lint: skipped ({e})")
+            items = []
         if items:
             print(f"lint: {len(items)} function(s) call the 68000 maths library "
                   f"({', '.join(f for _, f, _ in items[:4])}{', ...' if len(items) > 4 else ''}): agk lint")
@@ -552,9 +556,8 @@ def cmd_profile(args):
                     raise prof.ProfileError(f"no function '{args.disasm}' (names as in the report)")
                 _, obj = syms.object_of(start)
                 build = os.path.join(proj["dir"], "build")
-                dis = subprocess.run(["docker", "run", "--rm", "-v", f"{build}:/b", "-w", "/b", image,
-                                      "m68k-amigaos-objdump", "-d", obj], capture_output=True, text=True,
-                                     errors="replace").stdout
+                from .lint import objdump
+                dis, _ = objdump(build, [obj], image, "-d")
                 for line in prof.annotate(lines, anchor, syms, args.disasm, dis):
                     print(line)
                 return 0

@@ -20,6 +20,7 @@ import glob
 import os
 import re
 import subprocess
+import sys
 
 # The helpers, and what each one means in C
 HELPERS = {
@@ -119,13 +120,27 @@ def objects(proj):
                   if not re.search(r"[/\\](art|sound)[/\\](art|sound)\.c\.obj$", o))
 
 
+def objdump(workdir, files, image, flags="-dr"):
+    """objdump each file (one process per file: the toolchain's objdump can
+    crash when given several) -> (text, [files it failed on])"""
+    script = (f'for f in "$@"; do m68k-amigaos-objdump {flags} "$f" || echo "AGK-OBJDUMP-FAILED $f"; done')
+    r = subprocess.run(["docker", "run", "--rm", "-v", f"{workdir}:/w", "-w", "/w", image,
+                        "sh", "-c", script, "sh", *files], capture_output=True, text=True, errors="replace")
+    if r.returncode != 0 and not r.stdout:
+        raise RuntimeError(f"objdump failed: {r.stderr.strip()[:500]}")
+    failed = re.findall(r"^AGK-OBJDUMP-FAILED (\S+)$", r.stdout, re.M)
+    return r.stdout, failed
+
+
 def disassemble(proj, objs, image):
     rel = [os.path.relpath(o, proj["dir"]) for o in objs]
-    r = subprocess.run(["docker", "run", "--rm", "-v", f"{proj['dir']}:/project", "-w", "/project", image,
-                        "m68k-amigaos-objdump", "-dr", *rel], capture_output=True, text=True, errors="replace")
-    if r.returncode != 0:
-        raise SystemExit(f"lint: objdump failed:\n{r.stderr.strip()}")
-    return r.stdout
+    try:
+        text, failed = objdump(proj["dir"], rel, image)
+    except RuntimeError as e:
+        raise SystemExit(f"lint: {e}")
+    for f in failed:
+        print(f"lint: objdump couldn't read {f}; its functions aren't checked", file=sys.stderr)
+    return text
 
 
 def source_of(obj):

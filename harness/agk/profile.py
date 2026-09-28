@@ -169,11 +169,12 @@ def symbols_for(proj, image):
     objs = sorted({f for f in files.values() if f})
     functions = {}
     if objs:
-        r = subprocess.run(["docker", "run", "--rm", "-v", f"{build}:/b", "-w", "/b", image,
-                            "m68k-amigaos-objdump", "-d", *objs], capture_output=True, text=True, errors="replace")
-        if r.returncode != 0:
-            raise ProfileError(f"objdump failed: {r.stderr.strip()[:500]}")
-        by_file = parse_functions(r.stdout)
+        from .lint import objdump
+        try:
+            text, _failed = objdump(build, objs, image, "-d")   # (unread ones: their globals from the map)
+        except RuntimeError as e:
+            raise ProfileError(str(e))
+        by_file = parse_functions(text)
         functions = {p: by_file.get(f, []) for p, f in files.items() if f}
     return Symbols(symbols, objects, functions)
 
