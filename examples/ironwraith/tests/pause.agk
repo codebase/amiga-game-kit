@@ -1,0 +1,15 @@
+wait-serial "AGK t0"
+press fire 1
+wait 30
+key 0x19
+wait 30
+screenshot paused
+press down+fire 30
+screenshot still_paused
+wait 10
+key 0x19
+wait 30
+press up 20
+screenshot resumed
+expect-no-dropped-frames
+expect-max-load 99

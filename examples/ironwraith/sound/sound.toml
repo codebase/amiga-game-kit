@@ -1,0 +1,40 @@
+[sound]
+sfx_channels = [3]
+[sfx.cannon]
+wave = "noise"
+freq = [1800, 90]
+length = 0.075
+decay = 32
+volume = 34
+priority = 1
+[sfx.explosion]
+wave = "noise"
+freq = [680, 35]
+length = 0.3
+decay = 9
+volume = 60
+priority = 3
+[sfx.hit]
+wave = "saw"
+freq = [220, 50]
+length = 0.25
+decay = 9
+volume = 56
+priority = 4
+[sfx.emp]
+wave = "noise"
+freq = [2400, 70]
+length = 0.65
+decay = 5
+volume = 60
+priority = 5
+[sfx.warning]
+wave = "square"
+freq = [220, 440]
+length = 0.6
+decay = 2
+volume = 42
+priority = 6
+[music.siege]
+source = "siege.mml"
+volume = 48

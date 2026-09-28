@@ -1,0 +1,11 @@
+name = "ironwraith"
+profile = "a1200"
+test_profiles = ["a1200"]
+sync = "ticks"
+boot = "AGK ready"
+unit_sources = ["src/logic.c"]
+[cmake]
+M68K_CPU = "68020"
+ACE_USE_AGA_FEATURES = true
+ACE_BOB_WRAP_Y = false
+ACE_BOB_PRISTINE_BUFFER = true

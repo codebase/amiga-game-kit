@@ -206,7 +206,7 @@ def cmd_art(args):
 
 
 def cmd_art_gen(args):
-    from . import rd
+    from . import rd, art
     proj = load_project(args.project)
     try:
         w, h = (int(v) for v in args.size.lower().split("x"))
@@ -222,7 +222,7 @@ def cmd_art_gen(args):
         gw, gh = max(w, 16), max(h, 16)
         images, cost, left = rd.generate(args.prompt, gw, gh, colors, args.style, args.seed,
                                          args.n, dry_run=args.dry_run, tile_x=args.tile_x,
-                                         remove_bg=not args.opaque)
+                                         remove_bg=not args.opaque, aga=art.project_aga(proj["dir"]))
     except rd.GenError as e:
         raise SystemExit(f"art-gen: {e}")
     if args.dry_run:
@@ -261,7 +261,8 @@ def cmd_art_export(args):
         raise SystemExit(f"{rel(src)} not found")
     if os.path.exists(dst) and not args.force:
         raise SystemExit(f"{rel(dst)} exists - use --force to overwrite")
-    n, warnings = art.export_text(src, dst, args.colors, args.frame_width, args.frame_height)
+    n, warnings = art.export_text(src, dst, args.colors, args.frame_width, args.frame_height,
+                                  aga=art.project_aga(proj["dir"]))
     print(f"wrote {rel(dst)} ({n} colours)")
     for w in warnings:
         print(f"  warning: {w}")
@@ -328,7 +329,7 @@ def cmd_play(args):
     if sys.platform == "darwin":
         if not os.path.exists("/Applications/FS-UAE.app"):
             raise SystemExit("FS-UAE not found - install it with: brew install --cask fs-uae-emulator")
-        return subprocess.run(["open", "-a", "FS-UAE", cfg]).returncode
+        return subprocess.run(["open", "-n", "-a", "FS-UAE", "--args", cfg]).returncode
     exe = shutil.which("fs-uae")
     if not exe:
         raise SystemExit("FS-UAE not found - install it (https://fs-uae.net), then run: fs-uae " + cfg)
@@ -697,7 +698,7 @@ def main(argv=None):
     p.add_argument("--opaque", action="store_true", help="keep the background (no transparency)")
     p.add_argument("--size", default="32x32", help="WxH in pixels (sprites: width <= 16)")
     p.add_argument("--channel", type=int, default=2, help="sprites: hardware channel")
-    p.add_argument("--colors", help="restrict to these 12-bit colours, e.g. 0xFFF,0xFA0,0x000 "
+    p.add_argument("--colors", help="restrict to 0xRGB colors (AGA: 0xRRGGBB), e.g. 0xFFF,0xFA0,0x000 "
                                     "(default: art/palette.txt)")
     p.add_argument("--style", default="rd_plus__low_res",
                    help="Retro Diffusion style (rd_plus__low_res $0.025; rd_pro__default $0.18, best)")

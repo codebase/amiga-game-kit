@@ -1,0 +1,9 @@
+wait-serial "AGK t0"
+wait 60
+screenshot title
+expect-serial "ironwraith AGA 256 colors"
+expect-no-dropped-frames
+expect-max-load 90
+expect-rgb title 160 130 0x0A1C2A
+expect-rgb title 0 0 0x080E18
+expect-rgb title 10 5 0xFFFFFF

@@ -36,6 +36,8 @@ Commands:
                                     pixel X,Y (game coordinates, 320x256) of screenshot SHOT
                                     must be the 12-bit Amiga colour 0xRGB (e.g. 0xFA0); with
                                     "near R" it may be anywhere within R px (animated sprites)
+    expect-rgb SHOT X Y 0xRRGGBB [near R]
+                                    exact 24-bit RGB pixel check (AGA); preserves low channel bits
     mark NAME                       remember this moment of the audio recording
     expect-sound FROM TO            something is audible between two marks (or start / end)
     expect-silence FROM TO          nothing is audible between them (e.g. after the music stops)
@@ -101,6 +103,7 @@ class Scenario:
     regs: list = field(default_factory=list)          # (name, [components])
     expects: list = field(default_factory=list)       # (regex, should_match, lineno)
     colors: list = field(default_factory=list)        # (shot, x, y, (r4, g4, b4), lineno)
+    rgbs: list = field(default_factory=list)          # exact RGB8, same tuple shape as colors
     perf: list = field(default_factory=list)          # ("dropped", 0, lineno) / ("maxload", pct, lineno)
     marks: list = field(default_factory=list)         # audio mark names
     audio: list = field(default_factory=list)         # ("sound"|"silence", from, to, lineno)
@@ -269,20 +272,25 @@ def parse(text, name="scenario"):
                 raise ScenarioError(f"line {lineno}: percent must be 1-100")
             sc.perf.append(("maxload", pct, lineno))
 
-        elif cmd == "expect-color":
+        elif cmd in ("expect-color", "expect-rgb"):
             near = 0
             if len(args) == 6 and args[4] == "near":
                 near = _int(args[5], lineno, "near radius")
                 args = args[:4]
             if len(args) != 4:
-                raise ScenarioError(f"line {lineno}: usage: expect-color SHOT X Y 0xRGB [near R]")
+                raise ScenarioError(f"line {lineno}: usage: {cmd} SHOT X Y COLOR [near R]")
             x, y = _int(args[1], lineno, "x"), _int(args[2], lineno, "y")
             if x >= 320 or y >= 256:
                 raise ScenarioError(f"line {lineno}: x,y must be inside the 320x256 playfield")
             rgb = _int(args[3], lineno, "colour")
-            if rgb > 0xFFF:
-                raise ScenarioError(f"line {lineno}: colour must be 12-bit, 0x000-0xFFF")
-            sc.colors.append((args[0], x, y, ((rgb >> 8) & 15, (rgb >> 4) & 15, rgb & 15), lineno, near))
+            if cmd == "expect-rgb":
+                if rgb > 0xFFFFFF:
+                    raise ScenarioError(f"line {lineno}: colour must be 24-bit, 0x000000-0xFFFFFF")
+                sc.rgbs.append((args[0], x, y, (rgb >> 16, rgb >> 8 & 255, rgb & 255), lineno, near))
+            else:
+                if rgb > 0xFFF:
+                    raise ScenarioError(f"line {lineno}: colour must be 12-bit, 0x000-0xFFF")
+                sc.colors.append((args[0], x, y, ((rgb >> 8) & 15, (rgb >> 4) & 15, rgb & 15), lineno, near))
 
         else:
             raise ScenarioError(f"line {lineno}: unknown command '{cmd}'")
@@ -295,7 +303,7 @@ def parse(text, name="scenario"):
         for m in (a, b):
             if m not in sc.marks and m not in ("start", "end"):
                 raise ScenarioError(f"line {lineno}: unknown mark '{m}' (add 'mark {m}' where it should be)")
-    for shot, *_rest, lineno, _near in sc.colors:
+    for shot, *_rest, lineno, _near in sc.colors + sc.rgbs:
         if shot not in sc.screenshots:
-            raise ScenarioError(f"line {lineno}: expect-color refers to unknown screenshot '{shot}'")
+            raise ScenarioError(f"line {lineno}: colour check refers to unknown screenshot '{shot}'")
     return sc

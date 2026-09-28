@@ -59,6 +59,11 @@ Rules enforced (errors say what to change):
           frames/tiles stacked vertically). `depth = N` per asset overrides
           [art] depth; `wrap_x = 320` appends the first 320 columns at the
           right so a looping band has no seam (ART_X_LOOP_W = original width).
+Set [art] chipset = "aga" and depth = 8 for 256 colours from 24-bit RGB.
+AGA palette.txt/text colours are 0xRRGGBB; PNG channels are preserved exactly.
+Generated palette APIs use ULONG* (cast the ACE viewport pPalette). Enable
+ACE_USE_AGA_FEATURES and TAG_VPORT_USES_AGA in the game, and use an A1200.
+The default chipset = "ocs" remains unchanged:
 PNG colours are rounded to the Amiga's 12-bit palette. A sprite PNG with more
 than 3 colours is reduced (warning + preview); a BOB colour that isn't in the
 palette maps to the nearest one (warning).
@@ -84,18 +89,20 @@ def rgb12(r, g, b):
     return ((r * 15 + 127) // 255) << 8 | ((g * 15 + 127) // 255) << 4 | ((b * 15 + 127) // 255)
 
 
-def to_rgb8(c):
+def to_rgb8(c, aga=False):
+    if aga:
+        return (c >> 16 & 255, c >> 8 & 255, c & 255)
     return ((c >> 8 & 15) * 17, (c >> 4 & 15) * 17, (c & 15) * 17)
 
 
-def dist(a, b):
-    ra, ga, ba = to_rgb8(a)
-    rb, gb, bb = to_rgb8(b)
+def dist(a, b, aga=False):
+    ra, ga, ba = to_rgb8(a, aga)
+    rb, gb, bb = to_rgb8(b, aga)
     # Weighted RGB distance (the eye is most sensitive to green)
     return 2 * (ra - rb) ** 2 + 4 * (ga - gb) ** 2 + 3 * (ba - bb) ** 2
 
 
-def parse_palette(path):
+def parse_palette(path, aga=False):
     pal = {}
     with open(path) as f:
         text = f.read()
@@ -106,8 +113,9 @@ def parse_palette(path):
         if len(line) < 2:
             raise ArtError(f"{path}:{n}: expected 'INDEX 0xRGB [name]'")
         idx, col = int(line[0], 0), int(line[1], 0)
-        if not 0 <= idx < 32 or col > 0xFFF:
-            raise ArtError(f"{path}:{n}: index must be 0-31 and colour 0x000-0xFFF")
+        if not 0 <= idx < (256 if aga else 32) or not 0 <= col <= (0xFFFFFF if aga else 0xFFF):
+            limits = "0-255 and colour 0x000000-0xFFFFFF" if aga else "0-31 and colour 0x000-0xFFF"
+            raise ArtError(f"{path}:{n}: index must be {limits}")
         pal[idx] = col
     return pal
 
@@ -176,17 +184,18 @@ def text_art_colors(path):
     return order
 
 
-def load_png_art(path, frame_width=None, frame_height=None):
+def load_png_art(path, frame_width=None, frame_height=None, aga=False):
     from .image import load_png_rgba
     W, H, px = load_png_rgba(path)
     fw, fh = frame_width or W, frame_height or H
     if W % fw or H % fh:
         raise ArtError(f"{path}: {W}x{H} isn't a whole number of {fw}x{fh} frames")
+    convert = (lambda r, g, b: r << 16 | g << 8 | b) if aga else rgb12
     frames = []
     for fy in range(0, H, fh):
         for fx in range(0, W, fw):
             frames.append([[None if px[(fy + y) * W + fx + x][3] < 128
-                            else rgb12(*px[(fy + y) * W + fx + x][:3])
+                            else convert(*px[(fy + y) * W + fx + x][:3])
                             for x in range(fw)] for y in range(fh)])
     return fw, fh, frames
 
@@ -194,7 +203,8 @@ def load_png_art(path, frame_width=None, frame_height=None):
 # ------------------------------------------------------------------ asset
 
 class Asset:
-    def __init__(self, name, cfg, art_dir, palette, depth):
+    def __init__(self, name, cfg, art_dir, palette, depth, aga=False):
+        self.aga = aga
         self.name, self.cfg = name, cfg
         self.attached = False
         self.kind = cfg.get("kind", "sprite")
@@ -210,9 +220,15 @@ class Asset:
             self.w, self.h, self.frames = parse_text_art(self.source)
             self.declared = text_art_colors(self.source)
         elif src.endswith(".png"):
-            self.w, self.h, self.frames = load_png_art(self.source, cfg.get("frame_width"), cfg.get("frame_height"))
+            self.w, self.h, self.frames = load_png_art(self.source, cfg.get("frame_width"), cfg.get("frame_height"), aga)
         else:
             raise ArtError(f"[{name}]: source must be .txt or .png")
+        limit = 0xFFFFFF if aga else 0xFFF
+        if any(not 0 <= c <= limit for c in self.colors_used()):
+            raise ArtError(f"[{name}]: colour exceeds {24 if aga else 12}-bit palette range")
+        asset_depth = cfg.get("depth", depth)
+        if not isinstance(asset_depth, int) or not 1 <= asset_depth <= (8 if aga else 5):
+            raise ArtError(f"[{name}]: depth must be 1-{8 if aga else 5}")
         if self.kind == "sprite":
             self._check_sprite()
         elif self.kind in ("bob", "bitmap"):
@@ -229,7 +245,7 @@ class Asset:
             if own == "auto":
                 palette = self._auto_palette(cfg.get("depth", depth))
             elif own:
-                palette = parse_palette(os.path.join(art_dir, own))
+                palette = parse_palette(os.path.join(art_dir, own), aga)
             self.own_palette = palette if own else None
             self._map_bob(palette, cfg.get("depth", depth))
         else:
@@ -271,8 +287,8 @@ class Asset:
         if len(used) > n_colors:
             self.warnings.append(f"{len(used)} colours, but this sprite has {n_colors} (+ transparent): "
                                  f"reduced to the {n_colors} most important - check the preview")
-            keep = _reduce(used, n_colors)
-            remap = {c: min(keep, key=lambda k: dist(c, k)) for c in used}
+            keep = _reduce(used, n_colors, self.aga)
+            remap = {c: min(keep, key=lambda k: dist(c, k, self.aga)) for c in used}
             self.frames = [[[None if c is None else remap[c] for c in row] for row in fr] for fr in self.frames]
             used = {c: 0 for c in keep}
         # Colour order: text art as its 'colors' section lists them (so the art
@@ -294,14 +310,14 @@ class Asset:
         if not used:
             raise ArtError(f"[{self.name}]: image is fully transparent")
         n = (1 << depth) - 1
-        keep = _reduce(used, n) if len(used) > n else list(used)
+        keep = _reduce(used, n, self.aga) if len(used) > n else list(used)
         if len(used) > n:
             self.warnings.append(f"{len(used)} colours reduced to {n} for {depth} bitplanes - check the preview")
-        keep.sort(key=lambda c: sum(to_rgb8(c)))
+        keep.sort(key=lambda c: sum(to_rgb8(c, self.aga)))
         pal = {0: 0x000}
         pal.update({i + 1: c for i, c in enumerate(keep)})
         # Remap every pixel onto the kept colours now (map_bob then finds exact matches)
-        remap = {c: min(keep, key=lambda k: dist(c, k)) for c in used}
+        remap = {c: min(keep, key=lambda k: dist(c, k, self.aga)) for c in used}
         self.frames = [[[None if c is None else remap[c] for c in row] for row in fr] for fr in self.frames]
         return pal
 
@@ -321,7 +337,7 @@ class Asset:
             if c in by_color:
                 index[c] = by_color[c]
             else:
-                near = min(by_color, key=lambda k: dist(c, k))
+                near = min(by_color, key=lambda k: dist(c, k, self.aga))
                 index[c] = by_color[near]
                 missing[c] = near
         for c, near in missing.items():
@@ -403,7 +419,7 @@ class Asset:
                 for x in range(self.w * zoom):
                     c = fr[y // zoom][x // zoom]
                     if c is None and self.kind == "bitmap":
-                        rgb += bytes(to_rgb8(palette.get(0, 0)))  # bitmaps have no transparency
+                        rgb += bytes(to_rgb8(palette.get(0, 0), self.aga))  # bitmaps have no transparency
                     elif c is None:
                         shade = 0x55 if ((x // 4) + (y // 4)) % 2 else 0x77
                         rgb += bytes((shade, shade, shade))
@@ -411,23 +427,32 @@ class Asset:
                         shown = c
                         if self.kind != "sprite":
                             shown = palette[self.index[c]]
-                        rgb += bytes(to_rgb8(shown))
+                        rgb += bytes(to_rgb8(shown, self.aga))
                 if f < len(self.frames) - 1:
                     rgb += bytes((255, 0, 255)) * (gap * zoom)
         return Image(bytes(rgb), W * zoom, self.h * zoom)
 
 
-def _reduce(counts, n):
+def _reduce(counts, n, aga=False):
     """Pick n representative colours: most frequent first, then farthest."""
     ranked = sorted(counts, key=lambda c: -counts[c])
     keep = [ranked[0]]
     while len(keep) < min(n, len(ranked)):
         keep.append(max((c for c in ranked if c not in keep),
-                        key=lambda c: min(dist(c, k) for k in keep) * (counts[c] ** 0.5)))
+                        key=lambda c: min(dist(c, k, aga) for k in keep) * (counts[c] ** 0.5)))
     return keep
 
 
 # ------------------------------------------------------------------ project
+
+def project_aga(project_dir):
+    """Whether a project's art explicitly opts into full 24-bit AGA colors."""
+    path = os.path.join(project_dir, "art", "art.toml")
+    if not os.path.exists(path):
+        return False
+    with open(path, "rb") as f:
+        return tomllib.load(f).get("art", {}).get("chipset") == "aga"
+
 
 def build(project_dir, out_dir=None):
     """Convert art/ -> build/art/{art.c,art.h,preview/}. Returns (assets, warnings)
@@ -440,10 +465,14 @@ def build(project_dir, out_dir=None):
     with open(cfg_path, "rb") as f:
         cfg = tomllib.load(f)
     settings = cfg.pop("art", {})
+    chipset = settings.get("chipset", "ocs")
+    if chipset not in ("ocs", "aga"):
+        raise ArtError('[art] chipset must be "ocs" or "aga"')
+    aga = chipset == "aga"
     pal_path = os.path.join(art_dir, "palette.txt")
-    palette = parse_palette(pal_path) if os.path.exists(pal_path) else {}
+    palette = parse_palette(pal_path, aga) if os.path.exists(pal_path) else {}
     depth = settings.get("depth") or max(1, (max(palette) if palette else 1).bit_length())
-    assets = [Asset(name, a, art_dir, palette, depth) for name, a in cfg.items()]
+    assets = [Asset(name, a, art_dir, palette, depth, aga) for name, a in cfg.items()]
 
     # Attached sprites all use colour slots 17-31, so they share ONE palette:
     # build it from the union of their colours (first asset first) and
@@ -484,7 +513,7 @@ def build(project_dir, out_dir=None):
     for a in assets:
         a.preview(palette=getattr(a, "own_palette", None) or palette).save_png(
             os.path.join(out_dir, "preview", f"{a.name}.png"))
-    _write_c(assets, palette, depth, out_dir)
+    _write_c(assets, palette, depth, out_dir, aga)
     return assets
 
 
@@ -499,18 +528,20 @@ def _words(ws):
     return "\n".join(lines)
 
 
-def _write_c(assets, palette, depth, out_dir):
+def _write_c(assets, palette, depth, out_dir, aga=False):
+    palette_type = "ULONG" if aga else "UWORD"
     h = ["// Generated by agk art from art/ - do not edit; edit art/ and rebuild.",
          "#ifndef _AGK_ART_H_", "#define _AGK_ART_H_", "",
          "#include <ace/types.h>", "#include <ace/utils/bitmap.h>", ""]
     c = ["// Generated by agk art from art/ - do not edit; edit art/ and rebuild.",
          '#include "art.h"', ""]
+    h += [f"#define ART_AGA {int(aga)}", ""]
     if palette:
         size = max(palette) + 1
         h += [f"#define ART_PALETTE_SIZE {size}", f"#define ART_DEPTH {depth}",
               "/** Copy art/palette.txt into a viewport palette (pVPort->pPalette). */",
-              "void artPaletteApply(UWORD *pPalette);", ""]
-        c += ["void artPaletteApply(UWORD *pPalette) {"]
+              f"void artPaletteApply({palette_type} *pPalette);", ""]
+        c += [f"void artPaletteApply({palette_type} *pPalette) {{"]
         c += [f"\tpPalette[{i}] = 0x{col:03X};" for i, col in sorted(palette.items())]
         c += ["}", ""]
     for a in assets:
@@ -530,7 +561,7 @@ def _write_c(assets, palette, depth, out_dir):
                   f" *  spriteAdd(ART_{U}_CHANNEL + p, bm); spriteSetAttached() on the odd parts. */",
                   f"tBitMap *art{N}Create(UBYTE ubFrame, UBYTE ubPart);",
                   f"/** Set the 15 attached-sprite colours (slots 17-31, shared by all attached sprites). */",
-                  f"void art{N}ApplyColors(UWORD *pPalette);", ""]
+                  f"void art{N}ApplyColors({palette_type} *pPalette);", ""]
             c += [f"tBitMap *art{N}Create(UBYTE ubFrame, UBYTE ubPart) {{",
                   f"\ttBitMap *pBm = bitmapCreate(16, ART_{U}_H + 2, 2, BMF_CLEAR | BMF_INTERLEAVED);",
                   f"\tconst UWORD *pSrc = &s_pArt{N}[(ubFrame * ART_{U}_PARTS + ubPart) * ART_{U}_H * 2];",
@@ -541,7 +572,7 @@ def _write_c(assets, palette, depth, out_dir):
                   f"\t\tpRow[1] = *pSrc++;",
                   f"\t}}",
                   f"\treturn pBm;", "}", "",
-                  f"void art{N}ApplyColors(UWORD *pPalette) {{"]
+                  f"void art{N}ApplyColors({palette_type} *pPalette) {{"]
             c += [f"\tpPalette[{17 + i}] = 0x{col:03X};" for i, col in enumerate(a.sprite_colors)]
             c += ["}", ""]
         elif a.kind == "sprite":
@@ -551,7 +582,7 @@ def _write_c(assets, palette, depth, out_dir):
                   f" *  One bitmap per frame: the sprite manager writes control words into it. */",
                   f"tBitMap *art{N}Create(UBYTE ubFrame);",
                   f"/** Set this sprite's colours in palette slots {base}-{base + 2}. */",
-                  f"void art{N}ApplyColors(UWORD *pPalette);", ""]
+                  f"void art{N}ApplyColors({palette_type} *pPalette);", ""]
             c += [f"tBitMap *art{N}Create(UBYTE ubFrame) {{",
                   f"\t// 16 px, 2 bitplanes, interleaved, + an empty first/last line for control words",
                   f"\ttBitMap *pBm = bitmapCreate(16, ART_{U}_H + 2, 2, BMF_CLEAR | BMF_INTERLEAVED);",
@@ -563,7 +594,7 @@ def _write_c(assets, palette, depth, out_dir):
                   f"\t\tpRow[1] = *pSrc++;",
                   f"\t}}",
                   f"\treturn pBm;", "}", "",
-                  f"void art{N}ApplyColors(UWORD *pPalette) {{"]
+                  f"void art{N}ApplyColors({palette_type} *pPalette) {{"]
             # Sprite colour index 1..3 -> slots base..base+2 (index 0 = transparent)
             c += [f"\tpPalette[{base + i}] = 0x{col:03X};" for i, col in enumerate(a.sprite_colors)]
             c += ["}", ""]
@@ -575,8 +606,8 @@ def _write_c(assets, palette, depth, out_dir):
                 h += [f"/** This bitmap's own palette ({n} entries; [0] is the transparent/background",
                       f" *  slot - leave it to the copper/background). Load it with copper MOVEs",
                       f" *  where this band starts. */",
-                      f"extern const UWORD g_pArt{N}Palette[{n}];"]
-                c += [f"const UWORD g_pArt{N}Palette[{n}] = {{",
+                      f"extern const {palette_type} g_pArt{N}Palette[{n}];"]
+                c += [f"const {palette_type} g_pArt{N}Palette[{n}] = {{",
                       "	" + ", ".join(f"0x{a.own_palette.get(i, 0):03X}" for i in range(n)), "};", ""]
             if getattr(a, "loop_w", None):
                 h += [f"#define ART_{U}_LOOP_W {a.loop_w}  // scroll offset wraps at this width"]
@@ -641,11 +672,11 @@ def _write_c(assets, palette, depth, out_dir):
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
 
-def export_text(png_path, txt_path, max_colors=15, frame_width=None, frame_height=None):
-    """PNG -> editable text art: colours rounded to 12-bit (reduced to
+def export_text(png_path, txt_path, max_colors=15, frame_width=None, frame_height=None, aga=False):
+    """PNG -> editable text art: OCS RGB12 or opt-in AGA RGB24 (reduced to
     max_colors if needed), one letter per colour ordered dark to light,
     '.' = transparent. Returns (colour count, warnings)."""
-    w, h, frames = load_png_art(png_path, frame_width, frame_height)
+    w, h, frames = load_png_art(png_path, frame_width, frame_height, aga)
     counts = {}
     for fr in frames:
         for row in fr:
@@ -656,14 +687,14 @@ def export_text(png_path, txt_path, max_colors=15, frame_width=None, frame_heigh
     keep = list(counts)
     if len(keep) > max_colors:
         warnings.append(f"{len(keep)} colours reduced to {max_colors}")
-        keep = _reduce(counts, max_colors)
-    remap = {c: min(keep, key=lambda k: dist(c, k)) for c in counts}
-    keep.sort(key=lambda c: sum(to_rgb8(c)))
+        keep = _reduce(counts, max_colors, aga)
+    remap = {c: min(keep, key=lambda k: dist(c, k, aga)) for c in counts}
+    keep.sort(key=lambda c: sum(to_rgb8(c, aga)))
     letter = {c: LETTERS[i] for i, c in enumerate(keep)}
     out = [f"# Exported from {os.path.basename(png_path)} by agk art-export. Edit freely:",
            "# one character per pixel, '.' = transparent; add 'frame' sections to animate.",
            "colors", "  .  transparent"]
-    out += [f"  {letter[c]}  0x{c:03X}" for c in keep]
+    out += [f"  {letter[c]}  0x{c:0{6 if aga else 3}X}" for c in keep]
     for fr in frames:
         out.append("frame")
         out += ["".join("." if c is None else letter[remap[c]] for c in row) for row in fr]

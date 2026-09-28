@@ -1,0 +1,9 @@
+{
+  "prompt": "Armored siege mech faces LEFT. Plant both feet firmly, brace shoulders, charge its orange furnace core, then fire the huge left pointing arm cannon with a bright orange muzzle flash and a pronounced mechanical recoil, finally recover to the starting stance. Full body stays grounded and inside frame, no camera movement, keep original robot design.",
+  "action": "attack",
+  "frames": 8,
+  "width": 80,
+  "height": 80,
+  "cost": 0.14,
+  "balance_after": 2.5
+}

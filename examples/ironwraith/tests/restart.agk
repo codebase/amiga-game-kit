@@ -1,0 +1,12 @@
+wait-serial "AGK t0"
+press fire 1
+wait-serial "phase=3" 4000
+wait 5
+screenshot lost
+press fire 1
+wait 5
+screenshot restarted
+expect-serial "phase=3"
+expect-serial "phase=1 tick=0 x=40 y=130 armor=6"
+expect-no-dropped-frames
+expect-max-load 99

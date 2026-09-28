@@ -7,10 +7,31 @@ set -euo pipefail
 
 KIT="$(cd "$(dirname "$0")/.." && pwd)"
 AGK="$KIT/tools/agk"
+REQUESTED=("$@")
 PROFILES=()
 for p in "$@"; do PROFILES+=(-p "$p"); done
 
 step() { printf '\n== %s\n' "$*"; }
+
+# An AGA-only example must not be booted on A500 by the free CI sweep.
+# Explicit profile sweeps select the intersection with each project's targets.
+select_profiles() {
+  SELECTED=()
+  [ ${#REQUESTED[@]} -eq 0 ] && return 0
+  while IFS= read -r profile; do
+    [ -n "$profile" ] && SELECTED+=(-p "$profile")
+  done < <(python3 - "$1/agk.toml" "${REQUESTED[@]}" <<'PYPROFILES'
+import sys, tomllib
+with open(sys.argv[1], "rb") as f:
+    cfg = tomllib.load(f)
+supported = cfg.get("test_profiles", [cfg.get("profile", "a500")])
+for profile in sys.argv[2:]:
+    if profile in supported:
+        print(profile)
+PYPROFILES
+  )
+  [ ${#SELECTED[@]} -gt 0 ]
+}
 
 step "harness unit tests"
 PYTHONPATH="$KIT/harness" python3 -m unittest discover -s "$KIT/harness/tests" -q
@@ -20,16 +41,18 @@ step "doctor"
 
 for e in "$KIT"/examples/*/; do
   [ -f "$e/agk.toml" ] || continue
+  if ! select_profiles "$e"; then step "skip examples/$(basename "$e") (different target profiles)"; continue; fi
   step "examples/$(basename "$e")"
   if [ -d "$e/tests/unit" ]; then "$AGK" unit "$e" >/dev/null; fi
-  "$AGK" test "$e" ${PROFILES[@]+"${PROFILES[@]}"}
+  "$AGK" test "$e" ${SELECTED[@]+"${SELECTED[@]}"}
 done
 
 step "techniques"
 for t in "$KIT"/techniques/*/; do
   [ -f "$t/agk.toml" ] || continue
+  if ! select_profiles "$t"; then step "skip techniques/$(basename "$t") (different target profiles)"; continue; fi
   "$AGK" unit "$t" >/dev/null
-  "$AGK" test "$t" ${PROFILES[@]+"${PROFILES[@]}"}
+  "$AGK" test "$t" ${SELECTED[@]+"${SELECTED[@]}"}
 done
 
 step "new project from template"

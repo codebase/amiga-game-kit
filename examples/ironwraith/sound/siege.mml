@@ -1,0 +1,145 @@
+; Furnace Protocol II: original sampled industrial metal, 32 bars / 4 voices.
+; A: power-chord guitar, B: grit bass, C: layered drums, D: gameplay effects.
+; Rebuild WAVs with sound/tools/make_samples.py (deterministic synthesis).
+#title Furnace Protocol II
+#tempo 132
+#inst chug samples/chug.wav root=e2 vol=52
+#inst chord samples/chord.wav root=e2 vol=48
+#inst bass samples/bass.wav root=e1 vol=44
+#inst kickhat samples/kickhat.wav root=c3 vol=60
+#inst snarehat samples/snarehat.wav root=c3 vol=54
+#inst hat samples/hat.wav root=c3 vol=26
+#inst tom samples/tom.wav root=c3 vol=48
+#inst impact samples/impact.wav root=c3 vol=58
+A o2 q8 l8
+B o1 q8 l8 @bass
+C o3 q8 l8
+
+; Bar 1
+A @chord e4 r4 @chug e8 e16 r16 g8 f8
+B e4 r4 e8 e8 g8 f8
+C @impact c4 r4 @snarehat c4 @kickhat c8 @tom c8
+; Bar 2
+A @chord e4 r4 @chug e8 e16 r16 g8 f8
+B e4 r4 e8 e8 g8 f8
+C @impact c4 r4 @snarehat c4 @kickhat c8 @tom c8
+; Bar 3
+A @chord e4 r4 @chug e8 e16 r16 g8 f8
+B e4 r4 e8 e8 g8 f8
+C @impact c4 r4 @snarehat c4 @kickhat c8 @tom c8
+; Bar 4
+A @chug e8 e8 r8 e8 g8 f8 e8 d8
+B e4 e8 r8 g8 f8 d8 e8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 @tom c16 c16 @snarehat c8 @tom c16 c16
+; Bar 5
+A @chug e8 e16 r16 e8 r8 e8 g8 f8 e8
+B e8 e8 e4 e8 g8 f8 e8
+C @impact c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 6
+A @chug e8 r16 e16 e8 g8 e8 r8 d8 f8
+B e8 r8 e8 g8 e4 d8 f8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 7
+A @chug e8 e16 r16 e8 r8 g8 a8 g8 f8
+B e4 e8 e8 g8 a8 g8 f8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 8
+A @chug e8 r8 e16 e16 r8 g8 f8 d8 e8
+B e4 e8 r8 g8 f8 d8 e8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 @tom c16 c16 @snarehat c8 @tom c16 c16
+; Bar 9
+A @chug e8 e16 r16 e8 r8 e8 g8 f8 e8
+B e8 e8 e4 e8 g8 f8 e8
+C @impact c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 10
+A @chug e8 r16 e16 e8 g8 e8 r8 d8 f8
+B e8 r8 e8 g8 e4 d8 f8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 11
+A @chug e8 e16 r16 e8 r8 g8 a8 g8 f8
+B e4 e8 e8 g8 a8 g8 f8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 12
+A @chug e8 r8 e16 e16 r8 g8 f8 d8 e8
+B e4 e8 r8 g8 f8 d8 e8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 @tom c16 c16 @snarehat c8 @tom c16 c16
+; Bar 13
+A @chord c4 @chug c8 c16 r16 c8 c8 g8 f8
+B c4 c8 c8 c4 g8 f8
+C @impact c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 14
+A @chord d4 @chug d8 d16 r16 d8 d8 g8 f8
+B d4 d8 d8 d4 g8 f8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 15
+A @chord e4 @chug e8 e16 r16 e8 e8 g8 f8
+B e4 e8 e8 e4 g8 f8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 16
+A @chord e4 @chug e8 e16 r16 e8 e8 g8 f8
+B e4 e8 e8 e4 g8 f8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 @tom c16 c16 @snarehat c8 @tom c16 c16
+; Bar 17
+A @chord c4 @chug c8 c16 r16 c8 c8 g8 f8
+B c4 c8 c8 c4 g8 f8
+C @impact c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 18
+A @chord d4 @chug d8 d16 r16 d8 d8 g8 f8
+B d4 d8 d8 d4 g8 f8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 19
+A @chord e4 @chug e8 e16 r16 e8 e8 g8 f8
+B e4 e8 e8 e4 g8 f8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 20
+A @chord e4 @chug e8 e16 r16 e8 e8 g8 f8
+B e4 e8 e8 e4 g8 f8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 @tom c16 c16 @snarehat c8 @tom c16 c16
+; Bar 21
+A @chord e4 r4 @chug e8 r8 f8 e8
+B e4 r4 e8 r8 f8 e8
+C @impact c4 @hat v8 c4 @snarehat v15 c4 @kickhat c8 @hat v8 c8 v15
+; Bar 22
+A @chord e4 r4 @chug e8 r8 f8 e8
+B e4 r4 e8 r8 f8 e8
+C @kickhat c4 @hat v8 c4 @snarehat v15 c4 @kickhat c8 @hat v8 c8 v15
+; Bar 23
+A @chord e4 r4 @chug e8 r8 f8 e8
+B e4 r4 e8 r8 f8 e8
+C @kickhat c4 @hat v8 c4 @snarehat v15 c4 @kickhat c8 @hat v8 c8 v15
+; Bar 24
+A @chord e4 r4 @chug e8 r8 f8 e8
+B e4 r4 e8 r8 f8 e8
+C @kickhat c4 @hat v8 c4 @snarehat v15 c4 @kickhat c8 @hat v8 c8 v15
+; Bar 25
+A @chug e8 e16 r16 e8 r8 e8 g8 f8 e8
+B e8 e8 e4 e8 g8 f8 e8
+C @impact c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 26
+A @chug e8 r16 e16 e8 g8 e8 r8 d8 f8
+B e8 r8 e8 g8 e4 d8 f8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 27
+A @chug e8 e16 r16 e8 r8 g8 a8 g8 f8
+B e4 e8 e8 g8 a8 g8 f8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 28
+A @chug e8 r8 e16 e16 r8 g8 f8 d8 e8
+B e4 e8 r8 g8 f8 d8 e8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 @tom c16 c16 @snarehat c8 @tom c16 c16
+; Bar 29
+A @chug e8 e16 r16 e8 r8 e8 g8 f8 e8
+B e8 e8 e4 e8 g8 f8 e8
+C @impact c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 30
+A @chug e8 r16 e16 e8 g8 e8 r8 d8 f8
+B e8 r8 e8 g8 e4 d8 f8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 31
+A @chug e8 e16 r16 e8 r8 g8 a8 g8 f8
+B e4 e8 e8 g8 a8 g8 f8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 c8 @snarehat c8 @hat v8 c8 v15
+; Bar 32
+A @chug e8 r8 e16 e16 r8 g8 f8 d8 e8
+B e4 e8 r8 g8 f8 d8 e8
+C @kickhat c8 @hat v7 c8 @snarehat v15 c8 @hat v8 c8 @kickhat v15 c8 @tom c16 c16 @snarehat c8 @tom c16 c16

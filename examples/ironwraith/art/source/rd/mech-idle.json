@@ -1,0 +1,7 @@
+{
+  "prompt": "The armored mech hovers in place, gentle idle vibration, small blue jet flames from its feet. Keep the entire mech facing right, its cannon points horizontally right at a fixed height. No walking, no rotation, fixed camera, smooth seamless eight-frame loop.",
+  "cost": 0.14,
+  "balance_after": 3.14,
+  "frames": 8,
+  "action": "idle"
+}

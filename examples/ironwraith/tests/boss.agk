@@ -1,0 +1,26 @@
+wait-serial "AGK t0"
+press fire 170
+press up+fire 25
+press down+fire 60
+press fire2 1
+press up+fire 55
+press down+fire 55
+press up+fire 55
+press down+fire 55
+press up+fire 55
+press down+fire 55
+press fire2 1
+press up+fire 55
+press down+fire 55
+press up+fire 55
+press down+fire 55
+press up+fire 55
+press down+fire 55
+press fire2 1
+press up+fire 55
+press down+fire 55
+screenshot boss
+expect-serial "wave=3"
+expect-serial "AGK sfx warning"
+expect-no-dropped-frames
+expect-max-load 99

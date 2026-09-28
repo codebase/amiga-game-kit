@@ -1,0 +1,9 @@
+{
+  "prompt": "Heavy armored siege mech WALKING IN PLACE facing LEFT. Deliberate powerful alternating mechanical leg strides, feet plant on the ground, knees bend and hips shift. Upper body and cannon stay steady, full body remains inside frame, no flying, no jumping, no camera movement. Keep exactly the same red armor and furnace core. Seamless cycle.",
+  "action": "walking",
+  "frames": 8,
+  "width": 80,
+  "height": 80,
+  "cost": 0.14,
+  "balance_after": 2.64
+}

@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 import uuid
 
-from .art import parse_palette, to_rgb8
+from .art import parse_palette, to_rgb8, project_aga
 from .image import Image
 
 API = "https://api.retrodiffusion.ai/v2"
@@ -58,14 +58,14 @@ def _request(method, path, body=None, extra_headers=None):
         raise GenError(f"can't reach Retro Diffusion: {e.reason}")
 
 
-def palette_png(colors):
+def palette_png(colors, aga=False):
     """A 1-pixel-high PNG with one pixel per colour, for input_palette."""
-    rgb = b"".join(bytes(to_rgb8(c)) for c in colors)
+    rgb = b"".join(bytes(to_rgb8(c, aga)) for c in colors)
     return base64.b64encode(Image(rgb, len(colors), 1).to_png()).decode()
 
 
 def generate(prompt, width, height, colors, style=DEFAULT_STYLE, seed=None, n=1, dry_run=False,
-             tile_x=False, remove_bg=True):
+             tile_x=False, remove_bg=True, aga=False):
     """Returns (list of PNG bytes, cost, remaining balance)."""
     body = {
         # The API's guidance: describe the subject, give a plain contrasting
@@ -77,7 +77,7 @@ def generate(prompt, width, height, colors, style=DEFAULT_STYLE, seed=None, n=1,
     if tile_x:
         body["tile_x"] = True
     if colors:
-        body["input_palette"] = palette_png(colors)
+        body["input_palette"] = palette_png(colors, aga)
     if seed is not None:
         body["seed"] = seed
     if dry_run:
@@ -122,7 +122,7 @@ def sprite_colors_from(project_dir, spec):
     pal = os.path.join(project_dir, "art", "palette.txt")
     if not os.path.exists(pal):
         return []
-    return [c for _, c in sorted(parse_palette(pal).items())]
+    return [c for _, c in sorted(parse_palette(pal, project_aga(project_dir)).items())]
 
 
 ANIMATIONS = ("walking", "idle", "jump", "crouch", "attack", "destroy")

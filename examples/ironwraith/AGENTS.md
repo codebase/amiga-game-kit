@@ -1,0 +1,229 @@
+# ironwraith: Amiga game (AGK project)
+
+A Commodore Amiga game written in C with the [ACE](https://github.com/AmigaPorts/ACE)
+engine. This project overrides the template baseline: target **A1200, 68020, AGA,
+2 MB chip RAM, PAL, Kickstart 3.1**. Art uses eight planes and 24-bit colors.
+Older A500-specific limits below are reference only; tests run on a1200. It's built and tested with the Amiga Game Kit (`agk`).
+
+## The loop: always verify, never guess
+
+```sh
+agk unit        # game rules only, on the host, in milliseconds - run after editing src/logic.c
+agk build       # cross-compile in Docker -> build/ironwraith.adf (a bootable floppy)
+agk test        # boot on every profile, play tests/*.agk, compare screenshots to goldens
+agk run -s "press right 20" -s "screenshot moved"   # try something ad hoc
+agk play        # let the human play it in FS-UAE (arrow keys + Space)
+agk help        # all commands;  agk help-scenario  # the test/run step language
+```
+
+`agk run` and `agk test` rebuild automatically when sources are newer than the
+ADF. The template ships passing tests and goldens, so run `agk test` once
+**before** you change anything: that's your baseline.
+
+After a change you can see, **look at the screenshot**. `agk run` and `agk test`
+print the path of `<name>.screen.png`, a 320×256 image in game coordinates
+(pixel x,y in the PNG = x,y in the game). Read it and check that it shows what
+you intended. A passing build proves nothing about what appears on screen.
+
+The same commands are available as MCP tools (`agk_build`, `agk_run`,
+`agk_test`, `agk_unit`) through `.mcp.json`. `agk_run` and `agk_test` return
+the screenshots as images. If `agk` isn't on your PATH, it's `/Users/j/src/amiga-game-kit/tools/agk`.
+
+`agk help-scenario` prints the scenario language. Common steps:
+- `press right 20` holds for 20 frames
+- `press up+fire`
+- `hold left` … `release`
+- `wait 10`
+- `screenshot NAME`
+- `expect-serial "x=224"`: a regex over the whole serial log
+- `expect-color NAME 44 44 0xFC0`: the pixel at game (44,44) in screenshot NAME must be Amiga colour $FC0. Use this to prove something is or isn't drawn; a golden only proves "same as last time".
+- `wait-serial "score=1"`: literal text, not a regex. It resumes one frame after the text arrives, so the game has usually run one more frame with the old input.
+- `regs NAME cpu copper`
+- `dump-mem NAME 0x0 0x80000`
+
+Time is in game frames: 50 per second, starting when the game prints `AGK ready`.
+`agkPerfBegin()` at the top of each frame marks the frames, and `sync = "ticks"`
+in agk.toml tells the harness to count them. Keep that call first in
+`genericProcess()`. Runs are deterministic, so the same scenario gives the
+same pixels on every profile, every time.
+
+### Golden images
+`tests/golden/<test>/<shot>.png` are the approved screenshots, shared by all
+profiles. Colours are exact: Amiga colour `0xRGB` appears as
+(R×17, G×17, B×17).
+- If a test fails with `DIFFERENT`, open the `*.diff.png` it names. Changed pixels are red, and the message gives the changed area in game coordinates.
+- Only if the change is intended, run `agk test --update`, and say which goldens you updated and why.
+- Never update goldens just to make a failing test pass.
+
+## Project layout
+
+| file | what goes there |
+|---|---|
+| `src/logic.c/.h` | **Game rules**: movement, collisions, scoring, state. Portable C only: no ACE or Amiga headers, no hardware access. Tested on the host by `agk unit`. |
+| `src/main.c` | Amiga side: display setup (ACE view/viewport/buffer), sprites, blitter drawing, joystick, calling `logicUpdate` once per frame. |
+| `tests/unit/*.c` | Host tests for the rules (`CHECK(...)` macro, `main()` returns non-zero on failure). |
+| `tests/*.agk` | Emulator tests: input, screenshots, serial expectations. |
+| `agk.toml` | name, profiles, boot text, `unit_sources`. |
+
+Put new rules in `logic.c` and write a unit test first. Keep `main.c` a thin
+layer that maps state to hardware.
+
+## Art: sprites and BOBs from files
+
+Graphics live in `art/`, not in C:
+- `art/palette.txt` is the game palette.
+- `art/art.toml` lists the assets.
+- `art/player.txt` is the player as text art, one character per pixel.
+
+PNGs work too, from any tool or AI generator.
+
+- **`agk art`** converts everything. It prints what it did and any rule problems, and writes previews to `build/art/preview/`. **Look at the preview** after every art change: it's exactly what the Amiga will show.
+- `agk build` and `agk test` regenerate art automatically. C code includes `art.h` and calls, e.g., `artPlayerCreate(frame)`, `artPlayerApplyColors(palette)` and `artPaletteApply(palette)`.
+- The rules are enforced for you:
+  - sprites are 16 px wide, 3 colours plus transparent, and sprites sharing a channel pair share colours
+  - BOB colours must be in `palette.txt`
+- `agk help-art` has the formats. `/Users/j/src/amiga-game-kit/techniques/sprites` shows animated sprites and BOB frames end to end.
+- **Bigger, richer sprites:** `attached = true` makes 15-colour sprites up to 64 px wide from channel pairs, and `mirror = true` adds left-facing frames. See `/Users/j/src/amiga-game-kit/examples/sidescroller` (a 32×32 hero, 8 frames).
+- **AI art + hand animation:** `agk art-export NAME` turns a PNG into editable text art, so you can generate a base with AI and draw the animation frames yourself.
+- **AI art:** `agk art-gen NAME "description" --size 32x16` generates pixel art in the game's palette with Retro Diffusion, adds it to `art/`, converts it and shows the preview. It needs a key (`RD_API_KEY` or `~/.config/agk/credentials`) and costs about $0.02 per image; `--dry-run` checks the price for free. Always look at the preview: AI art needs a human-quality eye, and you can refine it by exporting to text art or regenerating with a `--seed`. AI backgrounds often have see-through holes and floating fragments: `agk art-clean SRC -o OUT --fill-holes --despeckle 60` fixes most of them.
+
+## Sound and music
+
+Sound lives in `sound/`, as text: `sound/sound.toml` describes sound effects
+(waveform, pitch sweep, length, envelope) and songs, and songs are MML files
+(one line per Paula channel, e.g. `A @lead o5 l8 e g > c < b a4 g4`). `agk help-sound`
+has both formats.
+- **`agk sound`** converts it and writes previews to `build/sound/preview/`:
+  `NAME.wav` and `NAME.png`, a spectrogram over the waveform. **Look at the
+  spectrogram** after every change: a sweep, a melody, drums and silence are
+  easy to see.
+- Songs can use **sampled instruments** as well as the chip waves: `#inst
+  guitar samples/guitar.wav root=e2` plays a 16-bit WAV (resampled to
+  16.5 kHz), pitched from the note it was recorded at. That's what makes an
+  Amiga song sound like real instruments rather than beeps. Samples cost chip
+  RAM (`agk sound` prints the total). `/Users/j/src/amiga-game-kit/examples/racer/sound/tools/make_samples.py`
+  synthesizes distorted guitars and drums with no recordings at all.
+- C code includes `sound.h`: `soundCreate()` (after the system is set up),
+  `soundPlay(SOUND_SFX_JUMP)`, `soundMusicStart(SOUND_MUSIC_THEME)`,
+  `soundMusicStop()`, `soundDestroy()`.
+- `soundPlay` prints `AGK sfx jump` for tests. Scenarios also record the audio:
+  `mark NAME`, then `expect-sound FROM TO` or `expect-silence FROM TO`; a
+  failure points at `audio.png`.
+- The music player's timer interrupt can cost ~15% of the frame it lands in.
+  If your game starts its frame right at the end of the display, it may start
+  late: `/Users/j/src/amiga-game-kit/examples/sidescroller` starts it a little earlier (see
+  FRAME_START_LINES in its main.c).
+
+## Videos
+
+`agk record SCENARIO.agk -o game.mp4 [--gif game.gif --gif-seconds 10]` plays
+a scenario in the emulator and encodes every frame plus the sound into an
+MP4 (needs ffmpeg). Frames are captured during `wait` and `press`, not during
+`wait-serial`. Good for showing the game off, and for looking at motion that
+single screenshots miss.
+
+## Telling the harness what happens: serial debug
+
+`#include <agk/debug.h>`, then:
+- `agkState("score", s); agkState("lives", l); agkEnd();` prints `AGK score=10 lives=3`, which tests match with `expect-serial "score=10"`.
+- `agkPrint("AGK level 2\n")` prints free text; `wait-serial "level 2"` syncs a test on it.
+- `agkReady()` has already been called for you: the template calls it once the first frame is on screen. Keep that behaviour if you restructure startup.
+
+Printing is nearly free on the default "host" channel. `agkState()` only
+records the key and the value, and `agkEnd()` hands them to the emulator,
+which formats the line. (Formatting on the 68000 cost several raster lines per
+value under a busy display: a 10-value line was ~9% of a picture in
+`examples/racer`.) `agkPrint()` text goes the same way. Still:
+- print when something changes, plus a heartbeat every N frames
+- check `maxload` in the perf lines
+
+For real hardware, `AGK_DEBUG_CHANNEL serial` (see CMakeLists.txt) uses the
+serial port. There the line is formatted on the Amiga, and every character is
+an interrupt.
+
+## Performance: measure, don't guess
+
+`main.c` wraps each frame in `agkPerfBegin()` … `agkPerfEnd()`. Every 50
+frames this prints `AGK perf frames=50 dropped=0 load=9 maxload=11`:
+- **load** and **maxload** are the average and worst % of the 1/50 s frame spent on your code.
+- **dropped** counts frames that missed the vertical blank. That's visible as stutter or half speed.
+
+`tests/perf.agk` guards this with `expect-no-dropped-frames` and
+`expect-max-load 60`. Keep it passing:
+- After adding something expensive, look at `maxload`.
+- If a change pushes it up a lot, the usual fixes are:
+  - move work out of per-frame code (precompute and use lookup tables)
+  - avoid `int`/`long` multiply and divide
+  - draw only what changed
+- Measure again after each fix.
+
+Baseline: the template uses about 4% idle and about 9% while moving.
+
+## Amiga facts that bite
+
+**CPU (68000, 7 MHz)**
+- No 32-bit multiply or divide instruction. `int` is 32-bit here, so `a * b` or `a / b` on `int`/`long` calls a slow libgcc routine. Use `int16_t`/`WORD`, shifts, and lookup tables in per-frame code.
+- GCC also calls those routines where you wrote no multiply:
+  - the end pointer of a counted loop that steps a pointer
+  - `-(x * 64)` folded into a multiply by -64
+  - `a * b / c`
+
+  After a performance change, list the calls and look at the ones in per-frame functions:
+  `docker run --rm -v "$PWD:$PWD" -w "$PWD" amigadev/crosstools:m68k-amigaos m68k-amigaos-objdump -dr build/CMakeFiles/ironwraith.dir/src/main.c.obj | grep 'RELOC.*___'`.
+  The fixes: inline `muls.w`/`divu.w` (`__asm__("divu.w %1,%0" : "+d"(a) : "d"(b))`), loop to a stop pointer computed with a shift, negate before multiplying (`examples/racer` has all three).
+- Word and long accesses must be even-aligned, or you get an address error (a crash, a "Guru"). Don't cast odd `UBYTE*` offsets to `UWORD*`.
+- No FPU. Use fixed point instead (see ACE `docs/programming/fixed_point.md`).
+- The frame budget is 1/50 s ≈ 140,000 CPU cycles, and bitplane and blitter DMA steal some of them.
+
+**Memory**
+- Chip RAM (512K) is the only memory the custom chips can see. Bitmaps, sprites, copper lists and audio samples must live there; ACE's `bitmapCreate` allocates chip RAM for you unless you pass `BMF_FASTMEM`.
+- The rest of RAM is "slow" RAM at `$C00000`: fine for code and data, not for graphics.
+- On an A500 your code and data live in that slow RAM, which shares the bus with bitplane, blitter and copper DMA. With 6 lowres planes and the blitter busy, code runs about 2× slower than its cycle count. What counts is fewer instructions, memory accesses and spilled registers.
+- Lines that show only the background colour (a sky set by the copper) don't need bitplanes. Switch them off there (`BPLCON0` = `0x0200` from the copper, back on where the picture starts, with the bitplane pointers starting at that row). Six planes over 36 lines cost the racer 5% of its CPU.
+- `tBitMap->Planes[i]` is a **byte** pointer. Cast before indexing words: `(UWORD *)bm->Planes[0] + row * (bm->BytesPerRow / 2)`.
+
+**Display (PAL lores)**
+- The playfield is 320×256 pixels.
+- Colours are 12-bit `0xRGB` (4 bits per channel). You get 2^bpp palette entries, up to 32 at 5 bitplanes.
+- Hardware sprites (`spriteAdd`) are 16 px wide, 3 colours plus transparent. Channels 0/1 use palette entries 17–19, 2/3 use 21–23, and so on.
+- A sprite bitmap is 2-bitplane, interleaved, with an extra empty line at the top and bottom for the hardware control words.
+- Moving objects wider than 16 px or with more colours are BOBs, drawn with the blitter (ACE `bob` manager, `docs/programming/using_bobs.md`).
+- The template's `simpleBufferCreate` is **single-buffered**, so `pBack == pFront`. Draw or erase static things once. If you add double buffering (`TAG_SIMPLEBUFFER_IS_DBLBUF`), every change must be made in both buffers, or the old image flickers back every other frame.
+- The copper changes registers at chosen scanlines: colour bars, palette splits, scroll.
+  - ACE **block** mode (`copBlockCreate`/`copMove`) re-merges every block whenever anything changes. That's fine for a few static blocks, but a per-line effect updated every frame costs about 90% of a frame.
+  - Use **raw** mode for anything big or animated; `/Users/j/src/amiga-game-kit/techniques/copper` shows how.
+- ACE copper lists are double-buffered, so a change appears a frame or two later. A screenshot can show the state from up to 2 frames before the serial log.
+- A game that needs two vertical blanks per picture (25 fps, `agkPerfSetFrameVbls(2)`) should start each picture by the blank counter (`while(timerGet() - start < 2)`), not by waiting for the beam. An interrupt (the music player's takes up to ~40 lines) can make a beam wait miss the moment and lose a whole frame. With `sync = "ticks"`, scenario waits count pictures then, not video frames.
+- ACE build options (BOB wrapping, scroll buffer margins, ACE_DEBUG…) go in `agk.toml` `[cmake]`. `CMakeLists.txt` lists them.
+
+**OS**
+- After `systemUnuse()` the game owns the hardware: don't call AmigaOS (DOS, Intuition, graphics.library).
+- Load files before `systemUnuse()`, or wrap them in `systemUse()` … `systemUnuse()`.
+- Kickstart 1.3 is the baseline. Don't use OS functions newer than V34.
+
+## Techniques: copy what's proven
+
+`/Users/j/src/amiga-game-kit/techniques/` has small, complete games. Each one is tested on every
+profile and comes with a `TECHNIQUE.md` covering the recipe, the gotchas and
+measured frame cost:
+- `bobs`: blitter objects, i.e. masked, double-buffered, background restore, no trails. Read it before drawing anything with the blitter; ACE's own BOB guide has a wrong signature.
+- `scrolling`: tile-map scrolling with ACE's tile buffer, a camera that follows the player, and measured costs per depth and speed. ACE's `tilebuffer.md` has several errors; this guide lists them.
+- `copper`: a sky gradient (58 colours on a 4-colour screen), a HUD palette split and a moving raster bar, in raw and block mode with measured costs.
+- `sprites`: the art pipeline end to end. Text art becomes an animated sprite, and a PNG sheet becomes an animated BOB.
+
+`/Users/j/src/amiga-game-kit/docs/references.md` lists open-source Amiga games and what each is
+good for studying, with licences.
+
+## ACE documentation
+
+The kit's ACE checkout is at `/Users/j/src/amiga-game-kit/third_party/ACE`:
+- `docs/programming/*.md` has guides for views, sprites, blits, BOBs, tile buffers, fonts, palettes and audio.
+- `showcase/src/test/*.c` has working examples of each subsystem. Copy their patterns.
+- `include/ace/**/*.h` has the API with doc comments.
+
+## When something goes wrong
+
+- **Build error:** `agk build` shows errors in your files first. The full log is in `build/build.log`.
+- **Boot timeout** (`waitserial: timeout waiting for 'AGK ready'`): the game crashed or hung before its first frame. The message includes the serial output so far, so print progress markers with `agkPrint` to narrow down where it stops.
+- **Wrong picture:** check the `.screen.png`, then check your state lines in `serial.txt`, then use `regs NAME copper denise agnus` to see what the hardware was actually told.
+- **Works on one profile but not another:** that's a real compatibility bug (OS version, memory layout, PAL detection). Don't paper over it with per-profile goldens unless the difference is intended.

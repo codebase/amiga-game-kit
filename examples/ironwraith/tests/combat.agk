@@ -1,0 +1,14 @@
+wait-serial "AGK t0"
+press fire 80
+screenshot attack
+expect-serial "score=100"
+press up+fire 35
+screenshot moved
+press fire2 1
+wait 10
+screenshot emp
+expect-serial "emp=300"
+expect-serial "AGK sfx cannon"
+expect-serial "AGK sfx emp"
+expect-no-dropped-frames
+expect-max-load 99

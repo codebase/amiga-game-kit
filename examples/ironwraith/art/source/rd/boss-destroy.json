@@ -1,0 +1,9 @@
+{
+  "prompt": "Heavy armored siege mech facing LEFT suffers a catastrophic reactor failure: orange core flares, knees buckle, upper body lurches forward, armor breaks apart with orange sparks and smoke, robot collapses into a low pile of burning wreckage on the floor. Eight distinct stages, fixed camera, full body inside frame, preserve original red armor design.",
+  "action": "destroy",
+  "frames": 8,
+  "width": 80,
+  "height": 80,
+  "cost": 0.14,
+  "balance_after": 2.36
+}

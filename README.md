@@ -17,6 +17,21 @@ PASS move [a500] 0.4s
 9/9 passed
 ```
 
+## A1200 / AGA demo: IRON WRAITH
+
+[![IRON WRAITH — AGA mech combat against MOLOCH](examples/ironwraith/demo/boss.gif)](examples/ironwraith/demo/ironwraith.mp4)
+
+[Watch the complete demo with sound](examples/ironwraith/demo/ironwraith.mp4).
+
+[IRON WRAITH](examples/ironwraith/README.md) is a mech-assault demo for the **Amiga 1200
+with AGA graphics and 2 MB chip RAM**, running at 50 fps. It features an
+eight-plane industrial battlefield, attached mech sprites, an animated armored
+boss, EMP attacks, repairs, and a sampled industrial-metal soundtrack. Its selected mech
+and boss art were generated with Retro Diffusion and compiled for the Amiga.
+
+Run `tools/agk play examples/ironwraith`. See [AGA setup](docs/aga.md) for the
+RGB24 art pipeline and exact-color scenario checks.
+
 ## Example: `examples/sidescroller`
 
 [![sidescroller](docs/img/sidescroller.gif)](docs/media/sidescroller.mp4)

@@ -1,0 +1,43 @@
+[art]
+chipset = "aga"
+depth = 8
+[foundry]
+source = "foundry.png"
+kind = "bitmap"
+[mech]
+source = "mech.png"
+kind = "sprite"
+frame_width = 48
+frame_height = 48
+attached = true
+channel = 0
+[drone]
+source = "drone.png"
+kind = "bob"
+frame_width = 32
+frame_height = 28
+[boss]
+source = "boss.png"
+kind = "bob"
+frame_width = 80
+frame_height = 80
+[blast]
+source = "blast.png"
+kind = "bob"
+frame_width = 32
+frame_height = 32
+[shot]
+source = "shot.png"
+kind = "bob"
+frame_width = 16
+frame_height = 8
+[bolt]
+source = "bolt.png"
+kind = "bob"
+frame_width = 16
+frame_height = 8
+[repair]
+source = "repair.png"
+kind = "bob"
+frame_width = 16
+frame_height = 16

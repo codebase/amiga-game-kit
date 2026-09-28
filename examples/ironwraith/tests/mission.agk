@@ -1,0 +1,48 @@
+wait-serial "AGK t0"
+press fire 1
+press up+fire+fire2 1
+press up+fire 5
+press fire 102
+press up+fire 30
+press fire 54
+press down+fire 42
+press fire 36
+press up+fire 6
+press fire 24
+press up+fire 1
+press up+fire+fire2 1
+press up+fire 4
+press fire 54
+press up+fire 18
+press fire 156
+press down+fire 6
+press fire 18
+press down+fire 24
+press fire 20
+press fire+fire2 1
+press fire 3
+press up+fire 12
+press fire 204
+press up+fire 6
+press fire 18
+press up+fire 12
+press down+fire 6
+press fire 18
+press up+fire 6
+press fire 12
+press down+fire 3
+press down+fire+fire2 1
+press down+fire 20
+press fire 54
+press up+fire 6
+press fire 220
+press fire+fire2 1
+press fire 181
+press down+fire 6
+press fire 6
+press down+fire 3
+wait 5
+screenshot ending
+expect-serial "phase=2"
+expect-no-dropped-frames
+expect-max-load 99

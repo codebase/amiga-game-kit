@@ -111,6 +111,26 @@ def _nearest_color(screen, x, y, want, radius=24):
     return f"; no 0x{want[0]:X}{want[1]:X}{want[2]:X} within {radius}px"
 
 
+def _check_rgb24(scenario, result):
+    """Exact AGA assertions; do not round low nibbles as expect-color does."""
+    for shot, x, y, want, lineno, near in scenario.rgbs:
+        info = result["screenshots"].get(shot)
+        if not info:
+            continue  # The missing screenshot has already been reported.
+        screen = Image.load_png(info["screen_png"])
+        got = screen.pixel(x, y)
+        found = any(screen.pixel(xx, yy) == want
+                    for yy in range(max(0, y-near), min(screen.height, y+near+1))
+                    for xx in range(max(0, x-near), min(screen.width, x+near+1)))
+        if not found:
+            result["ok"] = False
+            actual = "".join(f"{c:02X}" for c in got)
+            expected = "".join(f"{c:02X}" for c in want)
+            result["failures"].append(
+                f"line {lineno}: pixel ({x},{y}) of '{shot}' is 0x{actual}, "
+                f"expected exact RGB 0x{expected}" + (f" within {near}px" if near else ""))
+
+
 def _extract_regs(out, comps):
     """Collect the output block printed after each 'r <comp>' echo line."""
     blocks, current = {}, None
@@ -330,6 +350,7 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
                 f"line {lineno}: pixel ({x},{y}) of '{shot}' is 0x{got[0]:X}{got[1]:X}{got[2]:X}, "
                 f"expected 0x{want[0]:X}{want[1]:X}{want[2]:X}" + hint)
 
+    _check_rgb24(scenario, result)
     _check_audio(scenario, outdir, result)
 
     for name, comps in scenario.regs:
