@@ -276,3 +276,58 @@ class SharedAttachedPaletteTests(unittest.TestCase):
                                  'attached = true\nchannel = 4\n', "a.txt": a, "b.txt": b})
         with self.assertRaisesRegex(art.ArtError, "max 15"):
             art.build(d)
+
+
+class PinnedColourTests(unittest.TestCase):
+    """'X 0xRGB @REGISTER' (or art.toml slots) fixes a colour's register, drawn or not:
+    e.g. a ship whose last three colours must be a starfield sprite's."""
+
+    STARS = "  G 0x446 @29\n  H 0x99B @30\n  W 0xFFF @31\n"
+
+    def test_pinned_colours_keep_their_registers_unused(self):
+        text = "colors\n  .  transparent\n  A 0xF00\n  B 0x0F0\n" + self.STARS + "frame\nAB.W\n"
+        d = project({"art.toml": '[s]\nsource = "s.txt"\nattached = true\n', "s.txt": text})
+        (a,) = art.build(d)
+        self.assertEqual(a.sprite_colors[:2], [0xF00, 0x0F0])
+        self.assertEqual(a.sprite_colors[12:], [0x446, 0x99B, 0xFFF])   # registers 29-31, G and H unused
+        self.assertEqual(a.index[0xFFF], 15)
+        self.assertEqual(a.warnings, [])
+
+    def test_unused_listed_colour_warns_that_later_ones_move(self):
+        text = "colors\n  A 0xF00\n  B 0x0F0\n  C 0x00F\nframe\nAC\n"
+        d = project({"art.toml": '[s]\nsource = "s.txt"\nattached = true\n', "s.txt": text})
+        (a,) = art.build(d)
+        self.assertEqual(a.index[0x00F], 2)            # C moved up into B's register
+        self.assertTrue(any("listed but not drawn: 0x0F0" in w and "@REGISTER" in w for w in a.warnings))
+
+    def test_black_used_and_as_filler(self):
+        text = "colors\n  K 0x000\n  W 0xFFF @31\nframe\nKW\n"
+        d = project({"art.toml": '[s]\nsource = "s.txt"\nattached = true\n', "s.txt": text})
+        (a,) = art.build(d)
+        self.assertEqual((a.index[0x000], a.index[0xFFF]), (1, 15))   # not the 0x000 filler in 2-14
+
+    def test_pin_out_of_range_says_which_registers(self):
+        text = "colors\n  A 0xF00 @21\nframe\nA\n"
+        d = project({"art.toml": '[s]\nsource = "s.txt"\nchannel = 0\n', "s.txt": text})
+        with self.assertRaisesRegex(art.ArtError, "registers 17-19"):
+            art.build(d)
+
+    def test_small_sprite_pin_and_png_slots(self):
+        d = project({"art.toml": '[s]\nsource = "s.png"\nchannel = 6\nslots = { 31 = "0xFFF" }\n'})
+        Image(bytes((255, 0, 0, 0, 255, 0)), 2, 1).save_png(os.path.join(d, "art", "s.png"))
+        (a,) = art.build(d)
+        self.assertEqual(a.sprite_colors, [0xF00, 0x0F0, 0xFFF])
+
+    def test_attached_sprites_merge_pins(self):
+        a = "colors\n  A 0xF00\n  W 0xFFF @31\nframe\nA\n"
+        b = "colors\n  B 0x0F0\n  W 0xFFF @31\nframe\nBW\n"
+        c = "colors\n  C 0x00F\n  X 0xEEE @31\nframe\nC\n"
+        d = project({"art.toml": '[a]\nsource = "a.txt"\nattached = true\n[b]\nsource = "b.txt"\n'
+                                 'attached = true\nchannel = 4\n', "a.txt": a, "b.txt": b})
+        x, y = art.build(d)
+        self.assertEqual(x.sprite_colors[:2] + x.sprite_colors[14:], [0xF00, 0x0F0, 0xFFF])
+        self.assertEqual(y.index[0xFFF], 15)
+        d = project({"art.toml": '[a]\nsource = "a.txt"\nattached = true\n[c]\nsource = "c.txt"\n'
+                                 'attached = true\nchannel = 4\n', "a.txt": a, "c.txt": c})
+        with self.assertRaisesRegex(art.ArtError, "register 31"):
+            art.build(d)

@@ -36,12 +36,19 @@ TEXT FORMAT (one char per pixel, frames separated by `frame` lines):
 
 Sprite options:
   attached = true   15 colours (+ transparent) from pairs of channels (text art:
-                    in the order its colors section lists them); width
+                    in the order its colors section lists them; a colour
+                    nothing draws takes no register, and agk art warns
+                    when that moves the ones after it); width
                     up to 64 (each 16 px column uses 2 channels, from an even
                     `channel`). Colours go to slots 17-31, shared by all
                     attached sprites. artXCreate(frame, part), part p ->
                     channel CHANNEL+p, drawn at x + (p/2)*16; call
                     spriteSetAttached() on the odd parts.
+  pinned colours    'W 0xFFF @31' in the colors section fixes a colour to a
+                    hardware register (17-31 attached; a 3-colour sprite's
+                    own three), drawn or not. For PNGs: slots = { 31 = "0xFFF" }
+                    in art.toml. Use it when registers are shared with other
+                    sprites, e.g. a starfield on channel 7 using 29-31.
   mirror = true     adds left-facing copies of every frame (hardware sprites
                     can't flip): frame f facing left = f + ART_X_MIRROR.
 
@@ -69,6 +76,7 @@ than 3 colours is reduced (warning + preview); a BOB colour that isn't in the
 palette maps to the nearest one (warning).
 """
 import os
+import re
 import tomllib
 
 from .image import Image
@@ -76,6 +84,31 @@ from .image import Image
 TRANSPARENT = None
 # First visible colour slot per sprite channel (slot base-1 is transparent)
 SPRITE_BASE = {0: 17, 1: 17, 2: 21, 3: 21, 4: 25, 5: 25, 6: 29, 7: 29}
+
+
+def assign_slots(pins, order, n, name):
+    """pins {slot index 0..n-1: colour} + colours in order -> n colours, one per slot
+    (0x000 in the ones left over). Each colour appears once."""
+    slots = [None] * n
+    for i, c in pins.items():
+        slots[i] = c
+    rest = [c for c in dict.fromkeys(order) if c not in pins.values()]
+    free = [i for i in range(n) if slots[i] is None]
+    if len(rest) > len(free):
+        raise ArtError(f"[{name}]: {len(rest) + len(pins)} colours, but there are {n} registers "
+                       f"({len(pins)} pinned). Use fewer colours")
+    for i, c in zip(free, rest):
+        slots[i] = c
+    return [0x000 if c is None else c for c in slots]
+
+
+def first_slots(colors, wanted):
+    """colour -> pen (1-based), the first register holding it (not the 0x000 filler after it)"""
+    index = {}
+    for i, c in enumerate(colors):
+        if c in wanted:
+            index.setdefault(c, i + 1)
+    return index
 
 
 class ArtError(Exception):
@@ -141,8 +174,10 @@ def parse_text_art(path):
             continue
         if mode == "colors":
             parts = stripped.split()
+            if len(parts) == 3 and re.fullmatch(r"@\d+", parts[2]):
+                parts = parts[:2]            # a pinned colour register (see text_art_colors)
             if len(parts) != 2 or len(parts[0]) != 1:
-                raise ArtError(f"{path}:{n}: colour lines are 'X 0xRGB' or '. transparent'")
+                raise ArtError(f"{path}:{n}: colour lines are 'X 0xRGB', 'X 0xRGB @SLOT' or '. transparent'")
             ch, val = parts
             colors[ch] = TRANSPARENT if val == "transparent" else int(val, 0)
         elif mode == "frame":
@@ -167,8 +202,9 @@ def parse_text_art(path):
 
 
 def text_art_colors(path):
-    """The colours of a text art file in the order its 'colors' section lists them."""
-    order, mode = [], None
+    """The colours of a text art file in the order its 'colors' section lists
+    them, and the ones pinned to a colour register ('W 0xFFF @31'): -> (order, {register: colour})."""
+    order, pins, mode = [], {}, None
     with open(path) as f:
         for raw in f:
             s = raw.strip()
@@ -179,9 +215,11 @@ def text_art_colors(path):
                 continue
             if mode == "colors":
                 parts = s.split()
-                if len(parts) == 2 and parts[1] != "transparent":
+                if len(parts) in (2, 3) and parts[1] != "transparent":
                     order.append(int(parts[1], 0))
-    return order
+                    if len(parts) == 3:
+                        pins[int(parts[2][1:])] = int(parts[1], 0)
+    return order, pins
 
 
 def load_png_art(path, frame_width=None, frame_height=None, aga=False):
@@ -215,14 +253,20 @@ class Asset:
         self.source = os.path.join(art_dir, src)
         if not os.path.exists(self.source):
             raise ArtError(f"[{name}]: {src} not found in art/")
-        self.declared = []
+        self.declared, self.pins = [], {}
         if src.endswith(".txt"):
             self.w, self.h, self.frames = parse_text_art(self.source)
-            self.declared = text_art_colors(self.source)
+            self.declared, self.pins = text_art_colors(self.source)
         elif src.endswith(".png"):
             self.w, self.h, self.frames = load_png_art(self.source, cfg.get("frame_width"), cfg.get("frame_height"), aga)
         else:
             raise ArtError(f"[{name}]: source must be .txt or .png")
+        # art.toml: slots = { 31 = "0xFFF" } pins colours for any source (PNG too)
+        for k, v in (cfg.get("slots") or {}).items():
+            self.pins[int(k)] = int(v, 0) if isinstance(v, str) else int(v)
+        if self.pins and self.kind != "sprite":
+            self.warnings.append("pinned colours (@REGISTER / slots) only apply to sprites; a "
+                                 f"{self.kind}'s colours come from palette.txt")
         limit = 0xFFFFFF if aga else 0xFFF
         if any(not 0 <= c <= limit for c in self.colors_used()):
             raise ArtError(f"[{name}]: colour exceeds {24 if aga else 12}-bit palette range")
@@ -291,17 +335,30 @@ class Asset:
             remap = {c: min(keep, key=lambda k: dist(c, k, self.aga)) for c in used}
             self.frames = [[[None if c is None else remap[c] for c in row] for row in fr] for fr in self.frames]
             used = {c: 0 for c in keep}
-        # Colour order: text art as its 'colors' section lists them (so the art
-        # decides which slot is which, e.g. colours shared with another
-        # sprite channel), then any others as first seen
+        # Colour slots: pinned colours ('W 0xFFF @31' / art.toml slots) on
+        # their registers, used or not; then the text art's colours in the
+        # order its 'colors' section lists them, then any others as first seen
+        base = 17 if self.attached else SPRITE_BASE[ch]
+        pins = {}
+        for reg, c in sorted(self.pins.items()):
+            if not base <= reg < base + n_colors:
+                raise ArtError(f"[{self.name}]: colour 0x{c:03X} is pinned to register {reg}, but this sprite's "
+                               f"colours are registers {base}-{base + n_colors - 1}")
+            pins[reg - base] = c
         order = [c for c in self.declared if c in used]
         for fr in self.frames:
             for row in fr:
                 for c in row:
                     if c is not None and c not in order:
                         order.append(c)
-        self.sprite_colors = order + [0x000] * (n_colors - len(order))
-        self.index = {c: i + 1 for i, c in enumerate(order)}
+        skipped = [c for c in self.declared if c not in used and c not in pins.values()]
+        if skipped and self.declared and any(self.declared.index(c) < max(
+                (self.declared.index(u) for u in order if u in self.declared), default=-1) for c in skipped):
+            self.warnings.append(
+                f"listed but not drawn: {_hex(skipped)}; unused colours take no register, so the colours "
+                f"listed after them move up. Pin a colour that must stay put: 'X 0xRGB @REGISTER'")
+        self.sprite_colors = assign_slots(pins, order, n_colors, self.name)
+        self.index = first_slots(self.sprite_colors, set(used) | set(pins.values()))
 
     def _auto_palette(self, depth):
         """Index 0 = transparent / background (the copper can colour it);
@@ -479,19 +536,25 @@ def build(project_dir, out_dir=None):
     # re-index every attached asset against it.
     attached = [a for a in assets if a.kind == "sprite" and a.attached]
     if len(attached) > 1:
-        shared = []
+        pins, shared = {}, []
         for a in attached:
+            for reg, c in a.pins.items():
+                if pins.get(reg - 17, c) != c:
+                    raise ArtError(f"attached sprites pin different colours to register {reg} "
+                                   f"(0x{pins[reg - 17]:03X}, and 0x{c:03X} in [{a.name}])")
+                pins[reg - 17] = c
             for c in a.sprite_colors:
-                if c not in shared and any(c in used for used in (a.colors_used(),)):
+                if c not in shared and c in a.colors_used():
                     shared.append(c)
-        if len(shared) > 15:
-            names = ", ".join(a.name for a in attached)
-            raise ArtError(f"attached sprites [{names}] share colour slots 17-31 but use {len(shared)} "
-                           f"different colours together (max 15). Draw them with a common set of colours "
-                           f"(e.g. reuse the first sprite's colours)")
+        names = ", ".join(a.name for a in attached)
+        if len([c for c in shared if c not in pins.values()]) + len(pins) > 15:
+            raise ArtError(f"attached sprites [{names}] share colour slots 17-31 but use "
+                           f"{len(set(shared) | set(pins.values()))} different colours together (max 15). "
+                           f"Draw them with a common set of colours (e.g. reuse the first sprite's colours)")
+        colors = assign_slots(pins, shared, 15, names)
         for a in attached:
-            a.sprite_colors = shared + [0x000] * (15 - len(shared))
-            a.index = {c: i + 1 for i, c in enumerate(shared)}
+            a.sprite_colors = colors
+            a.index = first_slots(colors, set(shared) | set(pins.values()))
 
     # Sprites sharing a channel pair share their 3 colours
     pairs = {}
