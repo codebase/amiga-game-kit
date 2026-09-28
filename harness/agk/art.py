@@ -54,7 +54,12 @@ Sprite options:
 
 Editing AI art by hand: `agk art-export NAME` turns art/NAME.png into text
 art art/NAME.txt (one letter per colour) - point art.toml at the .txt and
-edit pixels or add animation frames.
+edit pixels or add animation frames. It also fits art made elsewhere (e.g.
+art-gen --free-colors) to the game:
+  --palette [1-7]     use palette.txt's entries (a bob on a 3-plane playfield)
+  --colors N --pin 0xFFF@31 ...   a sprite: N colours, these on their registers
+  --dither            dither shades that fall between two colours
+  --trim              drop blank rows, as many at the top as at the bottom
 
 Rules enforced (errors say what to change):
   sprite: width <= 16, at most 3 colours + transparent. Channels 0/1 share
@@ -490,13 +495,14 @@ class Asset:
         return Image(bytes(rgb), W * zoom, self.h * zoom)
 
 
-def _reduce(counts, n, aga=False):
-    """Pick n representative colours: most frequent first, then farthest."""
-    ranked = sorted(counts, key=lambda c: -counts[c])
-    keep = [ranked[0]]
+def _reduce(counts, n, aga=False, fixed=()):
+    """Pick n representative colours: most frequent first, then farthest (from
+    those picked and any `fixed` ones that will be there anyway)."""
+    ranked = [c for c in sorted(counts, key=lambda c: -counts[c]) if c not in fixed]
+    keep = [] if fixed else ranked[:1]
     while len(keep) < min(n, len(ranked)):
         keep.append(max((c for c in ranked if c not in keep),
-                        key=lambda c: min(dist(c, k, aga) for k in keep) * (counts[c] ** 0.5)))
+                        key=lambda c: min(dist(c, k, aga) for k in keep + list(fixed)) * (counts[c] ** 0.5)))
     return keep
 
 
@@ -735,35 +741,85 @@ def _write_c(assets, palette, depth, out_dir, aga=False):
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
 
-def export_text(png_path, txt_path, max_colors=15, frame_width=None, frame_height=None, aga=False):
-    """PNG -> editable text art: OCS RGB12 or opt-in AGA RGB24 (reduced to
-    max_colors if needed), one letter per colour ordered dark to light,
-    '.' = transparent. Returns (colour count, warnings)."""
+BAYER2 = [[0.125, 0.625], [0.875, 0.375]]
+
+
+def export_text(png_path, txt_path, max_colors=15, frame_width=None, frame_height=None, aga=False,
+                targets=None, pins=None, dither=False, trim=False):
+    """PNG -> editable text art: OCS RGB12 or opt-in AGA RGB24, one letter per
+    colour ordered dark to light, '.' = transparent. Returns (colour count, warnings).
+      max_colors  reduce the image's own colours to this many
+      targets     use exactly these colours instead (e.g. palette.txt's, for a bob)
+      pins        {register: colour}: kept, and written 'X 0xRGB @REGISTER'
+                  (a sprite's colours shared with other channels); the rest
+                  are chosen from the image, max_colors in all
+      dither      a 2x2 dither where a pixel falls between its two nearest colours
+      trim        drop blank rows, as many from the top as from the bottom
+                  (the centre stays put)"""
     w, h, frames = load_png_art(png_path, frame_width, frame_height, aga)
+    warnings = []
+    if trim:
+        def blank(rows):
+            return next((i for i, r in enumerate(rows) if any(c is not None for c in r)), len(rows))
+        cut = min(min(blank(fr), blank(fr[::-1])) for fr in frames)
+        if cut:
+            frames = [fr[cut:len(fr) - cut] for fr in frames]
+            warnings.append(f"trimmed {cut} blank rows from the top and the bottom: {w}x{h - 2 * cut}")
+    measure = dist
     counts = {}
     for fr in frames:
         for row in fr:
             for c in row:
                 if c is not None:
                     counts[c] = counts.get(c, 0) + 1
-    warnings = []
-    keep = list(counts)
-    if len(keep) > max_colors:
-        warnings.append(f"{len(keep)} colours reduced to {max_colors}")
-        keep = _reduce(counts, max_colors, aga)
-    remap = {c: min(keep, key=lambda k: dist(c, k, aga)) for c in counts}
-    keep.sort(key=lambda c: sum(to_rgb8(c, aga)))
-    letter = {c: LETTERS[i] for i, c in enumerate(keep)}
+    pins = dict(pins or {})
+    if targets:
+        keep = list(dict.fromkeys(targets))
+    else:
+        keep = list(counts)
+        free = max_colors - len(pins)
+        own = [c for c in keep if c not in pins.values()]
+        if len(own) > free:
+            warnings.append(f"{len(own) + len(pins)} colours reduced to {max_colors}"
+                            + (f" ({len(pins)} pinned)" if pins else ""))
+            own = _reduce({c: counts[c] for c in own}, free, aga, fixed=list(pins.values()))
+        keep = own + [c for c in pins.values() if c not in own]
+    choices = {}
+
+    def pick(c, x, y):
+        if c not in choices:
+            ranked = sorted(keep, key=lambda k: measure(c, k, aga))
+            choices[c] = ranked[:2]
+        near = choices[c]
+        if dither and len(near) == 2:
+            da, db = measure(c, near[0], aga) ** 0.5, measure(c, near[1], aga) ** 0.5
+            t = da / (da + db) if da + db else 0
+            if t >= 0.25 and t > BAYER2[y & 1][x & 1]:
+                return near[1]
+        return near[0]
+
+    out_frames = [[[None if c is None else pick(c, x, y) for x, c in enumerate(row)]
+                   for y, row in enumerate(fr)] for fr in frames]
+    used = {c for fr in out_frames for row in fr for c in row if c is not None}
+    unpinned = sorted((c for c in keep if c in used and c not in pins.values()),
+                      key=lambda c: sum(to_rgb8(c, aga)))
+    pinned = [c for _, c in sorted(pins.items())]
+    order = unpinned + [c for c in pinned if c not in unpinned]
+    if len(order) > len(LETTERS):
+        raise ArtError(f"{len(order)} colours is more than text art can name ({len(LETTERS)})")
+    letter = {c: LETTERS[i] for i, c in enumerate(order)}
+    reg = {c: r for r, c in pins.items()}
+    width = 6 if aga else 3
     out = [f"# Exported from {os.path.basename(png_path)} by agk art-export. Edit freely:",
            "# one character per pixel, '.' = transparent; add 'frame' sections to animate.",
            "colors", "  .  transparent"]
-    out += [f"  {letter[c]}  0x{c:0{6 if aga else 3}X}" for c in keep]
-    for fr in frames:
+    out += [f"  {letter[c]}  0x{c:0{width}X}" + (f" @{reg[c]}" if c in reg else "") for c in order]
+    for fr in out_frames:
         out.append("frame")
-        out += ["".join("." if c is None else letter[remap[c]] for c in row) for row in fr]
+        out += ["".join("." if c is None else letter[c] for c in row) for row in fr]
     with open(txt_path, "w") as f:
         f.write("\n".join(out) + "\n")
-    return len(keep), warnings
+    return len(order), warnings
 
 
 # ------------------------------------------------------------------ cleanup

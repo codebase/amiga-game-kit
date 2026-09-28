@@ -331,3 +331,59 @@ class PinnedColourTests(unittest.TestCase):
                                  'attached = true\nchannel = 4\n', "a.txt": a, "c.txt": c})
         with self.assertRaisesRegex(art.ArtError, "register 31"):
             art.build(d)
+
+
+class FitTests(unittest.TestCase):
+    """agk art-export's fitting: palette targets, pins, dither, trim."""
+
+    def png(self, d, w, h, px):
+        path = os.path.join(d, "art", "x.png")
+        art.write_rgba_png(path, w, h, px)
+        return path
+
+    def colors(self, txt):
+        out, mode = {}, None
+        for line in open(txt).read().splitlines():
+            if line.strip() in ("colors", "frame"):
+                mode = line.strip()
+            elif mode == "colors" and line.strip() and "transparent" not in line:
+                parts = line.split()
+                out[parts[0]] = parts[1:]
+        return out
+
+    def test_palette_targets(self):
+        d = project({})
+        px = [(150, 150, 190, 255), (240, 40, 30, 255)]
+        dst = os.path.join(d, "art", "x.txt")
+        art.export_text(self.png(d, 2, 1, px), dst, targets=[0x111, 0x999, 0xE22, 0x3BF])
+        self.assertEqual(sorted(v[0] for v in self.colors(dst).values()), ["0x999", "0xE22"])
+
+    def test_pins_are_kept_and_not_duplicated(self):
+        d = project({})
+        px = [(r, 0, 0, 255) for r in range(0, 256, 16)] + [(153, 153, 170, 255)] * 4
+        dst = os.path.join(d, "art", "x.txt")
+        n, warnings = art.export_text(self.png(d, 20, 1, px), dst, max_colors=5, pins={31: 0x99B})
+        c = self.colors(dst)
+        self.assertEqual(c[list(c)[-1]], ["0x99B", "@31"])     # pinned: last, with its register
+        self.assertNotIn(["0x99A"], c.values())               # not a near-copy of the pin
+        self.assertTrue(any("(1 pinned)" in w for w in warnings))
+
+    def test_dither_between_two_colours(self):
+        d = project({})
+        px = [(128, 128, 128, 255)] * 16                        # halfway between black and white
+        dst = os.path.join(d, "art", "x.txt")
+        art.export_text(self.png(d, 4, 4, px), dst, targets=[0x000, 0xFFF], dither=True)
+        rows = open(dst).read().split("frame\n")[1].split()
+        self.assertEqual(len(set("".join(rows))), 2)            # both colours, in a pattern
+        art.export_text(self.png(d, 4, 4, px), dst, targets=[0x000, 0xFFF])
+        self.assertEqual(len(set("".join(open(dst).read().split("frame\n")[1].split()))), 1)
+
+    def test_trim_keeps_the_centre(self):
+        d = project({})
+        clear, red = (0, 0, 0, 0), (255, 0, 0, 255)
+        px = [clear] * 2 * 3 + [red] * 2 + [clear] * 2 * 2       # 2x6: 3 blank rows, 1 red, 2 blank
+        dst = os.path.join(d, "art", "x.txt")
+        _, warnings = art.export_text(self.png(d, 2, 6, px), dst, trim=True)
+        rows = open(dst).read().split("frame\n")[1].split()
+        self.assertEqual(rows, ["..", "AA"])                    # 2 off the top and the bottom
+        self.assertIn("trimmed 2 blank rows", warnings[0])

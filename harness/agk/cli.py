@@ -250,6 +250,10 @@ def cmd_art_gen(args):
     print(f"generated {', '.join(rel(p) for p in saved)} (${cost}, balance ${left})")
     if (gw, gh) != (w, h):
         print(f"note: generated at {gw}x{gh} (the API minimum); crop or set frame sizes in art.toml")
+    if args.free_colors and args.kind != "bitmap":
+        fit = "--palette" if args.kind == "bob" else "--colors 15 (--pin 0xRGB@REG for shared registers)"
+        print(f"next: fit it to the game's colours as editable text art: agk art-export {args.name} {fit} "
+              f"[--dither] [--trim], then point art.toml at {args.name}.txt")
     return 0 if _run_art(proj) else 1
 
 
@@ -262,8 +266,34 @@ def cmd_art_export(args):
         raise SystemExit(f"{rel(src)} not found")
     if os.path.exists(dst) and not args.force:
         raise SystemExit(f"{rel(dst)} exists - use --force to overwrite")
-    n, warnings = art.export_text(src, dst, args.colors, args.frame_width, args.frame_height,
-                                  aga=art.project_aga(proj["dir"]))
+    aga = art.project_aga(proj["dir"])
+    targets = None
+    if args.palette is not None:
+        pal_path = os.path.join(proj["dir"], "art", "palette.txt")
+        if not os.path.exists(pal_path):
+            raise SystemExit(f"--palette: {rel(pal_path)} not found")
+        pal = art.parse_palette(pal_path, aga)
+        lo, _, hi = (args.palette or "1-7").partition("-")
+        try:
+            idx = range(int(lo), int(hi or lo) + 1)
+        except ValueError:
+            raise SystemExit("--palette takes a range of palette.txt entries, e.g. 1-7")
+        targets = [pal[i] for i in idx if i in pal]
+        if not targets:
+            raise SystemExit(f"--palette {args.palette}: no such entries in palette.txt")
+    pins = {}
+    for p in args.pin or []:
+        c, _, r = p.partition("@")
+        try:
+            pins[int(r)] = int(c, 0)
+        except ValueError:
+            raise SystemExit(f"--pin {p}: use COLOUR@REGISTER, e.g. 0xFFF@31")
+    try:
+        n, warnings = art.export_text(src, dst, args.colors, args.frame_width, args.frame_height, aga=aga,
+                                      targets=targets, pins=pins, dither=args.dither,
+                                      trim=args.trim)
+    except art.ArtError as e:
+        raise SystemExit(f"art-export: {e}")
     print(f"wrote {rel(dst)} ({n} colours)")
     for w in warnings:
         print(f"  warning: {w}")
@@ -787,6 +817,15 @@ def main(argv=None):
     p.add_argument("--colors", type=int, default=15, help="max colours (15 = attached sprite, 3 = sprite)")
     p.add_argument("--frame-width", type=int)
     p.add_argument("--frame-height", type=int, help="for grid sheets (e.g. 4x2 frames): the frame height")
+    p.add_argument("--palette", nargs="?", const="1-7", metavar="RANGE",
+                   help="fit to palette.txt's colours instead (entries RANGE, default 1-7: a bob "
+                        "on a 3-plane playfield)")
+    p.add_argument("--pin", action="append", metavar="0xRGB@REG",
+                   help="keep this colour on this register, e.g. 0xFFF@31 (colours shared with "
+                        "other sprites); repeatable")
+    p.add_argument("--dither", action="store_true", help="dither shades that fall between two colours")
+    p.add_argument("--trim", action="store_true",
+                   help="drop blank rows, as many at the top as at the bottom (smaller blits)")
     p.add_argument("--force", action="store_true")
 
     p = sub.add_parser("art-gen", help="generate pixel art with Retro Diffusion into art/ (needs RD_API_KEY)",
