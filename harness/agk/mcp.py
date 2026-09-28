@@ -49,6 +49,10 @@ TOOLS = [
      "description": "Compile the game's rules (unit_sources in agk.toml) for the host and run tests/unit/*.c. "
                     "Fast (milliseconds); use it after every change to game logic.",
      "inputSchema": {"type": "object", "properties": {"project": PROJECT}}},
+    {"name": "agk_lint",
+     "description": "List the game's per-frame functions whose C compiles to slow 68000 maths library calls "
+                    "(32-bit multiply/divide/%, 64-bit, float), with the fix for each. Setup code is left out.",
+     "inputSchema": {"type": "object", "properties": {"project": PROJECT}}},
     {"name": "agk_doctor",
      "description": "Check that Docker, the emulator and Kickstart ROMs are set up; list usable profiles.",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -91,6 +95,9 @@ def call(name, a):
     if name == "agk_build":
         rc, out = _agk("build", project)
         return [_text(out or ("build ok" if rc == 0 else "build failed"))], rc != 0
+    if name == "agk_lint":
+        rc, out = _agk("lint", project)
+        return [_text(out)], rc != 0
     if name == "agk_unit":
         rc, out = _agk("unit", project)
         return [_text(out)], rc != 0

@@ -27,6 +27,7 @@ all tests pass. Check both.
 | `harness/agk/profiles.py` | machine profiles, ROM detection by SHA-1 |
 | `harness/agk/art.py` / `rd.py` | art pipeline (`agk art`, `art-clean`, `art-export`) / Retro Diffusion (`art-gen`, `art-animate`) |
 | `harness/agk/sound.py` | sound pipeline: effect synthesis, MML → ProTracker MOD, previews, spectrograms (`agk sound`) |
+| `harness/agk/lint.py` | `agk lint`: per-frame functions that call libgcc maths (from `objdump -dr` of the game's objects) |
 | `harness/agk/mcp.py` | MCP stdio server (stdlib only) |
 | `runtime/` | C library every game links (`agk/debug.h` serial channel) |
 | `templates/game/` | what `agk new` copies; `{{name}}` / `{{kit}}` are substituted |

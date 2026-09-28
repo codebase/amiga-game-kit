@@ -49,6 +49,7 @@ def load_project(path):
         "boot": cfg.get("boot", "AGK ready"),
         "adf": os.path.join(path, "build", f"{name}.adf"),
         "unit_sources": cfg.get("unit_sources", []),
+        "lint_allow": cfg.get("lint", {}).get("allow", []),
         "sync": cfg.get("sync", "frames"),
         "cmake": {k: ("ON" if v is True else "OFF" if v is False else str(v))
                   for k, v in cfg.get("cmake", {}).items()},
@@ -359,7 +360,34 @@ def cmd_build(args):
     proj = load_project(args.project)
     if not _run_art(proj, quiet=True) or not _run_sound(proj, quiet=True):
         return 1
-    return subprocess.run(_build_cmd(proj, args.define or [])).returncode
+    rc = subprocess.run(_build_cmd(proj, args.define or [])).returncode
+    if rc == 0:
+        items, _ = _lint(proj)
+        if items:
+            print(f"lint: {len(items)} function(s) call the 68000 maths library "
+                  f"({', '.join(f for _, f, _ in items[:4])}{', ...' if len(items) > 4 else ''}): agk lint")
+    return rc
+
+
+def _lint(proj, everything=False):
+    from . import lint
+    objs = lint.objects(proj)
+    if not objs:
+        return [], 0
+    image = os.environ.get("AGK_TOOLCHAIN_IMAGE", "amigadev/crosstools:m68k-amigaos")
+    return lint.findings(lint.parse(lint.disassemble(proj, objs, image)), proj["lint_allow"], everything)
+
+
+def cmd_lint(args):
+    from . import lint
+    proj = load_project(args.project)
+    need_adf(proj, True)
+    items, skipped = _lint(proj, args.all)
+    for line in lint.report(items, skipped):
+        print(line)
+    if not items:
+        print("lint: no maths library calls" + (" outside setup functions" if skipped else ""))
+    return 1 if items else 0
 
 
 def _report(res, as_json):
@@ -611,6 +639,14 @@ def main(argv=None):
                    help="CMake option, e.g. -D ACE_DEBUG=ON. It stays in build/'s cache until changed or "
                         "build/ is deleted; put permanent ones in agk.toml [cmake]")
 
+    p = sub.add_parser("lint", help="find game functions that call the slow 68000 maths library",
+                       description="Lists the project's functions whose C compiles to libgcc calls: 32-bit "
+                                   "multiply, divide and %%, 64-bit and float maths. Setup functions "
+                                   "(*Create, *Destroy, *Init, *Load, *Setup, agk.toml [lint] allow) are "
+                                   "left out. Exits 1 if any are found.")
+    p.add_argument("project", nargs="?")
+    p.add_argument("--all", action="store_true", help="include setup functions too")
+
     p = sub.add_parser("run", help="boot the game, play steps, capture results",
                        description="Steps use the scenario language, e.g. -s 'press right 20' -s 'screenshot moved'. "
                                    "See 'agk help-scenario'.")
@@ -733,7 +769,7 @@ def main(argv=None):
                 "unit": cmd_unit, "new": cmd_new, "art": cmd_art, "art-gen": cmd_art_gen,
                 "art-export": cmd_art_export, "art-animate": cmd_art_animate,
                 "play": cmd_play, "art-clean": cmd_art_clean, "sound": cmd_sound,
-                "record": cmd_record}[args.cmd](args)
+                "record": cmd_record, "lint": cmd_lint}[args.cmd](args)
     except runner.RunError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

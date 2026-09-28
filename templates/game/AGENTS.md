@@ -9,6 +9,7 @@ PAL 50 Hz, Kickstart 1.3**. It's built and tested with the Amiga Game Kit (`agk`
 ```sh
 agk unit        # game rules only, on the host, in milliseconds - run after editing src/logic.c
 agk build       # cross-compile in Docker -> build/{{name}}.adf (a bootable floppy)
+agk lint        # per-frame functions that call the slow 68000 maths library
 agk test        # boot on every profile, play tests/*.agk, compare screenshots to goldens
 agk run -s "press right 20" -s "screenshot moved"   # try something ad hoc
 agk play        # let the human play it in FS-UAE (arrow keys + Space)
@@ -167,8 +168,7 @@ Baseline: the template uses about 4% idle and about 9% while moving.
   - `-(x * 64)` folded into a multiply by -64
   - `a * b / c`
   
-  After a performance change, list the calls and look at the ones in per-frame functions:
-  `docker run --rm -v "$PWD:$PWD" -w "$PWD" amigadev/crosstools:m68k-amigaos m68k-amigaos-objdump -dr build/CMakeFiles/{{name}}.dir/src/main.c.obj | grep 'RELOC.*___'`.
+  `agk lint` lists every function that makes these calls, leaving out setup code (`*Create`, `*Init`, ..., and what only they call). `agk build` prints a one-line summary when there are any. Run it after a performance change. If a function it lists really runs only once, add it to `agk.toml`: `[lint] allow = ["name"]`.
   The fixes: inline `muls.w`/`divu.w` (`__asm__("divu.w %1,%0" : "+d"(a) : "d"(b))`), loop to a stop pointer computed with a shift, negate before multiplying (`examples/racer` has all three).
 - Word and long accesses must be even-aligned, or you get an address error (a crash, a "Guru"). Don't cast odd `UBYTE*` offsets to `UWORD*`.
 - No FPU. Use fixed point instead (see ACE `docs/programming/fixed_point.md`).
