@@ -1,0 +1,5 @@
+# The player (channel 0, ACE's sprite manager) still moves
+press right 20
+wait 2
+expect-serial "x=192 y=200"
+expect-no-serial "ERR|STACK SMASHED"

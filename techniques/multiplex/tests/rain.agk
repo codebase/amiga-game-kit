@@ -1,0 +1,7 @@
+# 24 bullets fall for 6 s on 4 sprite channels: every one shown every frame.
+# A bullet dropped would mean more than 6 within 9 lines of each other at once.
+wait 300
+screenshot rain
+expect-serial "shown=24"
+expect-no-serial "dropped=[1-9]"
+expect-no-serial "ERR|STACK SMASHED"

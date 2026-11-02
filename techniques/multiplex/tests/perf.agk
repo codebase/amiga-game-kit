@@ -1,0 +1,7 @@
+# 24 multiplexed bullets: the chains are rewritten every frame by the CPU
+press right+down 60
+press left 60
+press up+left 40
+expect-no-dropped-frames
+expect-min-chip-free 64
+expect-max-load 40

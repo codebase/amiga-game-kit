@@ -1,0 +1,3 @@
+# Standing still under the rain, the player gets hit
+wait 500
+expect-serial "hits=[1-9]"

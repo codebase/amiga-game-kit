@@ -1,0 +1,4 @@
+0  0x113  background
+1  0x468  floor
+2  0x9BD  unused
+3  0xFFF  unused

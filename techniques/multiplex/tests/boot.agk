@@ -1,0 +1,5 @@
+# The first frame: the player and 24 bullets, all from sprites
+screenshot start
+expect-serial "AGK ready"
+expect-serial "shown=24 dropped=0"
+expect-no-serial "ERR|STACK SMASHED"
