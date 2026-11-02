@@ -15,6 +15,26 @@ static UBYTE s_isStarted;
 static UWORD s_uwFrames, s_uwDropped, s_uwMaxLines;
 static ULONG s_ulSumLines;
 
+static inline ULONG mulu(UWORD a, UWORD b) {
+#if defined(__mc68000__)
+	ULONG r = a;
+	__asm__("mulu.w %1,%0" : "+d"(r) : "dmi"(b));
+	return r;
+#else
+	return (ULONG)a * b;
+#endif
+}
+
+// a / b for a < 65536 * b (the quotient fits 16 bits)
+static inline UWORD divu32(ULONG a, UWORD b) {
+#if defined(__mc68000__)
+	__asm__("divu.w %1,%0" : "+d"(a) : "dmi"(b));
+	return (UWORD)a;
+#else
+	return (UWORD)(a / b);
+#endif
+}
+
 static UWORD currentLine(void) {
 	tRayPos sPos = getRayPos();
 	return sPos.bfPosY;
@@ -90,13 +110,14 @@ void agkPerfReport(void) {
 	if(!s_uwFrames) {
 		return;
 	}
-	// Percentages via 16-bit math where possible (68000 has no 32-bit divide).
-	// Runs once a second, so libgcc divides are fine here.
-	UWORD uwAvgLines = (UWORD)(s_ulSumLines / s_uwFrames);
+	// DIVU/MULU (16-bit): the report lands in one frame a second, and a
+	// library divide there showed as that frame's peak in agk profile
+	UWORD uwFrameLines = (UWORD)(PAL_LINES * s_ubFrameVbls);
+	UWORD uwAvgLines = divu32(s_ulSumLines, s_uwFrames);
 	agkState(g_szAgkPerfKey, s_uwFrames);
 	agkState("dropped", s_uwDropped);
-	agkState("load", (uwAvgLines * 100) / (PAL_LINES * s_ubFrameVbls));
-	agkState("maxload", (s_uwMaxLines * 100) / (PAL_LINES * s_ubFrameVbls));
+	agkState("load", divu32(mulu(uwAvgLines, 100), uwFrameLines));
+	agkState("maxload", divu32(mulu(s_uwMaxLines, 100), uwFrameLines));
 	agkEnd();
 	agkMemReport();
 	s_uwFrames = 0;

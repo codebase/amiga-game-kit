@@ -592,6 +592,9 @@ def cmd_profile(args):
                     raise prof.ProfileError(f"no function '{args.disasm}' (names as in the report)")
                 _, obj = syms.object_of(start)
                 build = os.path.join(proj["dir"], "build")
+                obj = prof.object_file(build, obj)
+                if not obj:
+                    raise prof.ProfileError(f"no object file for '{args.disasm}' in the build tree")
                 from .lint import objdump
                 dis, _ = objdump(build, [obj], image, "-d")
                 for line in prof.annotate(lines, anchor, syms, args.disasm, dis):

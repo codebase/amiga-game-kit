@@ -87,8 +87,12 @@ def parse(dis):
         if m and describe(m.group(1)):
             r = found.setdefault((obj, func), {})
             r[m.group(1)] = r.get(m.group(1), 0) + 1
-        # calls, tail calls and function pointers: a relocation, or a PC-relative <_name>
-        for target in ([m.group(1)] if m else []) + re.findall(r"<([^>+]+)>", line):
+        # calls, tail calls and function pointers: a relocation, or a PC-relative
+        # <_name>. An absolute 0 <_name> is a relocated operand whose RELOC line
+        # says what it really is (a .bss variable at 0 gets the first function's name)
+        targets = [m.group(1)] if m else []
+        targets += [t for a, t in re.findall(r"([^\s,]+) <([^>+]+)>", line) if a != "0"]
+        for target in targets:
             refs.append((clean(func), clean(target)))
     callers = {}
     for caller, callee in refs:
@@ -115,9 +119,12 @@ def setup_only(callers, allow=()):
 
 def objects(proj):
     base = os.path.join(proj["dir"], "build", "CMakeFiles", f"{proj['name']}.dir")
-    return sorted(o for o in glob.glob(os.path.join(base, "**", "*.obj"), recursive=True)
-                  # agk's generated art.c / sound.c: set up once, not per frame
-                  if not re.search(r"[/\\](art|sound)[/\\](art|sound)\.c\.obj$", o))
+    objs = [o for o in glob.glob(os.path.join(base, "**", "*.obj"), recursive=True)
+            # agk's generated art.c / sound.c / maps.c: set up once, not per frame
+            if not re.search(r"[/\\](art|sound|maps)[/\\](art|sound|maps)\.c\.obj$", o)]
+    # the kit's runtime is per-frame code too
+    objs += glob.glob(os.path.join(proj["dir"], "build", "agk", "CMakeFiles", "agk.dir", "**", "*.obj"), recursive=True)
+    return sorted(objs)
 
 
 def objdump(workdir, files, image, flags="-dr"):
@@ -146,6 +153,8 @@ def disassemble(proj, objs, image):
 def source_of(obj):
     # build/CMakeFiles/NAME.dir/src/main.c.obj -> src/main.c
     m = re.search(r"\.dir/(.+)\.obj$", obj)
+    if m and "/agk.dir/" in obj:
+        return "runtime/" + m.group(1)
     return m.group(1) if m else obj
 
 

@@ -50,7 +50,7 @@ OCS dual playfield, 5 bitplanes, at 50 frames a second:
  255 └──────────────────────────────┘  COLOR00: a navy gradient, per line
 ```
 
-- **The starfield** is one hardware sprite, re-used on every line:
+- **The starfield** (`agk/stars.h` in the kit's runtime, written for this game) is one hardware sprite, re-used on every line:
   - The copper sets its position and data at the start of each line, so the CPU writes nothing per star.
   - Stars move a whole layer at a time: one byte decrement per star per step. Near stars move 2 px a frame, mid ones 1 px, far ones ½ px.
   - Sprites 6–7 sit behind both playfields, so the planet hides the stars behind it.
@@ -116,11 +116,10 @@ The demo is the worst case: the spread gun, every wave, the Warden's death, the 
 | path | what |
 |---|---|
 | `src/logic.c`, `src/logic.h` | the rules, the level script, the demo's pilot (host-testable) |
-| `src/main.c` | display, copper lists, starfield, blit queue, HUD, sprites, sound |
+| `src/main.c` | display, copper lists, sprites, sound; the blit queue, starfield, copper writer and HUD text are the kit's `agk/blitq.h`, `stars.h`, `copw.h`, `text.h` |
 | `art/*.txt` | the sprites and objects as text art (`agk help-art`) |
 | `art/tools/draw.py` | draws the asteroids, mine, explosions, the backdrop, the logo and messages |
 | `art/rd/`, `art/tools/from_rd.py` | the ship and the Warden from Retro Diffusion, and their fitting to the game's colours (with the Warden's flash frame and the ship's flame flicker) |
-| `art/tools/font.py` | the HUD font |
 | `sound/` | effects, the tune, `tools/make_samples.py` |
 | `tests/` | scenarios, goldens, `unit/test_logic.c` |
 | `demo/showcase.agk` | the video's scenario |

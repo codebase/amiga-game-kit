@@ -19,6 +19,13 @@ Disassembly of section .text:
        c:	4eba 0020      	jsr %pc@(2e <_tablesMake>)
       10:	4e75           	rts
 
+0000000e <_blitqFull>:
+       e:	4a39 0000 0000 	tstb 0 <_genericProcess>
+			10: RELOC32	.bss
+      14:	13fc 0001 0000 	moveb #1,0 <_genericProcess>
+			18: RELOC32	.bss
+      1a:	4e75           	rts
+
 00000012 <_starsUpdate>:
       12:	49f9 0000 0000 	lea 0 <___mulsi3>,a4
 			14: RELOC32	___mulsi3
@@ -58,6 +65,8 @@ class TestLint(unittest.TestCase):
         by = {lint.clean(f): refs for (_, f), refs in found.items()}
         self.assertEqual(by["logicUpdate"], {"___divsi3": 2, "___addsf3": 1})
         self.assertEqual(by["starsUpdate"], {"___mulsi3": 1})      # through a register (lea + jsr a4@)
+        _, callers = self.parsed
+        self.assertNotIn("blitqFull", callers.get("genericProcess", set()))   # a .bss variable at 0, not a call
 
     def test_setup_code_is_left_out(self):
         items, skipped = lint.findings(self.parsed)

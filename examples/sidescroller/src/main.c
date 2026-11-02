@@ -21,6 +21,7 @@
 #include <ace/utils/custom.h>
 #include <ace/utils/extview.h>
 #include <hardware/dmabits.h>
+#include <agk/copw.h>
 #include <agk/debug.h>
 #include <agk/perf.h>
 #include "art.h"      // generated from art/ by agk (agk help-art)
@@ -112,86 +113,65 @@ static UWORD s_pSkyColors[SKY_BANDS];
 static UWORD s_pHazeColors[HAZE_BANDS];
 static UWORD s_pPitColors[PIT_BANDS];
 
-typedef struct {
-	tCopCmd *pList;
-	UWORD uwPos;
-	UWORD uwBeamTop;
-	UBYTE isPast255;
-} tCopWriter;
-
-static void cwWait(tCopWriter *pW, UWORD uwGameY, UBYTE ubX) {
-	UWORD uwBeamY = pW->uwBeamTop + uwGameY;
-	if(uwBeamY > 0xFF && !pW->isPast255) {
-		// WAIT has 8 bits of Y: wait for the end of line 255 first.
-		copSetWait(&pW->pList[pW->uwPos++].sWait, 0xDF, 0xFF);
-		pW->isPast255 = 1;
-	}
-	copSetWait(&pW->pList[pW->uwPos++].sWait, ubX, uwBeamY & 0xFF);
-}
-
-static void cwMove(tCopWriter *pW, volatile void *pReg, UWORD uwValue) {
-	copSetMove(&pW->pList[pW->uwPos++].sMove, pReg, uwValue);
-}
-
 // 6 MOVEs: bitplane pointers for one playfield. PF1 = BPL1/3/5 (ubFirst 0),
 // PF2 = BPL2/4/6 (ubFirst 1).
-static UWORD cwPlanePtrs(tCopWriter *pW, UBYTE ubFirst, const ULONG *pAddr) {
+static UWORD cwPlanePtrs(tAgkCopWriter *pW, UBYTE ubFirst, const ULONG *pAddr) {
 	UWORD uwStart = pW->uwPos;
 	for(UBYTE p = 0; p < 3; ++p) {
-		cwMove(pW, &g_pBplFetch[ubFirst + 2 * p].uwHi, pAddr[p] >> 16);
-		cwMove(pW, &g_pBplFetch[ubFirst + 2 * p].uwLo, pAddr[p] & 0xFFFF);
+		agkCopMove(pW, &g_pBplFetch[ubFirst + 2 * p].uwHi, pAddr[p] >> 16);
+		agkCopMove(pW, &g_pBplFetch[ubFirst + 2 * p].uwLo, pAddr[p] & 0xFFFF);
 	}
 	return uwStart;
 }
 
-static void cwPalette(tCopWriter *pW, UBYTE ubFirstColor, const UWORD *pPal) {
+static void cwPalette(tAgkCopWriter *pW, UBYTE ubFirstColor, const UWORD *pPal) {
 	for(UBYTE i = 1; i < 8; ++i) { // [0] is the transparent slot
-		cwMove(pW, &g_pCustom->color[ubFirstColor + i], pPal[i]);
+		agkCopMove(pW, &g_pCustom->color[ubFirstColor + i], pPal[i]);
 	}
 }
 
 // COLOR00 for one line of a gradient; nothing when it doesn't change.
-static void cwBackground(tCopWriter *pW, UWORD uwGameY, UWORD uwColor, UWORD uwPrev) {
+static void cwBackground(tAgkCopWriter *pW, UWORD uwGameY, UWORD uwColor, UWORD uwPrev) {
 	if(uwColor != uwPrev) {
-		cwWait(pW, uwGameY, 0);
-		cwMove(pW, &g_pCustom->color[0], uwColor);
+		agkCopWait(pW, uwGameY, 0);
+		agkCopMove(pW, &g_pCustom->color[0], uwColor);
 	}
 }
 
 // Band switch at the end of line uwGameY - 1, after its last bitplane fetch
 // (8 MOVEs: fits in the horizontal blank):
 // the new pointers are used from line uwGameY on. Returns the slots.
-static tCopSlots cwBand(tCopWriter *pW, UWORD uwGameY, const tBitMap *pBm) {
+static tCopSlots cwBand(tAgkCopWriter *pW, UWORD uwGameY, const tBitMap *pBm) {
 	tCopSlots sSlots;
 	ULONG pAddr[3];
 	for(UBYTE p = 0; p < 3; ++p) pAddr[p] = (ULONG)pBm->Planes[p];
-	cwWait(pW, uwGameY - 1, BAND_WAIT_X);
+	agkCopWait(pW, uwGameY - 1, BAND_WAIT_X);
 	sSlots.uwPtr = cwPlanePtrs(pW, 1, pAddr);
 	sSlots.uwCon1 = pW->uwPos;
-	cwMove(pW, &g_pCustom->bplcon1, 0);
+	agkCopMove(pW, &g_pCustom->bplcon1, 0);
 	// Modulo for the band bitmaps (704 px wide, interleaved: 264 - 42 = 222)
-	cwMove(pW, &g_pCustom->bpl2mod, pBm->BytesPerRow - FETCH_BYTES);
+	agkCopMove(pW, &g_pCustom->bpl2mod, pBm->BytesPerRow - FETCH_BYTES);
 	return sSlots;
 }
 
 static void copperWriteList(tCopCmd *pList, UWORD uwBeamTop) {
-	tCopWriter sW = {.pList = pList, .uwPos = COP_TOP_POS, .uwBeamTop = uwBeamTop, .isPast255 = 0};
+	tAgkCopWriter sW = {.pList = pList, .uwPos = COP_TOP_POS, .uwBeamTop = uwBeamTop, .isPast255 = 0};
 	ULONG pBlank[3] = {(ULONG)s_pBlankRow, (ULONG)s_pBlankRow, (ULONG)s_pBlankRow};
 	ULONG pLevel[3];
 	for(UBYTE p = 0; p < 3; ++p) pLevel[p] = (ULONG)s_pLevel->Planes[p];
 
 	// Top of frame: runs in the vertical blank, before any WAIT.
-	cwMove(&sW, &g_pCustom->bplcon0, BPLCON0_DPF);
-	cwMove(&sW, &g_pCustom->bplcon2, BPLCON2_DPF);
-	cwMove(&sW, &g_pCustom->ddfstrt, DDFSTRT_SCROLL);
-	cwMove(&sW, &g_pCustom->ddfstop, DDFSTOP_LORES);
-	cwMove(&sW, &g_pCustom->bpl1mod, s_pLevel->BytesPerRow - FETCH_BYTES);
-	cwMove(&sW, &g_pCustom->bpl2mod, (UWORD)-FETCH_BYTES); // re-read the blank row
+	agkCopMove(&sW, &g_pCustom->bplcon0, BPLCON0_DPF);
+	agkCopMove(&sW, &g_pCustom->bplcon2, BPLCON2_DPF);
+	agkCopMove(&sW, &g_pCustom->ddfstrt, DDFSTRT_SCROLL);
+	agkCopMove(&sW, &g_pCustom->ddfstop, DDFSTOP_LORES);
+	agkCopMove(&sW, &g_pCustom->bpl1mod, s_pLevel->BytesPerRow - FETCH_BYTES);
+	agkCopMove(&sW, &g_pCustom->bpl2mod, (UWORD)-FETCH_BYTES); // re-read the blank row
 	s_sTopSlots.uwCon1 = sW.uwPos;
-	cwMove(&sW, &g_pCustom->bplcon1, 0);
+	agkCopMove(&sW, &g_pCustom->bplcon1, 0);
 	s_sTopSlots.uwPtr = cwPlanePtrs(&sW, 0, pLevel);
 	cwPlanePtrs(&sW, 1, pBlank);
-	cwMove(&sW, &g_pCustom->color[0], s_pSkyColors[0]);
+	agkCopMove(&sW, &g_pCustom->color[0], s_pSkyColors[0]);
 	cwPalette(&sW, 0, g_pArtTilesPalette); // colours 1-7: level
 
 	// Sky gradient and bands, in beam order.
@@ -209,22 +189,22 @@ static void copperWriteList(tCopCmd *pList, UWORD uwBeamTop) {
 	// end of line 134: PF2 -> blank row, COLOR00 -> haze (line 135 is a gap);
 	// during line 135: load the hills palette (PF2 is blank, invisible);
 	// end of line 135: hills pointers + scroll + modulo.
-	cwWait(&sW, GAP_Y - 1, BAND_WAIT_X);
+	agkCopWait(&sW, GAP_Y - 1, BAND_WAIT_X);
 	cwPlanePtrs(&sW, 1, pBlank);
-	cwMove(&sW, &g_pCustom->bpl2mod, (UWORD)-FETCH_BYTES);
-	cwMove(&sW, &g_pCustom->color[0], s_pHazeColors[0]);
-	cwWait(&sW, GAP_Y, 0);
+	agkCopMove(&sW, &g_pCustom->bpl2mod, (UWORD)-FETCH_BYTES);
+	agkCopMove(&sW, &g_pCustom->color[0], s_pHazeColors[0]);
+	agkCopWait(&sW, GAP_Y, 0);
 	cwPalette(&sW, 8, g_pArtHillsPalette);
 	s_sHillSlots = cwBand(&sW, HILLS_Y, s_pHills);
 	for(UBYTE i = 1; i < HAZE_BANDS; ++i) {
 		cwBackground(&sW, HILLS_Y + i * HAZE_STEP, s_pHazeColors[i], s_pHazeColors[i - 1]);
 	}
 	// Below the hills: PF2 back to the blank row.
-	cwWait(&sW, BANDS_END - 1, BAND_WAIT_X);
-	cwMove(&sW, &g_pCustom->bpl2mod, (UWORD)-FETCH_BYTES);
+	agkCopWait(&sW, BANDS_END - 1, BAND_WAIT_X);
+	agkCopMove(&sW, &g_pCustom->bpl2mod, (UWORD)-FETCH_BYTES);
 	cwPlanePtrs(&sW, 1, pBlank);
-	cwWait(&sW, BANDS_END, 0);
-	cwMove(&sW, &g_pCustom->color[0], s_pPitColors[0]);
+	agkCopWait(&sW, BANDS_END, 0);
+	agkCopMove(&sW, &g_pCustom->color[0], s_pPitColors[0]);
 	for(UBYTE i = 1; i < PIT_BANDS; ++i) {
 		cwBackground(&sW, BANDS_END + i, s_pPitColors[i], s_pPitColors[i - 1]);
 	}
@@ -235,9 +215,7 @@ static void copperWriteList(tCopCmd *pList, UWORD uwBeamTop) {
 	}
 	// Spare slots before ACE's final WAIT: a WAIT that never fires this frame
 	// (never zeros: that's a MOVE to BLTDDAT and stops the copper).
-	while(sW.uwPos < COP_RAW_COUNT) {
-		copSetWait(&pList[sW.uwPos++].sWait, 0xDF, 0xFF);
-	}
+	agkCopFill(&sW, COP_RAW_COUNT);
 }
 
 static void copperCreate(void) {

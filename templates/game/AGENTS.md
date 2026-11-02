@@ -180,10 +180,16 @@ gets. `agk run` and `agk test` print the lowest values seen.
   - draw only what changed
 - Measure again after each fix.
 
-Drawing many BOBs: `agk/blitq.h` (in the runtime) is a blit queue. Blits are
-worked out at startup and placed per frame, and the CPU keeps working while the
-blitter draws; `examples/voidrunner` draws ~60 objects a frame with it at 50 fps.
-Its header has the recipe.
+The kit's runtime (`runtime/include/agk/`) has the pieces every game ends up
+writing; each header starts with the recipe, and `examples/voidrunner` uses all of them:
+- `blitq.h`: a blit queue. Blits are worked out at startup and placed per frame,
+  and the CPU keeps working while the blitter draws (~60 objects a frame at 50 fps).
+- `copw.h`: a copper list writer for raw mode: WAITs (the line-255 rule handled),
+  MOVEs, bitplane pointers, a jump to a second list, padding, which buffer is the back.
+- `text.h`: a line of text in any bitmap, redrawing only the characters that
+  changed, with a number formatter and the kit's 8x8 font (`g_pAgkFont8`).
+- `stars.h`: a three-layer parallax starfield from one hardware sprite and the
+  copper: no bitplanes, no blitter.
 
 When `maxload` is too high, don't guess which part is slow; profile it:
 `agk profile tests/perf.agk` plays the scenario with the emulator sampling
