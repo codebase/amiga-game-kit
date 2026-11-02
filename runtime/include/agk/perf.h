@@ -35,6 +35,11 @@
 void agkPerfBegin(void);
 void agkPerfEnd(void);
 void agkPerfReport(void);
+/** "AGK mem chip=KB chipmax=KB fast=KB": free chip RAM, its largest piece,
+ *  free fast RAM. agkPerfReport() prints one with every perf line (once a
+ *  second); call it yourself after loading a level. Scenarios check it with
+ *  expect-min-chip-free. */
+void agkMemReport(void);
 void agkPerfSetFrameVbls(UBYTE ubVbls);
 #else
 #define agkPerfBegin() do {} while(0)

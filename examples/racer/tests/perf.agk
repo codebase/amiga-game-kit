@@ -7,6 +7,7 @@ press up+left 40
 press up+right 80
 press up 200
 expect-no-dropped-frames
+expect-min-chip-free 64
 # measured ~74% (peaks 88%) of the two-frame budget with the music and the
 # engine on: the road projection and the copper loop are about half of it
 expect-max-load 90

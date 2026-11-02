@@ -153,6 +153,12 @@ frames this prints `AGK perf frames=50 dropped=0 load=9 maxload=11`:
 - **load** and **maxload** are the average and worst % of the 1/50 s frame spent on your code.
 - **dropped** counts frames that missed the vertical blank. That's visible as stutter or half speed.
 
+Every perf line comes with `AGK mem chip=KB chipmax=KB fast=KB`: free chip RAM,
+its largest free piece, free fast RAM. Bitmaps, copper lists and samples must be
+in chip RAM (512 K on an A500, less after the OS), and a game that runs out
+fails in strange ways: `expect-min-chip-free 64` in a test says how close it
+gets. `agk run` and `agk test` print the lowest values seen.
+
 `tests/perf.agk` guards this with `expect-no-dropped-frames` and
 `expect-max-load 60`. Keep it passing:
 - After adding something expensive, look at `maxload`.

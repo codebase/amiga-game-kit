@@ -67,6 +67,12 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(sum(l.startswith("agk screenshot") for l in sc.lines), 5)
         self.assertEqual(sc.frames, 4)
 
+    def test_min_chip_free(self):
+        sc = scenario.parse("expect-min-chip-free 64\n")
+        self.assertEqual(sc.perf, [("chipfree", 64, 1)])
+        with self.assertRaisesRegex(scenario.ScenarioError, "usage"):
+            scenario.parse("expect-min-chip-free")
+
     def test_errors(self):
         for line, msg in [("expect-scroll 0 0 10 10 8", "usage"),
                           ("expect-scroll 0 0 400 10 8 1", "inside 320x256"),

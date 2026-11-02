@@ -32,6 +32,7 @@ expect-serial "spr=1 skip=0"
 expect-no-serial "deaths=[1-9]"
 expect-no-serial "skip=[1-9]"
 expect-no-dropped-frames
+expect-min-chip-free 64
 # Measured on a500: load ~33% on average, maxload 48-54%. Most of it is the
 # 14-value serial state line printed every frame (~20%); the music player's
 # timer interrupt (ptplayer, 56 ticks/s at 140 BPM) adds up to ~15% to the

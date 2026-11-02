@@ -449,6 +449,10 @@ def _report(res, as_json):
                 where = (f"around game x={gx0}..{gx1} y={gy0}..{gy1}" if gx0 <= gx1 and gy0 <= gy1
                          else "outside the 320x256 playfield (in the border)")
                 print(f"    golden: DIFFERENT - {g['pixels']} px changed {where}, see {rel(g['diff'])}")
+    if res.get("mem"):
+        m = res["mem"]
+        print(f"  memory: chip free {m['chip']} KB at the lowest (largest piece {m['chipmax']} KB), "
+              f"fast {m['fast']} KB")
     if res.get("audio_png"):
         marks = ", ".join(f"{k}@{v}" for k, v in res.get("marks", {}).items())
         print(f"  audio: {rel(res['audio'])} | spectrogram: {rel(res['audio_png'])} (marks, frame: {marks})")

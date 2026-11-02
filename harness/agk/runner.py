@@ -394,6 +394,10 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
             result["ok"] = False
             result["failures"].append(f"screenshot '{name}' was not produced")
 
+    mems = [dict(kv.split("=") for kv in re.findall(r"\w+=\d+", l))
+            for l in serial.splitlines() if l.startswith("AGK mem ")]
+    if mems:
+        result["mem"] = {k: min(int(m.get(k, 0)) for m in mems) for k in ("chip", "chipmax", "fast")}
     if scenario.perf:
         reports = [dict(kv.split("=") for kv in re.findall(r"\w+=\d+", l))
                    for l in serial.splitlines() if l.startswith("AGK perf ")]
@@ -404,7 +408,18 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
                     f"line {lineno}: no 'AGK perf' lines on serial - call agkPerfBegin()/agkPerfEnd() "
                     f"(agk/perf.h) every frame; reports come every 50 frames, so run at least that long")
                 break
-            if kind == "dropped":
+            if kind == "chipfree":
+                if not mems:
+                    result["ok"] = False
+                    result["failures"].append(f"line {lineno}: no 'AGK mem' lines on serial (agkPerfReport prints "
+                                              f"them; or call agkMemReport())")
+                elif result["mem"]["chip"] < limit:
+                    result["ok"] = False
+                    result["failures"].append(
+                        f"line {lineno}: free chip RAM fell to {result['mem']['chip']} KB (largest piece "
+                        f"{result['mem']['chipmax']} KB), limit {limit} KB. Big bitmaps and sound samples "
+                        f"live in chip RAM; smaller buffers, fewer frames, or data in fast RAM")
+            elif kind == "dropped":
                 dropped = sum(int(r.get("dropped", 0)) for r in reports)
                 if dropped:
                     result["ok"] = False

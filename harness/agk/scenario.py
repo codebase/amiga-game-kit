@@ -56,6 +56,12 @@ Commands:
                                     comes from whichever tests/ or demo/ scenario has
                                     'checkpoint NAME'; it's made again (by playing that
                                     scenario up to there) when the build or those lines change
+    expect-min-chip-free KB         free chip RAM never fell below KB (from the "AGK mem" lines
+                                    agkPerfReport prints once a second: chip=free, chipmax=the
+                                    largest free piece, fast=free fast RAM). A game that runs out
+                                    dies in strange ways; this says how close it gets. Kickstart
+                                    1.3, 3.1 and AROS leave different amounts free: set KB from
+                                    the smallest
     expect-no-dropped-frames        the game never missed a frame (needs agk/perf.h in the game)
     expect-max-load PERCENT         no frame used more than PERCENT of the frame time (agk/perf.h)
 
@@ -323,6 +329,11 @@ def parse(text, name="scenario"):
             if args:
                 raise ScenarioError(f"line {lineno}: usage: expect-no-dropped-frames")
             sc.perf.append(("dropped", 0, lineno))
+
+        elif cmd == "expect-min-chip-free":
+            if len(args) != 1:
+                raise ScenarioError(f"line {lineno}: usage: expect-min-chip-free KB")
+            sc.perf.append(("chipfree", _int(args[0], lineno, "KB"), lineno))
 
         elif cmd == "expect-max-load":
             if len(args) != 1:

@@ -1,6 +1,8 @@
 #include <agk/perf.h>
 #include <agk/debug.h>
 #include <ace/managers/timer.h>
+#include <clib/exec_protos.h>
+#include <exec/memory.h>
 #include <ace/utils/custom.h>
 
 #define PAL_LINES 313
@@ -96,10 +98,23 @@ void agkPerfReport(void) {
 	agkState("load", (uwAvgLines * 100) / (PAL_LINES * s_ubFrameVbls));
 	agkState("maxload", (s_uwMaxLines * 100) / (PAL_LINES * s_ubFrameVbls));
 	agkEnd();
+	agkMemReport();
 	s_uwFrames = 0;
 	s_uwDropped = 0;
 	s_uwMaxLines = 0;
 	s_ulSumLines = 0;
+}
+
+void agkMemReport(void) {
+	// AvailMem only walks exec's free lists under Forbid: safe with the OS
+	// switched off (ACE does the same when an allocation fails), and far
+	// cheaper than switching it on and off, which costs a few % of a frame
+	ULONG ulChip = AvailMem(MEMF_CHIP), ulChipMax = AvailMem(MEMF_CHIP | MEMF_LARGEST);
+	ULONG ulFast = AvailMem(MEMF_FAST);
+	agkState("mem chip", (LONG)(ulChip >> 10));
+	agkState("chipmax", (LONG)(ulChipMax >> 10));
+	agkState("fast", (LONG)(ulFast >> 10));
+	agkEnd();
 }
 
 void agkPerfSetFrameVbls(UBYTE ubVbls) {

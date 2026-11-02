@@ -5,4 +5,5 @@ wait-serial "AGK t0"
 wait-serial "phase=1" 1200
 wait 4800
 expect-no-dropped-frames
+expect-min-chip-free 100
 expect-max-load 100
