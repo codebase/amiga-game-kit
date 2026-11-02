@@ -1,0 +1,3 @@
+# One bitplane: the particles are pixels of colour 1. Reference: agk help-art
+[art]
+depth = 1

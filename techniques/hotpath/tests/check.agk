@@ -1,0 +1,6 @@
+# Every 100 frames the C plotter runs on a copy of the screen with the same
+# particles, and its bytes must equal the asm plotter's; both are timed.
+wait 320
+expect-serial "AGK hot check=1"
+expect-serial "c_lines=\d+ asm_lines=\d+"
+expect-no-serial "ERR|STACK SMASHED"

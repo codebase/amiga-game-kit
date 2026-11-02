@@ -1,0 +1,18 @@
+name = "hotpath"
+profile = "a500"                                     # default for agk run
+test_profiles = ["a500", "a500-ks31", "a500-aros"]   # agk test runs all of these
+sync = "ticks"                                       # waits count game frames (agkPerfBegin marks them)
+boot = "AGK ready"                                   # serial text that means "first frame is on screen"
+unit_sources = ["src/logic.c"]                       # host-compiled for agk unit (no Amiga headers!)
+
+[cmake]                                              # build options, see CMakeLists.txt
+# ACE_BOB_WRAP_Y = false
+
+[release]                                            # agk release: the zip for Aminet / itch.io (agk help-release)
+title = "hotpath"
+version = "1.0"
+author = ""
+short = "An Amiga game"                              # one line, up to 40 characters
+type = "game/misc"                                   # Aminet type: game/shoot, game/jump, game/race, game/misc
+description = ""
+controls = "Joystick in port 2."

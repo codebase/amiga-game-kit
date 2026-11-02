@@ -1,0 +1,9 @@
+# Moving the mouse (port 1) must not tilt the field: the game reads only the
+# joystick in port 2 (ACE JOY1).
+wait 5
+mouse 40 0
+wait 5
+mouse -60 30
+wait 60
+expect-no-serial "\bgx=(?!0 )-?\d+"
+expect-no-serial "\bgy=(?!1\b)-?\d+"

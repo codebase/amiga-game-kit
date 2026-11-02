@@ -17,7 +17,7 @@ Agents: copy the pattern from here rather than from memory. It's known to work.
 | [copper](copper/TECHNIQUE.md) | Sky gradient (58 colours on 4-colour screen), HUD palette split, moving raster bar; raw vs block mode (2–3% vs ~90% of a frame). Found and fixed an ACE line-255 bug | ✅ tested, 12/12 |
 | [sprites](sprites/TECHNIQUE.md) | The art pipeline: text art → animated hardware sprite, PNG sheet → animated BOB; rules enforced, previews | ✅ tested, 12/12 |
 | copper → sprite tricks | Horizontal sprite reuse (R-Type 2 style repeating backgrounds), vertical multiplexing (many bullets from few channels), sprite HUD, sprite parallax layer. See [codetapper's breakdowns](https://codetapper.com/amiga/sprite-tricks/) | planned |
-| hot paths | C first, then a proven hot spot in asm, checked against the C version | planned |
+| [hotpath](hotpath/TECHNIQUE.md) | A hot loop in 68000 asm (GCC inline asm), with the C version kept, run against it every 100 frames and compared by the blitter; both timed. 1.6x over careful C; a tearing bug found by the cross-profile tests | ✅ tested, 15/15 |
 | loading | Trackloader + packed data instead of AmigaDOS | planned |
 
 Run one: `agk test techniques/<name>`. Measure one: every technique reports

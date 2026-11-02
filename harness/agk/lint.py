@@ -168,6 +168,8 @@ def findings(parsed, allow=(), everything=False):
         if not everything and (name in setup or SETUP.search(name) or name in allow):
             skipped += 1
             continue
+        if not everything and obj and "/agk.dir/" in obj and name not in callers:
+            continue   # a runtime function this game never calls
         calls = [(h, n) + describe(h) for h, n in sorted(refs.items())]
         out.append((source_of(obj), name, calls))
     return out, skipped

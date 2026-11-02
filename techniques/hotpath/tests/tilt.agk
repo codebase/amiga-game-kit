@@ -1,0 +1,6 @@
+# The joystick tilts the field; the particles follow
+press right+up 30
+wait 10
+expect-serial "gx=1 gy=-1"
+screenshot tilted
+expect-no-serial "ERR|STACK SMASHED"

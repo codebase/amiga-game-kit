@@ -1,0 +1,4 @@
+# The first frame: 256 particles over a dark field
+screenshot start
+expect-serial "AGK ready"
+expect-no-serial "ERR|STACK SMASHED"

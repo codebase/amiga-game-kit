@@ -1,0 +1,8 @@
+# 128 particles erased and plotted every frame, in asm (about half a frame);
+# the peak is the check frame, which also runs the C plotter
+press right+down 60
+press left 60
+press up+left 40
+expect-no-dropped-frames
+expect-min-chip-free 64
+expect-max-load 95
