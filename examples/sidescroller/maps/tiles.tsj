@@ -1,0 +1,85 @@
+{
+ "name": "tiles",
+ "type": "tileset",
+ "tilewidth": 16,
+ "tileheight": 16,
+ "tilecount": 8,
+ "columns": 1,
+ "image": "tiles.png",
+ "imagewidth": 16,
+ "imageheight": 128,
+ "margin": 0,
+ "spacing": 0,
+ "tiles": [
+  {
+   "id": 1,
+   "properties": [
+    {
+     "name": "solid",
+     "type": "bool",
+     "value": true
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "properties": [
+    {
+     "name": "solid",
+     "type": "bool",
+     "value": true
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "properties": [
+    {
+     "name": "solid",
+     "type": "bool",
+     "value": true
+    }
+   ]
+  },
+  {
+   "id": 5,
+   "properties": [
+    {
+     "name": "solid",
+     "type": "bool",
+     "value": true
+    }
+   ]
+  },
+  {
+   "id": 6,
+   "properties": [
+    {
+     "name": "solid",
+     "type": "bool",
+     "value": true
+    }
+   ]
+  },
+  {
+   "id": 7,
+   "properties": [
+    {
+     "name": "solid",
+     "type": "bool",
+     "value": true
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "properties": [
+    {
+     "name": "oneway",
+     "type": "bool",
+     "value": true
+    }
+   ]
+  }
+ ]
+}

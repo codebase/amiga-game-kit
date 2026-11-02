@@ -34,7 +34,9 @@ uses no ACE buffer manager. The copper list sets every bitplane register itself.
 ```
 
 - **PF1 (front)**: the level, 80×16 tiles of 16×16 px, drawn once at startup into a
-  1280×256×3 bitmap (`src/logic.c` holds the map, `art/tiles.txt` the tiles).
+  1280×256×3 bitmap. The level is `maps/level1.tmj`, made in Tiled: `agk map` turns it
+  into C tables (`build/maps/maps.h`), its tileset image is the tiles, and the enemies
+  are its objects (with `dir`, `xmin`, `xmax` properties).
 - **PF2 (back)**: the `mountains` and `hills` PNGs, 3 planes each, 384 px loops
   (704 px bitmaps including the 320 px `wrap_x` copy).
 - **Player**: hardware sprite 0, with a 4-frame walk cycle (`art/player.txt`), in front of both playfields.

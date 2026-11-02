@@ -31,10 +31,10 @@ static void testLevelShape(void) {
 	CHECK(logicTileAt(22, 13) == TILE_EMPTY); // first pit
 	CHECK(logicTileAt(8, 10) == TILE_STONE);
 	// art: cliff faces at the pit edges only (not at the level ends)
-	CHECK(logicTileArtFrame(5, 13) == 0 && logicTileArtFrame(5, 14) == 1 && logicTileArtFrame(8, 10) == 2);
-	CHECK(logicTileArtFrame(21, 13) == 3 && logicTileArtFrame(25, 13) == 4); // pit 1: 22..24
-	CHECK(logicTileArtFrame(21, 15) == 5 && logicTileArtFrame(25, 15) == 6);
-	CHECK(logicTileArtFrame(0, 13) == 0 && logicTileArtFrame(79, 14) == 1);
+	CHECK(logicTileArtFrame(5, 13) == 1 && logicTileArtFrame(5, 14) == 2 && logicTileArtFrame(8, 10) == 3);
+	CHECK(logicTileArtFrame(21, 13) == 4 && logicTileArtFrame(25, 13) == 5); // pit 1: 22..24
+	CHECK(logicTileArtFrame(21, 15) == 6 && logicTileArtFrame(25, 15) == 7);
+	CHECK(logicTileArtFrame(0, 13) == 1 && logicTileArtFrame(79, 14) == 2);
 	CHECK(logicTileAt(-1, 13) == TILE_EMPTY && logicTileAt(80, 13) == TILE_EMPTY);
 	CHECK(logicTileAt(5, -1) == TILE_EMPTY && logicTileAt(5, 16) == TILE_EMPTY);
 }

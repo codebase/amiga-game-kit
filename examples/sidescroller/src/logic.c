@@ -1,40 +1,14 @@
 #include "logic.h"
 
 // 80 columns x 16 rows. '.' empty, '#' grass top, 'd' dirt, '=' stone slab.
-const char *const g_pLevelRows[LEVEL_TILES_H] = {
-//   0         1         2         3         4         5         6         7
-//   01234567890123456789012345678901234567890123456789012345678901234567890123456789
-	"................................................................................", // 0
-	"................................................................................", // 1
-	"................................................................................", // 2
-	"................................................................................", // 3
-	"........................====.................===..................===...........", // 4
-	"................................................................................", // 5
-	"................................................................................", // 6
-	"...............====...................====...............====...................", // 7
-	"................................................................................", // 8
-	"................................................................................", // 9
-	"........====..................=====...................====..............====....", // 10
-	"................................................................................", // 11
-	"................................................................................", // 12
-	"######################...######################...#############..###############", // 13
-	"dddddddddddddddddddddd...dddddddddddddddddddddd...ddddddddddddd..ddddddddddddddd", // 14
-	"dddddddddddddddddddddd...dddddddddddddddddddddd...ddddddddddddd..ddddddddddddddd", // 15
-};
-
 uint8_t logicTileAt(int16_t tx, int16_t ty) {
 	if(tx < 0 || tx >= LEVEL_TILES_W || ty < 0 || ty >= LEVEL_TILES_H) {
 		return TILE_EMPTY;
 	}
-	switch(g_pLevelRows[ty][tx]) {
-		case '#': return TILE_GRASS;
-		case 'd': return TILE_DIRT;
-		case '=': return TILE_STONE;
-		default: return TILE_EMPTY;
-	}
+	return mapLevel1At(tx, ty);   // maps/level1.tmj (agk map)
 }
 
-#define TILE_FRAME_EDGE_R 3 // grass with a pit on the right; +1 pit on the left, +2 dirt
+#define TILE_FRAME_EDGE_R 4 // grass with a pit on the right; +1 pit on the left, +2 dirt
 uint8_t logicTileArtFrame(int16_t tx, int16_t ty) {
 	uint8_t t = logicTileAt(tx, ty);
 	if(t == TILE_GRASS || t == TILE_DIRT) {
@@ -43,13 +17,13 @@ uint8_t logicTileArtFrame(int16_t tx, int16_t ty) {
 		if(tx < LEVEL_TILES_W - 1 && logicTileAt(tx + 1, ty) == TILE_EMPTY) return TILE_FRAME_EDGE_R + ubDirt;
 		if(tx > 0 && logicTileAt(tx - 1, ty) == TILE_EMPTY) return TILE_FRAME_EDGE_R + 1 + ubDirt;
 	}
-	return t - 1;
+	return t;   // the tileset's tile i is frame i (tile 0 is blank)
 }
 
 static uint8_t isSolidPx(int16_t px, int16_t py) {
 	if(py < 0) return 0;
 	uint8_t t = logicTileAt(px >> TILE_SHIFT, py >> TILE_SHIFT);
-	return t == TILE_GRASS || t == TILE_DIRT;
+	return (g_pTilesTilesFlags[t] & MAP_TILE_SOLID) != 0;   // the tileset's "solid" property
 }
 
 // Can the player's box (top-left x,y) move down one pixel? Checks the row
@@ -107,16 +81,6 @@ uint8_t logicScrollDelay(uint16_t scrollX) {
 // sprite pair, which can't show two enemies on the same lines: so the ranges
 // are at least SCREEN_W + ENEMY_W (336) px apart and two are never on screen
 // together (unit-tested).
-static const struct {
-	int16_t x;
-	int8_t dir;
-	int16_t xMin, xMax;
-} s_pEnemySpawns[ENEMY_COUNT] = {
-	{ 240, -1,  170,  264}, // 0: first stretch of ground (0..351)
-	{ 700, -1,  600,  735}, // 1: between pit 1 and pit 2 (400..751)
-	{1150, -1, 1071, 1264}, // 2: last stretch of ground (1040..1279), to the level end
-};
-
 // Can an enemy at x,y take one pixel step in dir? Not past the level ends,
 // not into a solid tile, and not off its floor: the tile under the leading
 // foot column must be ground or a slab top (that's how it turns at pits and
@@ -148,12 +112,17 @@ void logicEnemyPlace(tEnemy *pEnemy, int16_t x, int16_t y, int8_t dir) {
 }
 
 static void enemiesInit(tGameState *pState) {
-	for(uint8_t i = 0; i < ENEMY_COUNT; ++i) {
-		tEnemy *pE = &pState->pEnemies[i];
-		logicEnemyPlace(pE, s_pEnemySpawns[i].x, START_Y, s_pEnemySpawns[i].dir);
-		// never beyond the floor, and never closer to the next enemy than a screen
-		if(pE->xMin < s_pEnemySpawns[i].xMin) pE->xMin = s_pEnemySpawns[i].xMin;
-		if(pE->xMax > s_pEnemySpawns[i].xMax) pE->xMax = s_pEnemySpawns[i].xMax;
+	// The map's "enemy" objects (maps/level1.tmj): where each starts, its
+	// direction, and how far it may patrol (never closer to the next one than
+	// a screen)
+	uint8_t i = 0;
+	for(uint8_t o = 0; o < MAP_LEVEL1_OBJECTS && i < ENEMY_COUNT; ++o) {
+		const tMapObject *pO = &g_pMapLevel1Objects[o];
+		if(pO->ubType != MAP_OBJ_ENEMY) continue;
+		tEnemy *pE = &pState->pEnemies[i++];
+		logicEnemyPlace(pE, (int16_t)pO->uwX, START_Y, (int8_t)pO->pProps[MAP_PROP_DIR]);
+		if(pE->xMin < pO->pProps[MAP_PROP_XMIN]) pE->xMin = pO->pProps[MAP_PROP_XMIN];
+		if(pE->xMax > pO->pProps[MAP_PROP_XMAX]) pE->xMax = pO->pProps[MAP_PROP_XMAX];
 	}
 	logicEnemySortY(pState);
 }

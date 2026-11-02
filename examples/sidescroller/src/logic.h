@@ -11,6 +11,7 @@
 #define _LOGIC_H_
 
 #include <stdint.h>
+#include "maps.h"   // the level, from maps/level1.tmj (agk map)
 
 // Screen (one PAL lores playfield)
 #define SCREEN_W 320
@@ -19,8 +20,8 @@
 // Level: 80x16 tiles of 16x16 px = 1280x256 px (the front playfield, PF1)
 #define TILE_SIZE 16
 #define TILE_SHIFT 4
-#define LEVEL_TILES_W 80
-#define LEVEL_TILES_H 16
+#define LEVEL_TILES_W MAP_LEVEL1_W   // maps/level1.tmj, made in Tiled (agk map)
+#define LEVEL_TILES_H MAP_LEVEL1_H
 #define LEVEL_W (LEVEL_TILES_W * TILE_SIZE)
 #define LEVEL_H (LEVEL_TILES_H * TILE_SIZE)
 #define CAM_MAX (LEVEL_W - SCREEN_W)
@@ -159,8 +160,6 @@ typedef struct {
 
 /** Which hero frame (0..7, right-facing) shows this state. */
 uint8_t logicHeroFrame(const tGameState *pState);
-
-extern const char *const g_pLevelRows[LEVEL_TILES_H];
 
 /** Tile id at tile coordinates; outside the map = TILE_EMPTY. */
 uint8_t logicTileAt(int16_t tx, int16_t ty);

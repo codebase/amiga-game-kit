@@ -119,6 +119,13 @@ has both formats.
 
 ## Videos
 
+**Levels:** `maps/*.tmj` are Tiled maps (JSON). `agk map` (and every build)
+turns them into `build/maps/maps.h`: tile tables for ACE's tile buffer,
+`mapNameAt(tx, ty)` for the rules, tile property bits (`MAP_TILE_SOLID`), and
+the objects (`g_pMapNameObjects`: class, position, number properties). It's
+plain C, so `src/logic.c` can use it and `agk unit` tests it. `agk help-map`.
+`examples/sidescroller` is the pattern.
+
 `agk release` zips the ADF, the executable, a README and a screenshot into
 `build/release/NAME-VERSION.zip`, with an Aminet `.readme` beside it, from
 `agk.toml`'s `[release]` section: fill in the title, author, description and

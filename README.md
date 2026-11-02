@@ -170,6 +170,10 @@ scenario in the emulator, captures every frame and Paula's output, and encodes
 an MP4 with sound (4x, square pixels) and a silent GIF with ffmpeg. The video
 above is `examples/sidescroller/demo/showcase.agk`.
 
+**Levels:** `maps/*.tmj` made in [Tiled](https://www.mapeditor.org) become C
+tables with `agk map`: tiles for ACE's tile buffer, property bits for the
+rules, and objects for spawns and triggers (`examples/sidescroller`).
+
 **Shipping:** `agk release` zips the ADF, the executable, a README and a
 screenshot into `build/release/NAME-VERSION.zip`, with an Aminet `.readme`
 beside it, from `agk.toml`'s `[release]` section.

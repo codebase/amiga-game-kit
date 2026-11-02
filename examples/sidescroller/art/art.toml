@@ -17,8 +17,10 @@ palette = "auto"
 wrap_x = 320
 
 [tiles]
-source = "tiles.txt"      # 16x16 level tiles for PF1, stacked vertically
+source = "../maps/tiles.png"   # the Tiled tileset (agk map): 16x16 tiles, tile 0 blank
 kind = "bitmap"
+frame_width = 16
+frame_height = 16
 depth = 3
 palette = "auto"          # own palette -> colours 1-7 of the front playfield
 

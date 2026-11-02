@@ -65,7 +65,7 @@ def _newest_source(proj):
         for base, dirs, files in os.walk(root):
             dirs[:] = [d for d in dirs if d not in ("build", "tests", ".git")]  # prune in place
             for f in files:
-                if (f.endswith((".c", ".h", ".s", ".asm", ".i", ".cmake", ".toml", ".png"))
+                if (f.endswith((".c", ".h", ".s", ".asm", ".i", ".cmake", ".toml", ".png", ".tmj", ".tsj"))
                     or f == "CMakeLists.txt" or (os.path.basename(base) == "art" and f.endswith(".txt"))
                     or (os.path.basename(base) == "sound" and f.endswith(".mml"))):
                     newest = max(newest, os.path.getmtime(os.path.join(base, f)))
@@ -77,10 +77,11 @@ def need_adf(proj, build=True):
     rebuilding if needed so tests never run against stale code."""
     # Regenerate art first (cheap; files are only rewritten when their content
     # changes), so edited art or a newer converter counts as a source change.
-    if not _run_art(proj, quiet=True) or not _run_sound(proj, quiet=True, previews=False):
+    if (not _run_art(proj, quiet=True) or not _run_sound(proj, quiet=True, previews=False)
+            or not _run_maps(proj, quiet=True)):
         raise SystemExit(1)
     newest = _newest_source(proj)
-    for gen in ("art/art.c", "art/art.h", "sound/sound.c", "sound/sound.h"):
+    for gen in ("art/art.c", "art/art.h", "sound/sound.c", "sound/sound.h", "maps/maps.c", "maps/maps.h"):
         p = os.path.join(proj["dir"], "build", gen)
         if os.path.exists(p):
             newest = max(newest, os.path.getmtime(p))
@@ -167,6 +168,36 @@ def _run_art(proj, quiet=False):
     if not quiet:
         print(f"  previews: {rel(os.path.join(proj['dir'], 'build', 'art', 'preview'))}/", file=sys.stderr)
     return True
+
+
+def _run_maps(proj, quiet=False):
+    """Convert maps/ (if any). Returns False on errors (already printed)."""
+    from . import tilemap
+    try:
+        maps = tilemap.build(proj["dir"])
+    except tilemap.MapError as e:
+        print(f"map error: {e}", file=sys.stderr)
+        return False
+    if maps is None:
+        return True
+    for m in maps:
+        if not quiet or m["warnings"]:
+            layers = ", ".join(f"{n} ({ts})" if ts else n for n, _, ts in m["layers"])
+            print(f"  map {m['name']}: {m['w']}x{m['h']} tiles of {m['tile']} px; layers {layers}; "
+                  f"{len(m['objects'])} objects", file=sys.stderr)
+        for w in m["warnings"]:
+            print(f"    warning: {w}", file=sys.stderr)
+    if not quiet:
+        print(f"  previews: {rel(os.path.join(proj['dir'], 'build', 'maps', 'preview'))}/", file=sys.stderr)
+    return True
+
+
+def cmd_map(args):
+    proj = load_project(args.project)
+    if not os.path.isdir(os.path.join(proj["dir"], "maps")):
+        print("no maps/ directory: put Tiled maps there as JSON (.tmj); agk help-map", file=sys.stderr)
+        return 1
+    return 0 if _run_maps(proj) else 1
 
 
 def _run_sound(proj, quiet=False, previews=True):
@@ -389,7 +420,7 @@ def cmd_art_clean(args):
 
 def cmd_build(args):
     proj = load_project(args.project)
-    if not _run_art(proj, quiet=True) or not _run_sound(proj, quiet=True):
+    if not _run_art(proj, quiet=True) or not _run_sound(proj, quiet=True) or not _run_maps(proj, quiet=True):
         return 1
     rc = subprocess.run(_build_cmd(proj, args.define or [])).returncode
     if rc == 0:
@@ -754,11 +785,16 @@ def cmd_unit(args):
     srcs = [os.path.join(proj["dir"], s) for s in proj["unit_sources"]]
     bindir = os.path.join(proj["dir"], "build", "unit")
     os.makedirs(bindir, exist_ok=True)
+    # The game's maps (plain C tables) are part of its rules
+    if not _run_maps(proj, quiet=True):
+        return 1
+    maps_c = [p for p in [os.path.join(proj["dir"], "build", "maps", "maps.c")] if os.path.exists(p)]
     failed = 0
     for t in tests:
         exe = os.path.join(bindir, os.path.splitext(t)[0])
         cmd = [cc, "-std=c11", "-Wall", "-Wextra", "-g", "-fsanitize=address,undefined",
-               "-I", os.path.join(proj["dir"], "src"), *srcs, os.path.join(udir, t), "-o", exe]
+               "-I", os.path.join(proj["dir"], "src"), "-I", os.path.join(proj["dir"], "build", "maps"),
+               *srcs, *maps_c, os.path.join(udir, t), "-o", exe]
         cp = subprocess.run(cmd, capture_output=True, text=True)
         if cp.returncode != 0:
             print(f"FAIL {t}: does not compile on the host (unit_sources must not use Amiga headers)")
@@ -931,6 +967,9 @@ def main(argv=None):
     sub.add_parser("help-art", help="print the art pipeline reference")
     sub.add_parser("help-sound", help="print the sound and music (MML) reference")
     sub.add_parser("help-release", help="print the agk release reference")
+    sub.add_parser("help-map", help="print the Tiled map import reference")
+    p = sub.add_parser("map", help="convert maps/*.tmj (Tiled) to C tables and draw previews")
+    p.add_argument("project", nargs="?")
     p = sub.add_parser("sound", help="convert sound/ (effects + MML music) and write previews")
     p.add_argument("project", nargs="?")
     sub.add_parser("help", help="show this help")
@@ -946,6 +985,10 @@ def main(argv=None):
         from . import sound
         print(sound.__doc__)
         return 0
+    if args.cmd == "help-map":
+        from . import tilemap
+        print(tilemap.__doc__)
+        return 0
     if args.cmd == "help-release":
         from . import release
         print(release.__doc__)
@@ -960,7 +1003,7 @@ def main(argv=None):
                 "art-export": cmd_art_export, "art-animate": cmd_art_animate,
                 "play": cmd_play, "art-clean": cmd_art_clean, "sound": cmd_sound,
                 "record": cmd_record, "lint": cmd_lint,
-                "profile": cmd_profile, "release": cmd_release}[args.cmd](args)
+                "profile": cmd_profile, "release": cmd_release, "map": cmd_map}[args.cmd](args)
     except runner.RunError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
