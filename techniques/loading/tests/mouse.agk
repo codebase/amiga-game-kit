@@ -1,0 +1,7 @@
+# The mouse (port 1) doesn't load levels: only fire on the joystick (port 2) does
+wait 5
+mouse 40 0
+wait 5
+mouse -60 30
+wait 60
+expect-no-serial "level=2"

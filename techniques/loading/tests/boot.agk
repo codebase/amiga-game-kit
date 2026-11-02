@@ -1,0 +1,6 @@
+# Level 1 is loaded from the floppy at boot: the picture, and the serial line
+# with the unpacked size and how many frames the load took
+screenshot level1
+expect-serial "AGK loaded level1.pln.pk"
+expect-serial "size=40960 frames=\d+ level=1"
+expect-no-serial "ERR|STACK SMASHED"

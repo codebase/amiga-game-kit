@@ -29,11 +29,12 @@ all tests pass. Check both.
 | `harness/agk/sound.py` | sound pipeline: effect synthesis, MML → ProTracker MOD, previews, spectrograms (`agk sound`) |
 | `harness/agk/tilemap.py` | `agk map`: Tiled `.tmj` → `build/maps/maps.h` (tile tables, property bits, objects) |
 | `harness/agk/release.py` | `agk release`: the zip and the Aminet readme |
+| `harness/agk/pack.py` | `disk/` → packed files on the ADF (the LZ packer; `runtime/src/unpack.c` reads them) |
 | `harness/agk/motion.py` | `expect-scroll`: how far a region moved between consecutive frames |
 | `harness/agk/profile.py` | `agk profile`: places the emulator's per-line PC and bus samples in the game (linker map + disassembly) |
 | `harness/agk/lint.py` | `agk lint`: per-frame functions that call libgcc maths (from `objdump -dr` of the game's objects) |
 | `harness/agk/mcp.py` | MCP stdio server (stdlib only) |
-| `runtime/` | C library every game links: `agk/debug.h` (the serial channel), `perf.h` (frame meter, memory report), `blitq.h` (blit queue), `copw.h` (copper writer), `text.h` (text lines, the kit font: `tools/font8.py`), `stars.h` (sprite starfield) |
+| `runtime/` | C library every game links: `agk/debug.h` (the serial channel), `perf.h` (frame meter, memory report), `blitq.h` (blit queue), `copw.h` (copper writer), `text.h` (text lines, the kit font: `tools/font8.py`), `stars.h` (sprite starfield), `pack.h` (packed disk files: load + unpack) |
 | `templates/game/` | what `agk new` copies; `{{name}}` / `{{kit}}` are substituted |
 | `patches/` | our changes to vAmiga and ACE, applied by `tools/setup` |
 | `third_party/` | pinned checkouts (gitignored); edit through patches, not in place |

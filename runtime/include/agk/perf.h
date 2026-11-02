@@ -41,6 +41,10 @@ void agkPerfReport(void);
  *  expect-min-chip-free. */
 void agkMemReport(void);
 void agkPerfSetFrameVbls(UBYTE ubVbls);
+/** After something that takes longer than a frame on purpose (loading a
+ *  file, building a level): the gap to the next agkPerfBegin() isn't counted
+ *  as dropped frames, and that frame's length isn't counted either. */
+void agkPerfSkip(void);
 #else
 #define agkPerfBegin() do {} while(0)
 #define agkPerfEnd() do {} while(0)

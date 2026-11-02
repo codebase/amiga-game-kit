@@ -126,6 +126,13 @@ the objects (`g_pMapNameObjects`: class, position, number properties). It's
 plain C, so `src/logic.c` can use it and `agk unit` tests it. `agk help-map`.
 `examples/sidescroller` is the pattern.
 
+**Data on the disk:** files in `disk/` are packed by every build (`build/disk/NAME.pk`,
+an LZ format) and written to the floppy; the game loads one with
+`agkLoadFile("NAME.pk", pDest, ulMax)` from `agk/pack.h` when it needs it, so
+the executable stays small and levels can be as many as the disk holds. Loading
+takes real time from a floppy (call `agkPerfSkip()` after). `agk help-disk`;
+`techniques/loading` is the pattern.
+
 `agk release` zips the ADF, the executable, a README and a screenshot into
 `build/release/NAME-VERSION.zip`, with an Aminet `.readme` beside it, from
 `agk.toml`'s `[release]` section: fill in the title, author, description and

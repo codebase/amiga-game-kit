@@ -1,0 +1,11 @@
+# Fire loads level 2 (a different picture), fire again comes back to level 1
+press fire 2
+wait-serial "level=2" 500
+wait 2
+screenshot level2
+press fire 2
+wait-serial "level=1" 500
+wait 2
+screenshot level1again
+expect-serial "AGK loaded level2.pln.pk"
+expect-no-serial "ERR|STACK SMASHED"

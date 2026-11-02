@@ -138,6 +138,10 @@ void agkMemReport(void) {
 	agkEnd();
 }
 
+void agkPerfSkip(void) {
+	s_isStarted = 0;
+}
+
 void agkPerfSetFrameVbls(UBYTE ubVbls) {
 	s_ubFrameVbls = ubVbls ? ubVbls : 1;
 }

@@ -44,6 +44,11 @@ docker run --rm -u "$(id -u):$(id -g)" \
   xdftool build/$NAME.adf format AGK ofs + boot install \
     + write build/$NAME $NAME + makedir s \
     + write build/startup-sequence s/startup-sequence >/dev/null
+  # Packed data files (disk/ -> build/disk/NAME.pk, see agk help-disk)
+  for f in build/disk/*.pk; do
+    [ -e \"\$f\" ] && xdftool build/$NAME.adf write \"\$f\" \"\$(basename \"\$f\")\" >/dev/null
+  done
+  true
 " > "$LOG" 2>&1
 RC=$?
 set -e

@@ -1,0 +1,7 @@
+# After a load (not counted: agkPerfSkip), the game idles under 10% of a frame
+press fire 2
+wait-serial "level=2" 500
+wait 120
+expect-no-dropped-frames
+expect-min-chip-free 64
+expect-max-load 10

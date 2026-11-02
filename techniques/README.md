@@ -19,7 +19,7 @@ Agents: copy the pattern from here rather than from memory. It's known to work.
 | [multiplex](multiplex/TECHNIQUE.md) | Vertical sprite multiplexing: 24 bullets from 6 sprite channels, chained in the hardware's data stream; the channel dealing is portable C with host tests. No blitter, no bitplanes | ✅ tested, 18/18 |
 | copper → sprite tricks | Horizontal sprite reuse (R-Type 2 style repeating backgrounds), sprite HUD, sprite parallax layer. See [codetapper's breakdowns](https://codetapper.com/amiga/sprite-tricks/); `examples/voidrunner`'s starfield is one | planned |
 | [hotpath](hotpath/TECHNIQUE.md) | A hot loop in 68000 asm (GCC inline asm), with the C version kept, run against it every 100 frames and compared by the blitter; both timed. 1.6x over careful C; a tearing bug found by the cross-profile tests | ✅ tested, 15/15 |
-| loading | Trackloader + packed data instead of AmigaDOS | planned |
+| [loading](loading/TECHNIQUE.md) | Levels as packed files on the floppy (`disk/`, an LZ packer in the build, a 40-line unpacker in the runtime), loaded through AmigaDOS when needed: 40 KB pictures packed to 7-18 KB, the executable holds no level. Why not a trackloader | ✅ tested, 12/12 |
 
 Run one: `agk test techniques/<name>`. Measure one: every technique reports
 `AGK perf` lines. See `runtime/include/agk/perf.h`.

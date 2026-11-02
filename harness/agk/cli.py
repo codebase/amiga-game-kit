@@ -66,6 +66,7 @@ def _newest_source(proj):
             dirs[:] = [d for d in dirs if d not in ("build", "tests", ".git")]  # prune in place
             for f in files:
                 if (f.endswith((".c", ".h", ".s", ".asm", ".i", ".cmake", ".toml", ".png", ".tmj", ".tsj"))
+                    or os.path.basename(base) == "disk"
                     or f == "CMakeLists.txt" or (os.path.basename(base) == "art" and f.endswith(".txt"))
                     or (os.path.basename(base) == "sound" and f.endswith(".mml"))):
                     newest = max(newest, os.path.getmtime(os.path.join(base, f)))
@@ -78,7 +79,7 @@ def need_adf(proj, build=True):
     # Regenerate art first (cheap; files are only rewritten when their content
     # changes), so edited art or a newer converter counts as a source change.
     if (not _run_art(proj, quiet=True) or not _run_sound(proj, quiet=True, previews=False)
-            or not _run_maps(proj, quiet=True)):
+            or not _run_maps(proj, quiet=True) or not _run_disk(proj, quiet=True)):
         raise SystemExit(1)
     newest = _newest_source(proj)
     for gen in ("art/art.c", "art/art.h", "sound/sound.c", "sound/sound.h", "maps/maps.c", "maps/maps.h"):
@@ -189,6 +190,22 @@ def _run_maps(proj, quiet=False):
             print(f"    warning: {w}", file=sys.stderr)
     if not quiet:
         print(f"  previews: {rel(os.path.join(proj['dir'], 'build', 'maps', 'preview'))}/", file=sys.stderr)
+    return True
+
+
+def _run_disk(proj, quiet=False):
+    """Pack disk/ (if any) into build/disk/. Returns False on errors (already printed)."""
+    from . import pack
+    try:
+        done = pack.build(proj["dir"])
+    except (ValueError, OSError) as e:
+        print(f"disk error: {e}", file=sys.stderr)
+        return False
+    if done is None:
+        return True
+    for name, raw, packed in done:
+        if not quiet:
+            print(f"  disk {name}: {raw} -> {packed} bytes", file=sys.stderr)
     return True
 
 
@@ -420,7 +437,8 @@ def cmd_art_clean(args):
 
 def cmd_build(args):
     proj = load_project(args.project)
-    if not _run_art(proj, quiet=True) or not _run_sound(proj, quiet=True) or not _run_maps(proj, quiet=True):
+    if (not _run_art(proj, quiet=True) or not _run_sound(proj, quiet=True) or not _run_maps(proj, quiet=True)
+            or not _run_disk(proj)):
         return 1
     rc = subprocess.run(_build_cmd(proj, args.define or [])).returncode
     if rc == 0:
@@ -971,6 +989,7 @@ def main(argv=None):
     sub.add_parser("help-sound", help="print the sound and music (MML) reference")
     sub.add_parser("help-release", help="print the agk release reference")
     sub.add_parser("help-map", help="print the Tiled map import reference")
+    sub.add_parser("help-disk", help="print the packed disk files reference")
     p = sub.add_parser("map", help="convert maps/*.tmj (Tiled) to C tables and draw previews")
     p.add_argument("project", nargs="?")
     p = sub.add_parser("sound", help="convert sound/ (effects + MML music) and write previews")
@@ -987,6 +1006,10 @@ def main(argv=None):
     if args.cmd == "help-sound":
         from . import sound
         print(sound.__doc__)
+        return 0
+    if args.cmd == "help-disk":
+        from . import pack
+        print(pack.__doc__)
         return 0
     if args.cmd == "help-map":
         from . import tilemap
