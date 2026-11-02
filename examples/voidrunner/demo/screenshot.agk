@@ -1,0 +1,6 @@
+# The release zip's picture: the demo in the asteroid field, spread gun going
+wait-serial "AGK t0"
+wait-serial "phase=1" 1200
+wait-serial "kills=20" 3000
+wait 30
+screenshot release

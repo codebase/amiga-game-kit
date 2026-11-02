@@ -170,6 +170,10 @@ scenario in the emulator, captures every frame and Paula's output, and encodes
 an MP4 with sound (4x, square pixels) and a silent GIF with ffmpeg. The video
 above is `examples/sidescroller/demo/showcase.agk`.
 
+**Shipping:** `agk release` zips the ADF, the executable, a README and a
+screenshot into `build/release/NAME-VERSION.zip`, with an Aminet `.readme`
+beside it, from `agk.toml`'s `[release]` section.
+
 ## Project structure
 
 `agk new` produces a game split so agents can test it quickly:

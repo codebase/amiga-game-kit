@@ -7,3 +7,18 @@ unit_sources = ["src/logic.c"]                       # host-compiled for agk uni
 
 [cmake]                                              # build options, see CMakeLists.txt
 # ACE_BOB_WRAP_Y = false
+
+[release]                                            # agk release (agk help-release)
+title = "VOIDRUNNER"
+version = "1.0"
+author = "the Amiga Game Kit"
+short = "Horizontal shoot-'em-up, level 1"
+type = "game/shoot"
+description = """
+Level 1, Outer Belt: fly the VR-1 fighter through waves of darts, mines,
+asteroids and gunships in an asteroid belt, past a ringed gas giant, to the
+Warden, a battleship you can only hurt at its core. Three guns, three ships,
+a sampled soundtrack, and an attract mode that plays the whole level.
+"""
+controls = "Joystick in port 2: move, hold fire to shoot. Fire starts a game. Esc quits."
+screenshot = "demo/screenshot.agk"

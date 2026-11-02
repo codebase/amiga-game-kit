@@ -119,6 +119,11 @@ has both formats.
 
 ## Videos
 
+`agk release` zips the ADF, the executable, a README and a screenshot into
+`build/release/NAME-VERSION.zip`, with an Aminet `.readme` beside it, from
+`agk.toml`'s `[release]` section: fill in the title, author, description and
+controls before shipping.
+
 `agk record SCENARIO.agk -o game.mp4 [--gif game.gif --gif-seconds 10]` plays
 a scenario in the emulator and encodes every frame plus the sound into an
 MP4 (needs ffmpeg). Frames are captured during `wait` and `press`, not during

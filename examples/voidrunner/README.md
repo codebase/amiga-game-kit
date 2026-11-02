@@ -124,3 +124,4 @@ The demo is the worst case: the spread gun, every wave, the Warden's death, the 
 | `sound/` | effects, the tune, `tools/make_samples.py` |
 | `tests/` | scenarios, goldens, `unit/test_logic.c` |
 | `demo/showcase.agk` | the video's scenario |
+| `demo/screenshot.agk` | the release zip's picture (`agk release`) |

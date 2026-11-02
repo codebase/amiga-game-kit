@@ -50,6 +50,7 @@ def load_project(path):
         "adf": os.path.join(path, "build", f"{name}.adf"),
         "unit_sources": cfg.get("unit_sources", []),
         "lint_allow": cfg.get("lint", {}).get("allow", []),
+        "release": cfg.get("release", {}),
         "sync": cfg.get("sync", "frames"),
         "cmake": {k: ("ON" if v is True else "OFF" if v is False else str(v))
                   for k, v in cfg.get("cmake", {}).items()},
@@ -581,6 +582,51 @@ def cmd_profile(args):
     return 0
 
 
+def cmd_release(args):
+    from . import release
+    proj = load_project(args.project)
+    need_adf(proj, not args.no_build)
+    try:
+        r = release.config(proj, proj["release"])
+    except release.ReleaseError as e:
+        raise SystemExit(f"release: {e}")
+    if args.version:
+        r["version"] = args.version
+    exe = os.path.join(proj["dir"], "build", proj["name"])
+    if not os.path.exists(exe):
+        raise SystemExit(f"release: {rel(exe)} not found - agk build")
+    # The screenshot: the [release] scenario's last one, or the screen 3 s after boot
+    shot_path = os.path.join(proj["dir"], r["screenshot"]) if r.get("screenshot") else None
+    if shot_path:
+        if not os.path.exists(shot_path):
+            raise SystemExit(f"release: screenshot scenario {rel(shot_path)} not found")
+        text, name = open(shot_path).read(), os.path.splitext(os.path.basename(shot_path))[0]
+    else:
+        text, name = "wait 150\nscreenshot title\n", "screenshot"
+    try:
+        sc = scenario.parse(text, name)
+    except scenario.ScenarioError as e:
+        raise SystemExit(f"release: scenario error in {rel(shot_path)}: {e}")
+    if not sc.screenshots:
+        raise SystemExit(f"release: {rel(shot_path)} takes no screenshot")
+    outdir = os.path.abspath(os.path.join(proj["dir"], "build", "release", "shot"))
+    with runner.outdir_lock(outdir):
+        res = runner.run(proj["adf"], proj["profile"], sc, outdir, proj["boot"], sync=proj["sync"])
+    if not res["ok"]:
+        _report(res, False)
+        return 1
+    screen = res["screenshots"][sc.screenshots[-1]]["screen_png"]
+    out_dir = os.path.abspath(os.path.join(proj["dir"], "build", "release"))
+    zip_path, readme = release.build_zip(proj, r, proj["adf"], exe, screen, out_dir)
+    print(f"wrote {rel(zip_path)} ({os.path.getsize(zip_path) // 1024} KB: {proj['name']}.adf, {proj['name']}, "
+          f"README.txt, {proj['name']}.png)")
+    print(f"wrote {rel(readme)} (Aminet's .readme format; upload it with the zip)")
+    missing = [k for k in ("author", "description") if not r.get(k)]
+    if missing:
+        print(f"note: agk.toml [release] has no {' or '.join(missing)}; the README says less than it could")
+    return 0
+
+
 def _check_goldens(res, golden_dir, profile, update, refreshed):
     """Goldens live in tests/golden/<test>/<shot>.png, shared by all profiles.
     A profile that legitimately renders differently gets an override in
@@ -791,6 +837,15 @@ def main(argv=None):
     p.add_argument("--disasm", metavar="FUNC", help="samples per instruction of one function")
     p.add_argument("--no-build", action="store_true")
 
+    p = sub.add_parser("release", help="zip the ADF, the executable, a README and a screenshot for Aminet / itch.io",
+                       description="Builds, takes a screenshot (the [release] screenshot scenario's last one, "
+                                   "or the screen 3 s after boot), and writes build/release/NAME-VERSION.zip "
+                                   "plus an Aminet .readme. agk.toml [release] gives the title, version, "
+                                   "author, description and controls (agk help-release).")
+    p.add_argument("project", nargs="?")
+    p.add_argument("--version", help="override [release] version")
+    p.add_argument("--no-build", action="store_true")
+
     p = sub.add_parser("play", help="play the game in FS-UAE (arrow keys + Space)")
     p.add_argument("project", nargs="?")
     p.add_argument("-p", "--profile")
@@ -875,6 +930,7 @@ def main(argv=None):
     sub.add_parser("help-scenario", help="print the scenario language reference")
     sub.add_parser("help-art", help="print the art pipeline reference")
     sub.add_parser("help-sound", help="print the sound and music (MML) reference")
+    sub.add_parser("help-release", help="print the agk release reference")
     p = sub.add_parser("sound", help="convert sound/ (effects + MML music) and write previews")
     p.add_argument("project", nargs="?")
     sub.add_parser("help", help="show this help")
@@ -890,6 +946,10 @@ def main(argv=None):
         from . import sound
         print(sound.__doc__)
         return 0
+    if args.cmd == "help-release":
+        from . import release
+        print(release.__doc__)
+        return 0
     if args.cmd == "help-art":
         from . import art
         print(art.__doc__)
@@ -900,7 +960,7 @@ def main(argv=None):
                 "art-export": cmd_art_export, "art-animate": cmd_art_animate,
                 "play": cmd_play, "art-clean": cmd_art_clean, "sound": cmd_sound,
                 "record": cmd_record, "lint": cmd_lint,
-                "profile": cmd_profile}[args.cmd](args)
+                "profile": cmd_profile, "release": cmd_release}[args.cmd](args)
     except runner.RunError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
