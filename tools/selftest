@@ -7,6 +7,7 @@ set -euo pipefail
 
 KIT="$(cd "$(dirname "$0")/.." && pwd)"
 AGK="$KIT/tools/agk"
+PY="$("$KIT/tools/python-find")" || exit 1
 REQUESTED=("$@")
 PROFILES=()
 for p in "$@"; do PROFILES+=(-p "$p"); done
@@ -20,7 +21,7 @@ select_profiles() {
   [ ${#REQUESTED[@]} -eq 0 ] && return 0
   while IFS= read -r profile; do
     [ -n "$profile" ] && SELECTED+=(-p "$profile")
-  done < <(python3 - "$1/agk.toml" "${REQUESTED[@]}" <<'PYPROFILES'
+  done < <("$PY" - "$1/agk.toml" "${REQUESTED[@]}" <<'PYPROFILES'
 import sys, tomllib
 with open(sys.argv[1], "rb") as f:
     cfg = tomllib.load(f)
@@ -34,7 +35,7 @@ PYPROFILES
 }
 
 step "harness unit tests"
-PYTHONPATH="$KIT/harness" python3 -m unittest discover -s "$KIT/harness/tests" -q
+PYTHONPATH="$KIT/harness" "$PY" -m unittest discover -s "$KIT/harness/tests" -q
 
 step "doctor"
 "$AGK" doctor

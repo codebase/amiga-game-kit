@@ -50,7 +50,7 @@ if [ "$(uname)" = Darwin ] && command -v brew >/dev/null && [ -d "$(brew --prefi
   CMAKE_ARGS+=(-DCMAKE_C_COMPILER="$L/bin/clang" -DCMAKE_CXX_COMPILER="$L/bin/clang++")
 fi
 cmake -S "$TP/vAmiga/Core" -B "$TP/build-vamiga" "${CMAKE_ARGS[@]}" >/dev/null
-cmake --build "$TP/build-vamiga" -j --target VAHeadless
+cmake --build "$TP/build-vamiga" -j "$(getconf _NPROCESSORS_ONLN)" --target VAHeadless   # (-j alone: every file at once, which kills a CI runner)
 
 docker pull -q "${AGK_TOOLCHAIN_IMAGE:-amigadev/crosstools:m68k-amigaos}"
 echo "OK: $TP/build-vamiga/VAHeadless"
