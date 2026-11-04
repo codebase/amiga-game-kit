@@ -40,7 +40,7 @@ class PackTests(unittest.TestCase):
                         'rewind(f); unsigned char *s = malloc(n); fread(s, 1, n, f); fclose(f);\n'
                         'unsigned long size = agkUnpackedSize(s); unsigned char *o = malloc(size + 1);\n'
                         'unsigned long got = agkUnpack(s, o); f = fopen(v[2], "wb"); fwrite(o, 1, got, f); fclose(f);\n'
-                        'free(s); free(o); return got == size ? 0 : 1; }\n')   /* (LeakSanitizer on Linux) */
+                        'free(s); free(o); return got == size ? 0 : 1; }\n')   # (freed: LeakSanitizer on Linux fails a leaking driver)
             exe = os.path.join(d, "drv")
             r = subprocess.run([cc, "-std=c11", "-Wall", "-fsanitize=address,undefined", "-I", os.path.join(ROOT, "runtime", "include"),
                                 os.path.join(ROOT, "runtime", "src", "unpack.c"), driver, "-o", exe],
