@@ -43,7 +43,7 @@ PASS move [a500] 0.4s
 9/9 passed
 ```
 
-## Quick start
+<h2 align="center">Quick start</h2>
 
 ```sh
 tools/setup                    # fetch pinned ACE + vAmiga, apply patches, build emulator, pull toolchain
@@ -71,7 +71,7 @@ Requirements: Docker, git, cmake, Python 3.11+, a host C compiler, and a C++20
 compiler for vAmiga (on macOS: `brew install llvm`, because Apple's clang 15 is
 too old).
 
-## What's in the box
+<h2 align="center">What's in the box</h2>
 
 | | |
 |---|---|
@@ -86,15 +86,21 @@ too old).
 Four games were built with it, by an agent, start to finish: a shoot-'em-up,
 a racer, a platformer and an AGA mech demo, below.
 
-**Just want to play?** [Download the ready-to-boot game disks](docs/play-demos.md).
-No build tools needed. IRON WRAITH needs an **A1200 / AGA** configuration; the other
-three run on an A500.
+<p align="center">
+  <strong>Just want to play?</strong> <a href="docs/play-demos.md">Download the ready-to-boot game disks</a>.<br>
+  No build tools needed. IRON WRAITH needs an <strong>A1200 / AGA</strong> configuration;<br>
+  the other three run on an A500.
+</p>
 
-## A1200 / AGA demo: IRON WRAITH
+<h2 align="center">A1200 / AGA demo: IRON WRAITH</h2>
 
-[![IRON WRAITH — AGA mech combat against MOLOCH](examples/ironwraith/demo/boss.gif)](examples/ironwraith/demo/ironwraith.mp4)
+<p align="center">
+  <a href="examples/ironwraith/demo/ironwraith.mp4"><img src="examples/ironwraith/demo/boss.gif" alt="IRON WRAITH: AGA mech combat against MOLOCH"></a>
+</p>
 
-[Watch the complete demo with sound](examples/ironwraith/demo/ironwraith.mp4).
+<p align="center">
+  <a href="examples/ironwraith/demo/ironwraith.mp4">Watch the complete demo with sound</a>
+</p>
 
 [IRON WRAITH](examples/ironwraith/README.md) is a mech-assault demo for the **Amiga 1200
 with AGA graphics and 2 MB chip RAM**, running at 50 fps. It features an
@@ -105,12 +111,16 @@ and boss art were generated with Retro Diffusion and compiled for the Amiga.
 Run `tools/agk play examples/ironwraith`. See [AGA setup](docs/aga.md) for the
 RGB24 art pipeline and exact-color scenario checks.
 
-## Example: `examples/sidescroller`
+<h2 align="center">Example: <code>examples/sidescroller</code></h2>
 
-[![sidescroller](docs/img/sidescroller.gif)](docs/media/sidescroller.mp4)
+<p align="center">
+  <a href="docs/media/sidescroller.mp4"><img src="docs/img/sidescroller.gif" alt="MUSHROOM RUN: Amiga platformer demo"></a>
+</p>
 
-▶ [Watch it with sound](docs/media/sidescroller.mp4): 25 s, recorded straight from the
-emulator with `agk record` (the GIF above is silent).
+<p align="center">
+  <a href="docs/media/sidescroller.mp4">Watch it with sound</a> · 25 seconds<br>
+  Recorded straight from the emulator with <code>agk record</code>. The GIF above is silent.
+</p>
 
 A dual-playfield parallax platformer, built by an AI agent with the kit:
 - The mountains and hills are AI-generated with `agk art-gen` (Retro Diffusion, about $0.08 in total), then tidied with `agk art-clean`.
@@ -122,11 +132,16 @@ It's tested pixel-exact on Kickstart 1.3, 3.1 and AROS, including a test that
 proves the parallax speeds, and it runs at 50 fps using about 21% of the
 frame. See its README for the register-level setup.
 
-## Example: `examples/racer`
+<h2 align="center">Example: <code>examples/racer</code></h2>
 
-[![racer](docs/img/racer.gif)](docs/media/racer.mp4)
+<p align="center">
+  <a href="docs/media/racer.mp4"><img src="docs/img/racer.gif" alt="REDLINE: Amiga road racer demo"></a>
+</p>
 
-▶ [Watch it with sound](docs/media/racer.mp4): a minute of its attract-mode demo, recorded with `agk record`.
+<p align="center">
+  <a href="docs/media/racer.mp4">Watch it with sound</a> · One minute of attract mode<br>
+  Recorded with <code>agk record</code>.
+</p>
 
 An arcade-style road racer for a stock A500, also built by an AI agent with the kit:
 - A copper raster road with hills and curves: every line of the road picks its row and scroll through the copper, and the CPU draws nothing.
@@ -138,11 +153,16 @@ It runs at 25 fps using about 74% of the time on a 7 MHz 68000. Its README
 covers the raster road and what it took to fit it all in: GCC's hidden
 library multiplies, bus contention, and bitplanes switched off in the sky.
 
-## Example: `examples/voidrunner`
+<h2 align="center">Example: <code>examples/voidrunner</code></h2>
 
-[![voidrunner](docs/img/voidrunner.gif)](docs/media/voidrunner.mp4)
+<p align="center">
+  <a href="docs/media/voidrunner.mp4"><img src="docs/img/voidrunner.gif" alt="VOIDRUNNER: Amiga space shooter demo"></a>
+</p>
 
-▶ [Watch level 1 with sound](docs/media/voidrunner.mp4): 104 s of its attract mode, recorded with `agk record`.
+<p align="center">
+  <a href="docs/media/voidrunner.mp4">Watch level 1 with sound</a> · 104 seconds of attract mode<br>
+  Recorded with <code>agk record</code>.
+</p>
 
 A horizontal shoot-'em-up at 50 fps: level 1 of VOIDRUNNER, built by an AI agent that made most of its art itself (text art and drawing code), with the ship and the boss generated by Retro Diffusion and fitted to the Amiga's colours:
 - A starfield from a single hardware sprite that the copper re-uses on every line, over a drifting gas giant.
@@ -151,7 +171,7 @@ A horizontal shoot-'em-up at 50 fps: level 1 of VOIDRUNNER, built by an AI agent
 
 Its README covers the tricks and what it took to hold 50 fps on a 7 MHz 68000.
 
-## How a run works
+<h2 align="center">How a run works</h2>
 
 1. **Boot once.** AGK powers on the emulated machine, inserts the ADF and runs
    until the game prints its ready text (`AGK ready`) on the serial port. It
@@ -169,7 +189,7 @@ Its README covers the tricks and what it took to hold 50 fps on a 7 MHz 68000.
 
 The scenario language is documented in `agk help-scenario`.
 
-## Games talk to the harness over serial
+<h2 align="center">Games talk to the harness over serial</h2>
 
 Games link the AGK runtime (`runtime/`) and report what they're doing through
 `#include <agk/debug.h>`:
@@ -178,7 +198,7 @@ Games link the AGK runtime (`runtime/`) and report what they're doing through
 - `agkState("score", 10); agkEnd();` prints `AGK score=10`, which tests match with `expect-serial`.
 - `agkDebugAsync(1)` (after `systemUnuse()`) makes output interrupt-driven, so it costs almost no frame time.
 
-## Art pipeline
+<h2 align="center">Art pipeline</h2>
 
 Draw graphics as text files or PNGs (hand-made, from a pixel-art tool or from
 an AI generator) in `art/`:
@@ -189,7 +209,7 @@ an AI generator) in `art/`:
 - **`agk art-gen`** creates art with [Retro Diffusion](https://retrodiffusion.ai/) (pixel-art models, constrained to the game's palette): about $0.02 and 12 s per image. It needs your own API key in `RD_API_KEY` or `~/.config/agk/credentials`.
 - **`agk art-clean`** fixes typical AI-art damage: `--fill-holes` (see-through gaps in trees and snow), `--despeckle N` (floating fragments), `--crop Y0:Y1`, and `--fade-bottom ROWS:0xRGB` (dithers a hard bottom edge into mist).
 
-## Sound and music
+<h2 align="center">Sound and music</h2>
 
 Sound lives in `sound/` as text; `agk sound` (and `agk build`) turns it into
 data linked into the game, played by ACE's ptplayer (ProTracker replay +
@@ -229,21 +249,21 @@ through Ocean's RoboCop with it: the groundwork for a port.
 screenshot into `build/release/NAME-VERSION.zip`, with an Aminet `.readme`
 beside it, from `agk.toml`'s `[release]` section.
 
-## Project structure
+<h2 align="center">Project structure</h2>
 
 `agk new` produces a game split so agents can test it quickly:
 - `src/logic.c` holds the rules in portable C and is unit-tested on the host by `agk unit`.
 - `src/main.c` is the Amiga side (ACE display, sprites, blitter, joystick).
 - `tests/*.agk` are emulator scenarios with golden screenshots.
 
-## MCP server
+<h2 align="center">MCP server</h2>
 
 `tools/agk-mcp` is a stdio MCP server with `agk_build`, `agk_run`, `agk_test`,
 `agk_unit`, `agk_doctor` and `agk_scenario_help`. New projects already include
 it in `.mcp.json`. To add it elsewhere:
 `claude mcp add amiga -- /path/to/amiga-game-kit/tools/agk-mcp`.
 
-## Profiles
+<h2 align="center">Profiles</h2>
 
 | profile | machine | ROM |
 |---|---|---|
@@ -258,7 +278,7 @@ by AGK.** Put your own licensed ROMs in `roms/` (gitignored), or point
 works. The `a500-aros` profile needs no Kickstart, which makes it a good fit
 for CI.
 
-## Layout
+<h2 align="center">Layout</h2>
 
 ```
 tools/        setup, build, selftest, agk (CLI), agk-mcp (MCP server)
@@ -274,7 +294,7 @@ roms/         your Kickstart ROMs (gitignored)
 third_party/  pinned ACE + vAmiga checkouts (gitignored, created by tools/setup)
 ```
 
-## License
+<h2 align="center">License</h2>
 
 MIT. Third-party components keep their own licences:
 - ACE: MPL-2.0.
