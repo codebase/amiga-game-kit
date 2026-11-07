@@ -27,6 +27,31 @@ extern u8 joy_fire;
 static u32 max_frames;
 static const char *png_path;
 static const char *dump_path;             /* --dump: chip RAM at the end, to compare with the emulator's */
+static FILE *wavf;                        /* --wav: the sound of the run, headless */
+static u32 wav_bytes;
+void audio_render(s16 *out, int n, int rate);
+
+static void wav_frame(void) {
+	static s16 buf[48000 / 50 * 2];
+	audio_render(buf, 48000 / 50, 48000);
+	fwrite(buf, 1, sizeof buf, wavf);
+	wav_bytes += sizeof buf;
+}
+
+static void wav_close(void) {
+	/* the header, now that the length is known */
+	u32 rate = 48000, byterate = rate * 4, datalen = wav_bytes;
+	u8 h[44] = { 'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 2, 0 };
+	u32 riff = 36 + datalen;
+	h[4] = (u8)riff; h[5] = (u8)(riff >> 8); h[6] = (u8)(riff >> 16); h[7] = (u8)(riff >> 24);
+	h[24] = (u8)rate; h[25] = (u8)(rate >> 8); h[26] = (u8)(rate >> 16); h[27] = (u8)(rate >> 24);
+	h[28] = (u8)byterate; h[29] = (u8)(byterate >> 8); h[30] = (u8)(byterate >> 16); h[31] = (u8)(byterate >> 24);
+	h[32] = 4; h[34] = 16; memcpy(h + 36, "data", 4);
+	h[40] = (u8)datalen; h[41] = (u8)(datalen >> 8); h[42] = (u8)(datalen >> 16); h[43] = (u8)(datalen >> 24);
+	fseek(wavf, 0, SEEK_SET);
+	fwrite(h, 1, 44, wavf);
+	fclose(wavf);
+}
 static const char *trace_path;
 static FILE *tracef;
 
@@ -103,9 +128,16 @@ static SDL_Texture *tex;
 static int fast;                          /* no pacing: as fast as the host goes */
 static u64 next_present;                  /* when the next frame is due (performance counter) */
 static int scale = 3;
+static SDL_AudioDeviceID adev;
+#define AUDIO_RATE 48000
+void audio_render(s16 *out, int n, int rate);
 
 static void sdl_open(void) {
-	if (SDL_Init(SDL_INIT_VIDEO) != 0) { fprintf(stderr, "recomp: SDL: %s\n", SDL_GetError()); exit(1); }
+	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) { fprintf(stderr, "recomp: SDL: %s\n", SDL_GetError()); exit(1); }
+	SDL_AudioSpec want = { 0 }, have;
+	want.freq = AUDIO_RATE; want.format = AUDIO_S16SYS; want.channels = 2; want.samples = 1024;
+	adev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
+	if (adev) SDL_PauseAudioDevice(adev, 0); else fprintf(stderr, "recomp: no audio: %s\n", SDL_GetError());
 	win = SDL_CreateWindow("agk recomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 320 * scale, 256 * scale, SDL_WINDOW_RESIZABLE);
 	ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 	if (!ren) ren = SDL_CreateRenderer(win, -1, 0);
@@ -136,6 +168,13 @@ static void sdl_input(void) {
 }
 
 static void sdl_present(void) {
+	if (adev) {                           /* a frame's worth of Paula, unless we're ahead (full speed) */
+		static s16 buf[AUDIO_RATE / 50 * 2];
+		if (SDL_GetQueuedAudioSize(adev) < sizeof buf * 4) {
+			audio_render(buf, AUDIO_RATE / 50, AUDIO_RATE);
+			SDL_QueueAudio(adev, buf, sizeof buf);
+		}
+	}
 	SDL_UpdateTexture(tex, NULL, frame_rgb, 320 * 3);
 	SDL_RenderClear(ren);
 	SDL_RenderCopy(ren, tex, NULL, NULL);
@@ -185,6 +224,7 @@ static void scripted_input(void) {
 /* called by the runtime after every rendered frame */
 void frame_hook(void) {
 	scripted_input();
+	if (wavf) wav_frame();
 #ifdef USE_SDL
 	if (win) { if (!inputf) sdl_input(); sdl_present(); }
 #endif
@@ -196,6 +236,7 @@ void frame_hook(void) {
 	}
 	if (max_frames && frame_count >= max_frames) {
 		if (png_path) write_png(png_path);
+		if (wavf) wav_close();
 		if (dump_path) { FILE *f = fopen(dump_path, "wb"); if (f) { fwrite(mem, 1, 0x80000, f); fclose(f); } }
 		printf("recomp: %u frames run, pc $%06X\n", frame_count, cpu.pc);
 		exit(0);
@@ -229,6 +270,7 @@ int main(int argc, char **argv) {
 		if (!strcmp(argv[i], "--frames") && i + 1 < argc) max_frames = (u32)atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--png") && i + 1 < argc) png_path = argv[++i];
 		else if (!strcmp(argv[i], "--dump") && i + 1 < argc) dump_path = argv[++i];
+		else if (!strcmp(argv[i], "--wav") && i + 1 < argc) { wavf = fopen(argv[++i], "wb"); if (wavf) { u8 z[44] = { 0 }; fwrite(z, 1, 44, wavf); } }
 		else if (!strcmp(argv[i], "--adf") && i + 1 < argc) adf = argv[++i];
 		else if (!strcmp(argv[i], "--memory") && i + 1 < argc) image = argv[++i];
 		else if (!strcmp(argv[i], "--trace") && i + 1 < argc) trace_path = argv[++i];
@@ -239,7 +281,7 @@ int main(int argc, char **argv) {
 #ifdef RECOMP_ITRACE
 		else if (!strcmp(argv[i], "--itrace") && i + 2 < argc) { itrace_f = fopen(argv[++i], "w"); itrace_left = atol(argv[++i]); }
 #endif
-		else { fprintf(stderr, "usage: game [--memory memory.bin] [--adf disk.adf] [--frames N] [--png out.png] [--dump chip.bin] [--trace file] [--input keys.txt] [--timeout SEC] [--play [--fast]]\n"); return 2; }
+		else { fprintf(stderr, "usage: game [--memory memory.bin] [--adf disk.adf] [--frames N] [--png out.png] [--dump chip.bin] [--wav out.wav] [--trace file] [--input keys.txt] [--timeout SEC] [--play [--fast]]\n"); return 2; }
 	}
 	amiga_init();
 	load_memory(image);

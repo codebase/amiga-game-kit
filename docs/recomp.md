@@ -77,7 +77,10 @@ What happens:
    MFM-encoded on the fly, the disk turns (reads start where the head is,
    at the next sync word), DSKBLK arrives when the DMA would have finished.
    Loaders that step the head, wait for the index and sort sectors work as
-   they do on the machine.
+   they do on the machine. Paula: the four DMA channels from chip RAM at
+   their periods and volumes, the reload-and-interrupt at the end of a
+   sample that music drivers rely on, the A500's output filter and the LED
+   filter, mixed to stereo (`--wav` records it headless).
 5. **The start state** (`start.h`): the registers, the custom and CIA
    registers and the drive position from the dump; `memory.bin` is the RAM.
 6. **Compile** with the host `cc`. With SDL2 installed (`brew install
@@ -91,6 +94,7 @@ game --play --adf GAME.adf         a window: arrows/WASD + space/ctrl are the jo
                                    F toggles full speed, Esc quits
 game --frames N --png out.png      headless: run N frames, write the last picture
      --dump chip.bin               ... and the chip RAM at the end
+     --wav out.wav                 ... and the sound of the run
      --input keys.txt              scripted input: lines of "FRAME right left up down fire"
      --trace file                  the registers after every frame
      --timeout SEC                 report where the game is if it's still running after SEC
@@ -146,7 +150,7 @@ each is the kind of thing the next game will hit too:
 
 ## What's next
 
-- Audio (Paula) and the blitter's line mode.
+- The blitter's line mode.
 - A cycle model close enough that timing-seeded games replay identically.
 - Hooks for improvements: the renderer and the vertical-blank wait are
   known addresses (`agk inspect` found them), so a 60 fps or high-resolution

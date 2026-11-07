@@ -102,7 +102,8 @@ void chip_write(u32 addr, u32 value, int bits) {
 	case 0x086: cop2lc = (cop2lc & 0xFFFF0000u) | (v & 0xFFFE); break;
 	case 0x088: copjmp = 1; break;
 	case 0x08A: copjmp = 2; break;
-	case 0x096: DMACON = (v & 0x8000) ? (DMACON | (v & 0x7FFF)) : (DMACON & ~(v & 0x7FFF)); break;
+	case 0x096: { u16 was = DMACON; DMACON = (v & 0x8000) ? (DMACON | (v & 0x7FFF)) : (DMACON & ~(v & 0x7FFF));
+		extern void audio_dmacon(u16, u16); audio_dmacon(was, DMACON); break; }
 	case 0x09A: INTENA = (v & 0x8000) ? (INTENA | (v & 0x7FFF)) : (INTENA & ~(v & 0x7FFF)); irq_update(); break;
 	case 0x09C: INTREQ = (v & 0x8000) ? (INTREQ | (v & 0x7FFF)) : (INTREQ & ~(v & 0x7FFF)); irq_update(); break;
 	case 0x09E: ADKCON = (v & 0x8000) ? (ADKCON | (v & 0x7FFF)) : (ADKCON & ~(v & 0x7FFF)); break;
@@ -254,6 +255,9 @@ void run_events(void) {
 u32 *bplpt_ptr(void) { return bplpt; }
 u32 *sprpt_ptr(void) { return sprpt; }
 u16 *custom_regs(void) { return reg; }
+u32 *audlc_ptr(void) { return audlc; }
+u8 cia_pra_a(void) { return ciaa.pra; }       /* (bit 1: /LED, the audio filter) */
+void intreq_set_audio(int c) { intreq_set((u16)(0x0080 << c)); }   /* AUD0..AUD3 */
 u16 *color_regs(void) { return colors; }
 u32 cop1lc_get(void) { return cop1lc; }
 u32 cop2lc_get(void) { return cop2lc; }
