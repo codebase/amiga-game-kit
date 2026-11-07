@@ -98,6 +98,22 @@ def objdump_cmd(images, workdir, addr, stop):
             f"--start-address={addr:#x}", f"--stop-address={stop:#x}", rel]
 
 
+def run_objdump_batch(script, image, workdir):
+    """run a shell script of objdump commands in the toolchain container; the
+    script is written next to the dumps (it can be far longer than an argument)"""
+    path = os.path.join(workdir, ".agk-objdump.sh")
+    with open(path, "w") as f:
+        f.write(script + "\n")
+    try:
+        r = subprocess.run(["docker", "run", "--rm", "-v", f"{workdir}:/w", "-w", "/w", image, "sh", "/w/.agk-objdump.sh"],
+                           capture_output=True, text=True, errors="replace")
+    finally:
+        os.unlink(path)
+    if r.returncode != 0:
+        raise RecompError(f"objdump failed: {r.stderr.strip()[:300]}")
+    return r.stdout
+
+
 def disassemble(images, ranges, image, workdir, covered=frozenset()):
     """objdump each range -> [(addr, nwords, mnemonic, operands)]; images are the
     memory dumps as [(base, path, size)] (chip RAM, slow RAM). Every address in
@@ -132,13 +148,10 @@ def disassemble(images, ranges, image, workdir, covered=frozenset()):
             else:
                 ends[a] = a + 0x40
         cmds = [(a, objdump_cmd(images, workdir, a, ends[a] + 10)) for a in missing]
-        script = " ; ".join(f"echo '@ {a:#x}' ; " + " ".join(cmd) for a, cmd in cmds if cmd)
-        r = subprocess.run(["docker", "run", "--rm", "-v", f"{workdir}:/w", "-w", "/w", image, "sh", "-c", script],
-                           capture_output=True, text=True, errors="replace")
-        if r.returncode != 0:
-            raise RecompError(f"objdump failed: {r.stderr.strip()[:300]}")
+        script = "\n".join(f"echo '@ {a:#x}'\n" + " ".join(cmd) for a, cmd in cmds if cmd)
+        stdout = run_objdump_batch(script, image, workdir)
         new, run, anchor = [], [], None
-        for line in r.stdout.splitlines() + ["@ end"]:
+        for line in stdout.splitlines() + ["@ end"]:
             if line.startswith("@ "):
                 new += run
                 run, anchor = [], (int(line[2:], 16) if line != "@ end" else None)
@@ -171,15 +184,12 @@ def disassemble_from(images, anchors, image, workdir, known, limit=0x800, truste
     (they decoded data or padding), never a trusted one. -> (new instructions
     in order, the displaced instructions' addresses)"""
     cmds = [(a, objdump_cmd(images, workdir, a, a + limit)) for a in anchors]
-    script = " ; ".join(f"echo '@ {a:#x}' ; " + " ".join(cmd) for a, cmd in cmds if cmd)
+    script = "\n".join(f"echo '@ {a:#x}'\n" + " ".join(cmd) for a, cmd in cmds if cmd)
     if not script:
-        return []
-    r = subprocess.run(["docker", "run", "--rm", "-v", f"{workdir}:/w", "-w", "/w", image, "sh", "-c", script],
-                       capture_output=True, text=True, errors="replace")
-    if r.returncode != 0:
-        raise RecompError(f"objdump failed: {r.stderr.strip()[:300]}")
+        return [], set()
+    stdout = run_objdump_batch(script, image, workdir)
     out, run, stop, displaced = [], [], False, set()
-    for line in r.stdout.splitlines() + ["@ end"]:
+    for line in stdout.splitlines() + ["@ end"]:
         if line.startswith("@ "):
             out += run
             run, stop = [], False
