@@ -69,15 +69,30 @@ static FILE *tracef;
 
 static const char *image_dir = ".";       /* where memory.bin is: needed.txt goes next to it */
 
+/* the interpreter took over at this address: remember it for the next agk
+ * recomp (needed.txt next to memory.bin), so the code gets translated */
+extern u64 interp_count;
+static u32 interp_entries;
+void note_interpreted(u32 pc) {
+	static u32 seen[4096];
+	static int nseen;
+	for (int i = 0; i < nseen; i++) if (seen[i] == pc) return;
+	if (nseen < 4096) seen[nseen++] = pc;
+	interp_entries++;
+	char path[1024];
+	snprintf(path, sizeof path, "%s/needed.txt", image_dir);
+	FILE *f = fopen(path, "a");
+	if (f) { fprintf(f, "%06X\n", pc); fclose(f); }
+}
+
+static void interp_report(void) {
+	if (interp_count)
+		fprintf(stderr, "recomp: %llu instructions interpreted (code the translation didn't have, entered at %u addresses; "
+		        "they're in needed.txt: agk recomp again to translate them)\n", (unsigned long long)interp_count, interp_entries);
+}
+
 void trace_die(const char *why, u32 addr) {
 	fprintf(stderr, "recomp: %s at $%06X (frame %u, pc $%06X)\n", why, addr, frame_count, cpu.pc);
-	if (strstr(why, "never executed")) {   /* tell the next agk recomp where the game went */
-		char path[1024];
-		snprintf(path, sizeof path, "%s/needed.txt", image_dir);
-		FILE *f = fopen(path, "a");
-		if (f) { fprintf(f, "%06X\n", addr); fclose(f); }
-		fprintf(stderr, "  (recorded in %s: agk recomp again and it will be translated)\n", path);
-	}
 	fprintf(stderr, "  D0-7:"); for (int i = 0; i < 8; i++) fprintf(stderr, " %08X", cpu.d[i]);
 	fprintf(stderr, "\n  A0-7:"); for (int i = 0; i < 8; i++) fprintf(stderr, " %08X", cpu.a[i]);
 	fprintf(stderr, "\n");
@@ -136,7 +151,9 @@ void itrace(u32 addr) {
 	fprintf(itrace_f, "%06X", addr);
 	for (int i = 0; i < 8; i++) fprintf(itrace_f, " %08X", cpu.d[i]);
 	for (int i = 0; i < 8; i++) fprintf(itrace_f, " %08X", cpu.a[i]);
-	fprintf(itrace_f, " %04X\n", get_sr());
+	fprintf(itrace_f, " %04X", get_sr());
+	{ static int cyc = -1; if (cyc < 0) cyc = getenv("RECOMP_ITRACE_CYCLES") != NULL; if (cyc) fprintf(itrace_f, " %llu", (unsigned long long)cpu.cycles); }
+	fputc('\n', itrace_f);
 	if (--itrace_left <= 0) { fclose(itrace_f); itrace_f = NULL; exit(0); }
 }
 #endif
@@ -200,8 +217,8 @@ static int mouse_grabbed;
 static void sdl_input(void) {
 	SDL_Event e;
 	while (SDL_PollEvent(&e)) {
-		if (e.type == SDL_QUIT) exit(0);
-		if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE && !mouse_grabbed) exit(0);
+		if (e.type == SDL_QUIT) { interp_report(); exit(0); }
+		if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE && !mouse_grabbed) { interp_report(); exit(0); }
 		if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F12) { fast = !fast; next_present = SDL_GetPerformanceCounter(); }
 		if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F11) { mouse_grabbed = 0; SDL_SetRelativeMouseMode(SDL_FALSE); }
 		if (e.type == SDL_KEYDOWN && (e.key.keysym.mod & (KMOD_GUI | KMOD_ALT)) && e.key.keysym.sym >= SDLK_1 && e.key.keysym.sym <= SDLK_9) {
@@ -316,6 +333,7 @@ void frame_hook(void) {
 		if (png_path) write_png(png_path);
 		if (wavf) wav_close();
 		if (dump_path) { FILE *f = fopen(dump_path, "wb"); if (f) { fwrite(mem, 1, 0x80000, f); fclose(f); } }
+		interp_report();
 		printf("recomp: %u frames run, pc $%06X\n", frame_count, cpu.pc);
 		exit(0);
 	}

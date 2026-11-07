@@ -72,7 +72,7 @@ class TranslateTests(unittest.TestCase):
 
     def test_data_in_uncovered_code_stops(self):
         L, _ = lines_of([(0x100, 1, ".short", "0x4489")], covered=set())
-        self.assertIn('trace_die("data reached as code", 0x100u);', "\n".join(L))
+        self.assertIn("{ cpu.pc = 0x100u; goto dispatch; }", "\n".join(L))   # the interpreter's, if ever reached
 
     def test_generate_has_a_table_entry_per_instruction(self):
         text, unknown = recomp.generate([(0x100, 1, "nop", ""), (0x102, 1, "rts", "")], {0x100, 0x102}, 0x100)
