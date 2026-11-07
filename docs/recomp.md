@@ -39,7 +39,8 @@ Take it at a point where the game has the machine to itself (a title or a
 level: 0% in the ROM in `--sample`'s report) and play as much of the game as
 you can under the emulator first: the more the coverage saw, the less the
 translator has to guess. Several coverage files (`coverage*.bin`) in the
-directory are unioned, so sessions add up.
+directory are unioned, so sessions add up. What the coverage missed still
+runs (the interpreter), just slower, until the next recompile.
 
 ## 2. Recompile
 
@@ -58,17 +59,31 @@ What happens:
    coverage never reached are disassembled too, from each target until a
    known instruction, an unconditional jump or data, repeatedly until nothing
    new turns up. This is how the game survives the player doing something
-   the emulator session didn't. Only computed jumps (jump tables, `jsr (a0)`)
-   into unseen code still stop the program, with a message saying which
-   address; `--no-follow` turns the following off.
-3. **Translation.** Each instruction becomes a labelled C statement using
+   the emulator session didn't. Computed jumps (jump tables, `jsr (a0)`)
+   into unseen code go to the interpreter, which records the address for
+   the next recompile; `--no-follow` turns the following off.
+3. **The interpreter.** A 68000 interpreter in the runtime
+   (`m68k_interp.c`) executes whatever the translation doesn't have:
+   code the game loads from disk later, jump-table targets the emulator
+   never took, anything. It runs straight from memory with the same
+   registers, flags and helpers as the translated code, one instruction at
+   a time, until the pc lands on a translated address, and records where it
+   had to step in (`needed.txt`) so the next `agk recomp` translates that
+   too. Every dispatch also checks that the opcode word at the address is
+   still the one that was translated; a game that loads new code over old
+   gets the interpreter for it. The native build therefore never stops at
+   untranslated code. `RECOMP_INTERP=1` interprets everything: the
+   interpreter and the translator are checked against each other that way
+   (identical traces over 1.5 million instructions of RoboCop, interrupts
+   included).
+4. **Translation.** Each instruction becomes a labelled C statement using
    `recomp/runtime/m68k.h`'s helpers: registers, flags, memory access that
    traps the chips. Branches are `goto`s; calls push the return address on
    the game's own stack; `rts`, `rte`, `jmp (an)` and exceptions go through
-   a table from address to label. Interrupts are checked at backward
-   branches and calls, as the timing model (a fixed cost per instruction)
-   ticks past the vertical blank or a CIA timer.
-4. **The runtime** (`recomp/runtime/`): the custom registers, DMACON /
+   a table from address to label. Each instruction is charged a fixed
+   cost as it executes; the chips' events are looked at and interrupts
+   taken at control flow (before a backward branch, a dbcc, a call).
+5. **The runtime** (`recomp/runtime/`): the custom registers, DMACON /
    INTENA / INTREQ, the copper interpreted line by line at the end of each
    frame, the bitplanes fetched as the registers say (DDF, modulos, fine
    scroll, dual playfields), sprites, a software blitter (area mode with
@@ -81,9 +96,9 @@ What happens:
    their periods and volumes, the reload-and-interrupt at the end of a
    sample that music drivers rely on, the A500's output filter and the LED
    filter, mixed to stereo (`--wav` records it headless).
-5. **The start state** (`start.h`): the registers, the custom and CIA
+6. **The start state** (`start.h`): the registers, the custom and CIA
    registers and the drive position from the dump; `memory.bin` is the RAM.
-6. **Compile** with the host `cc`. With SDL2 installed (`brew install
+7. **Compile** with the host `cc`. With SDL2 installed (`brew install
    sdl2`, `apt install libsdl2-dev`) the binary has a window; without it
    it's headless.
 
