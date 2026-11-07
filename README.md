@@ -1,7 +1,7 @@
 <h1 align="center">Amiga Game Kit (AGK)</h1>
 
 <p align="center">
-  <img src="docs/img/amiga-game-kit-banner.png" alt="Amiga Game Kit: build and reimagine Amiga games with AI" width="100%">
+  <img src="docs/img/amiga-game-kit-banner.png?v=2" alt="Amiga Game Kit: build and reimagine Amiga games with AI" width="100%">
 </p>
 
 <p align="center">
