@@ -4,7 +4,8 @@
  * SDL window when built with -DUSE_SDL (arrows/WASD and space/ctrl are the
  * joystick, every key reaches the Amiga keyboard, a click grabs the mouse
  * and F11 lets it go, F12 toggles full speed, Esc quits when the mouse
- * isn't grabbed). --adf gives the floppy. */
+ * isn't grabbed). --adf gives the floppy; given several, Cmd/Alt+1..9
+ * swaps them, the first is in the drive at the start. */
 #ifdef USE_SDL
 #include <SDL.h>                          /* (before m68k.h: its A and D macros would mangle SDL's prototypes) */
 #endif
@@ -19,6 +20,9 @@ void amiga_init(void);
 void amiga_set_reg(u32 off, u16 v);
 void amiga_set_cia(int which, int r, u16 v);
 void disk_set_adf(const char *path);
+void disk_change(const char *path);
+static const char *adfs[9];               /* --adf, repeatable: the game's disks; Cmd/Win+1..9 swaps */
+static int nadfs;
 void disk_set_position(int cyl, int side, int motor);
 extern u8 frame_rgb[320 * 256 * 3];
 extern u32 frame_count;
@@ -198,6 +202,11 @@ static void sdl_input(void) {
 		if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE && !mouse_grabbed) exit(0);
 		if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F12) { fast = !fast; next_present = SDL_GetPerformanceCounter(); }
 		if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F11) { mouse_grabbed = 0; SDL_SetRelativeMouseMode(SDL_FALSE); }
+		if (e.type == SDL_KEYDOWN && (e.key.keysym.mod & (KMOD_GUI | KMOD_ALT)) && e.key.keysym.sym >= SDLK_1 && e.key.keysym.sym <= SDLK_9) {
+			int n = e.key.keysym.sym - SDLK_1;
+			if (n < nadfs) { disk_change(adfs[n]); fprintf(stderr, "recomp: disk %d (%s) in the drive\n", n + 1, adfs[n]); }
+			continue;
+		}
 		if ((e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) && !e.key.repeat) {
 			u8 code = amiga_key(e.key.keysym.scancode);
 			if (code != 0xFF) kbd_push(e.type == SDL_KEYUP ? (code | 0x80) : code);
@@ -336,7 +345,7 @@ int main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "--pngs") && i + 1 < argc) pngs_dir = argv[++i];
 		else if (!strcmp(argv[i], "--speed") && i + 1 < argc) { int sp = atoi(argv[++i]); cycle_shift = sp >= 32 ? 5 : sp >= 16 ? 4 : sp >= 8 ? 3 : sp >= 4 ? 2 : sp >= 2 ? 1 : 0; }
 		else if (!strcmp(argv[i], "--wav") && i + 1 < argc) { wavf = fopen(argv[++i], "wb"); if (wavf) { u8 z[44] = { 0 }; fwrite(z, 1, 44, wavf); } }
-		else if (!strcmp(argv[i], "--adf") && i + 1 < argc) adf = argv[++i];
+		else if (!strcmp(argv[i], "--adf") && i + 1 < argc) { adf = argv[++i]; if (nadfs < 9) adfs[nadfs++] = adf; if (nadfs > 1) adf = adfs[0]; }
 		else if (!strcmp(argv[i], "--memory") && i + 1 < argc) image = argv[++i];
 		else if (!strcmp(argv[i], "--trace") && i + 1 < argc) trace_path = argv[++i];
 		else if (!strcmp(argv[i], "--play")) play = 1;

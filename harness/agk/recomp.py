@@ -151,6 +151,8 @@ def disassemble(images, ranges, image, workdir, covered=frozenset()):
                 anchor = None
         if not new:
             break
+        seen = set()                      # (two anchors' runs can reach the same bytes)
+        new = [i for i in new if not (i[0] in seen or seen.add(i[0]))]
         spans = [(a, a + 2 * w) for a, w, *_ in new]
         def overlaps(i):
             a, w = i[0], i[1]

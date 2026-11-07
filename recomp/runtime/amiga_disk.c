@@ -14,6 +14,15 @@ static int side, motor;
 static int disk_trace;                    /* RECOMP_DISK_TRACE: say what the drive does */
 static u8 prb_last = 0xFF;
 
+/* a disk change: the new image, and /CHNG is low until the game steps the head */
+static int changed;
+void disk_set_adf(const char *path);
+void disk_change(const char *path) {
+	free(adf); adf = NULL; adf_size = 0;
+	disk_set_adf(path);
+	changed = 1;
+}
+
 void disk_set_adf(const char *path) {
 	disk_trace = getenv("RECOMP_DISK_TRACE") != NULL;
 	FILE *f = fopen(path, "rb");
@@ -33,6 +42,7 @@ void disk_cia_write(u8 prb) {
 	}
 	if (sel) {
 		if (!(prb & 1) && (prb_last & 1)) {                   /* STEP: a falling edge */
+			changed = 0;
 			if (prb & 2) { if (track > 0) track--; } else { if (track < 79) track++; }
 			if (disk_trace) fprintf(stderr, "disk: step to cylinder %d\n", track);
 		}
@@ -49,8 +59,7 @@ void disk_set_position(int cyl, int sd, int on) { track = cyl; side = sd; motor 
 /* the drive's status lines, read through CIA-A PRA: bit 2 /CHNG, 3 /WPRO, 4 /TRK0, 5 /RDY (all active low) */
 u8 disk_cia_status(void) {
 	u8 v = 0xFF;
-	if (adf) v &= ~0x04;                  /* a disk is in: /CHNG low... (actually high means no change) */
-	v |= 0x04;
+	if (!adf || changed) v &= ~0x04;      /* /CHNG low: no disk, or one just inserted (until a step) */
 	v &= ~0x08;                           /* write-protected: low */
 	if (track == 0) v &= ~0x10;
 	if (motor) v &= ~0x20;
