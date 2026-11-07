@@ -698,8 +698,7 @@ def _input_lines(path, frames):
             if "mouse" in parts:
                 k = parts.index("mouse")
                 out.append(f"agk mouse {int(parts[k + 1]) + 10000} {int(parts[k + 2]) + 10000}")
-            if "click" in parts:
-                out.append("mouse1 press left")
+            out.append(f"agk mousebutton {1 if 'click' in parts else 0}")
     if frames > cur:
         out.append(f"wait {frames - cur} frames")
     return out

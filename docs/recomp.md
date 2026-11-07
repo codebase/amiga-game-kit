@@ -90,12 +90,16 @@ What happens:
 The native program:
 
 ```
-game --play --adf GAME.adf         a window: arrows/WASD + space/ctrl are the joystick,
-                                   F toggles full speed, Esc quits
+game --play --adf GAME.adf         a window: arrows/WASD + space/ctrl are the joystick, every
+                                   key reaches the Amiga keyboard, a click grabs the mouse and
+                                   F11 lets it go, F12 toggles full speed, Esc quits
 game --frames N --png out.png      headless: run N frames, write the last picture
      --dump chip.bin               ... and the chip RAM at the end
      --wav out.wav                 ... and the sound of the run
-     --input keys.txt              scripted input: lines of "FRAME right left up down fire"
+     --pngs DIR                    every frame as DIR/fNNNNN.png
+     --speed N                     a 68000 N times faster (2, 4, 8, 16, 32), as the game sees it
+     --input keys.txt              scripted input: lines of "FRAME right left up down fire",
+                                   plus "mouse DX DY" and "click" (the left button)
      --trace file                  the registers after every frame
      --timeout SEC                 report where the game is if it's still running after SEC
 RECOMP_DISK_TRACE=1                say what the drive does (steps, reads)
@@ -147,6 +151,24 @@ each is the kind of thing the next game will hit too:
   their length (and the next instruction's address) was 2 bytes short;
 - the fall-through of the last covered instruction of a range is code too:
   without it a `beq` fell straight into the next label in the file.
+
+## The second game: RoboCop 3
+
+Ocean's RoboCop 3 (1992, Digital Image Design) is the opposite kind of
+game: a 3D polygon engine, CPU-bound, drawing with the blitter's line mode,
+code in slow RAM, driven with the mouse, on three disks. Getting it to run
+natively took, in order: the blitter's line mode; a dispatch table for
+$C00000; anchoring the disassembly at every executed address (the game pads
+its jump-table handlers with `****`, which objdump happily decodes as
+instructions, sliding out of step and swallowing the real ones); the native
+build recording the addresses it needed in `needed.txt` for the next
+`agk recomp`; `move usp` being a long; the mouse and the keyboard; a copper
+WAIT for the end of a line taking effect on the next one.
+
+Then the point of it: at the A500's speed the game renders a frame every
+13 video frames. `--speed 16` makes the 68000 sixteen times faster as the
+game sees it, and because the game syncs to the vertical blank it renders
+every frame: 50 fps, from the same code.
 
 ## What's next
 

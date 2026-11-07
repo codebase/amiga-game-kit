@@ -1640,10 +1640,10 @@ index 1b7087b..a316d29 100644
      }
      
 diff --git a/Core/Misc/RetroShell/Console.cpp b/Core/Misc/RetroShell/Console.cpp
-index b661c82..08a3584 100644
+index b661c82..8dbf003 100644
 --- a/Core/Misc/RetroShell/Console.cpp
 +++ b/Core/Misc/RetroShell/Console.cpp
-@@ -1185,16 +1185,371 @@ Console::initCommonCommands(RSCommand &root)
+@@ -1185,16 +1185,382 @@ Console::initCommonCommands(RSCommand &root)
              .flags  = vAmigaDOS ? rs::disabled : rs::hidden,
              .args   = {
                  { .name = { "seconds", "Delay" } },
@@ -1729,6 +1729,17 @@ index b661c82..08a3584 100644
 +            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
 +
 +                shell.tickSync = parseBool(args.at("mode"));
++            }
++        });
++
++        root.add({
++
++            .tokens = { "agk", "mousebutton" },
++            .chelp  = { "Hold (1) or release (0) the left mouse button in port 1" },
++            .args   = { { .name = { "down", "1 = held, 0 = released" } } },
++            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
++
++                controlPort1.mouse.setLeftButton(parseNum(args.at("down")) != 0);
 +            }
 +        });
 +

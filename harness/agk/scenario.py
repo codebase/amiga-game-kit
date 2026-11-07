@@ -28,6 +28,7 @@ Commands:
     key CODE                        tap a raw Amiga keycode (e.g. 0x45 = Esc); vAmiga holds it
                                     for 0.5s (25 frames) in the background - use 'wait' to let it act
     click                           click the left mouse button (port 1): what most cracktros wait for
+    mouse-down / mouse-up           hold the left mouse button / let it go (driving games accelerate with it)
     insert PATH / eject             change the disk in df0 (a multi-disk game asking for disk 2)
     screenshot NAME                 capture the current frame
     dump-mem NAME ADDR LEN          save LEN bytes of memory at ADDR to NAME.bin
@@ -233,6 +234,11 @@ def parse(text, name="scenario"):
             if args:
                 raise ScenarioError(f"line {lineno}: usage: click")
             sc.lines.append("mouse1 press left")
+
+        elif cmd in ("mouse-down", "mouse-up"):
+            if args:
+                raise ScenarioError(f"line {lineno}: usage: {cmd}")
+            sc.lines.append(f"agk mousebutton {1 if cmd == 'mouse-down' else 0}")
 
         elif cmd == "insert":
             if len(args) != 1:

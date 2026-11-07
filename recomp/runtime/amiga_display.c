@@ -122,8 +122,11 @@ void display_render(void) {
 				int vp = a >> 8;
 				if (a == 0xFFFF && b == 0xFFFE) { done = 1; break; }
 				if ((b & 1) == 0) {       /* WAIT */
-					int target = vp + (past255 ? 256 : 0);
-					if (!past255 && vp == 0xFF && (a & 0xFE) >= 0xDE) {
+					/* a wait for a position past the line's bitplane fetch (the
+					   usual "end of line N" split) takes effect on the next line */
+					int hp = a & 0xFE, ddfstop = reg[0x094 >> 1] & 0xFC;
+					int target = vp + (past255 ? 256 : 0) + (hp > ddfstop + 8 ? 1 : 0);
+					if (!past255 && vp == 0xFF && hp >= 0xDE) {
 						if (line < 256) { wait_line = 256; break; }   /* the end of line 255 */
 						past255 = 1; cp += 4; continue;
 					}
