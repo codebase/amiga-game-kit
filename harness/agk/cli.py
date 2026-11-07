@@ -589,13 +589,22 @@ def cmd_recomp(args):
         raise SystemExit("recomp: the coverage is empty")
     print(f"{len(covered)} instructions executed in {len(ranges)} ranges, "
           f"${ranges[0][0]:06X}..${ranges[-1][1]:06X}")
+    images = [(0, need["chip.bin"], os.path.getsize(need["chip.bin"]))]
+    slow = os.path.join(src, "slow.bin")
+    if os.path.exists(slow):
+        images.append((0xC00000, slow, os.path.getsize(slow)))
     try:
-        instrs = recomp.disassemble(need["chip.bin"], ranges, image, src)
+        instrs = recomp.disassemble(images, ranges, image, src, covered)
     except recomp.RecompError as e:
         raise SystemExit(f"recomp: {e}")
+    anchors = [int(a, 16) for a in (args.anchor or [])]
+    needed = os.path.join(out, "needed.txt")
+    if os.path.exists(needed):            # where earlier native runs jumped to and stopped
+        anchors += [int(line, 16) for line in open(needed) if line.strip()]
+        print(f"{len(set(anchors))} address(es) earlier native runs needed (needed.txt): translating from them too")
     if not args.no_follow:
         try:
-            instrs, added = recomp.follow_branches(need["chip.bin"], instrs, image, src)
+            instrs, added = recomp.follow_branches(images, instrs, image, src, anchors=anchors)
         except recomp.RecompError as e:
             raise SystemExit(f"recomp: {e}")
         print(f"{added} more instructions reached by following branches the emulator didn't take")
@@ -609,10 +618,7 @@ def cmd_recomp(args):
     flat = {k.upper(): v for k, v in regs.items() if k != "colors"}
     for i, c in enumerate(regs["colors"]):
         flat[f"COLOR{i:02d}"] = c
-    mem_files = [(need["chip.bin"], 0)]
-    slow = os.path.join(src, "slow.bin")
-    if os.path.exists(slow):
-        mem_files.append((slow, 0xC00000))
+    mem_files = [(path, base) for base, path, _ in images]
     runtime_dir = os.path.join(ROOT, "recomp", "runtime")
     try:
         unknown = recomp.write_project(out, instrs, covered, cpu_regs, mem_files, flat, runtime_dir)
@@ -637,7 +643,8 @@ def cmd_recomp(args):
         print(r.stderr.strip()[-1500:])
     game = rel(os.path.join(out, "game"))
     if sdl:
-        print(f"built {game}: play it with {game} --play --adf GAME.adf (arrows/WASD, space, F for full speed, Esc), "
+        print(f"built {game}: play it with {game} --play --adf GAME.adf (arrows/WASD + space are the joystick, "
+              f"the keyboard is the Amiga's, click grabs the mouse / F11 releases it, F12 full speed, Esc quits), "
               f"or --frames N --png out.png headless")
     else:
         print(f"built {game} headless (no SDL2 found: brew install sdl2 / apt install libsdl2-dev for a window): "
@@ -688,6 +695,11 @@ def _input_lines(path, frames):
                 cur = f
             out += [f"joystick2 {DIRECTIONS[d][1]}" for d in ("left", "up", "fire")]      # release everything
             out += [f"joystick2 {DIRECTIONS[w][0]}" for w in parts[1:] if w in DIRECTIONS]
+            if "mouse" in parts:
+                k = parts.index("mouse")
+                out.append(f"agk mouse {int(parts[k + 1]) + 10000} {int(parts[k + 2]) + 10000}")
+            if "click" in parts:
+                out.append("mouse1 press left")
     if frames > cur:
         out.append(f"wait {frames - cur} frames")
     return out
@@ -1200,6 +1212,7 @@ def main(argv=None):
     p.add_argument("--snapshot", help="the .vasnap the data was taken at (default DIR/end.vasnap)")
     p.add_argument("--adf", help="the disk, for the native run")
     p.add_argument("--input", help="for --diff: a file of 'FRAME right left up down fire' lines, played in both")
+    p.add_argument("--anchor", action="append", metavar="HEX", help="also translate the code at this address (repeatable)")
     p.add_argument("--no-follow", action="store_true",
                    help="translate only what the coverage saw; don't follow branches into code the emulator never ran")
     p.add_argument("-p", "--profile", default="a500")

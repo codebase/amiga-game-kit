@@ -322,7 +322,8 @@ static inline u32 take_interrupt(int level, u32 pc) {
 	return target;
 }
 
-#define TICK(n) do { cpu.cycles += (n); if (cpu.cycles >= next_event) run_events(); } while (0)
+extern int cycle_shift;                   /* --speed: the CPU this much faster than an A500 (cycles >> shift) */
+#define TICK(n) do { cpu.cycles += (n) >> cycle_shift; if (cpu.cycles >= next_event) run_events(); } while (0)
 
 /* the per-instruction trace, for agk recomp --diff (built with -DRECOMP_ITRACE) */
 #ifdef RECOMP_ITRACE

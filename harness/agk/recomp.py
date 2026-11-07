@@ -36,7 +36,7 @@ class RecompError(Exception):
 
 # ----------------------------------------------------------------- input
 
-def coverage_ranges(paths, lo=0, hi=0x200000, gap=64):
+def coverage_ranges(paths, lo=0, hi=0x1000000, gap=64):
     """The covered addresses (the union of the coverage files) -> [(start, end)]
     merged over gaps smaller than `gap`, and the set of addresses"""
     bits = bytearray(1 << 21)
@@ -79,14 +79,38 @@ def parse_objdump(line, out):
     return False
 
 
-def disassemble(dump, ranges, image, workdir):
-    """objdump each range -> [(addr, nwords, mnemonic, operands)]"""
-    rel = os.path.relpath(dump, workdir)
+def image_for(images, addr):
+    """(base, path) of the memory image holding addr, or None"""
+    for base, path, size in images:
+        if base <= addr < base + size:
+            return base, path
+    return None
+
+
+def objdump_cmd(images, workdir, addr, stop):
+    """the objdump arguments disassembling [addr, stop) out of the right image"""
+    found = image_for(images, addr)
+    if not found:
+        return None
+    base, path = found
+    rel = os.path.relpath(path, workdir)
+    return ["m68k-amigaos-objdump", "-b", "binary", "-m", "m68k:68000", "-D", f"--adjust-vma={base:#x}",
+            f"--start-address={addr:#x}", f"--stop-address={stop:#x}", rel]
+
+
+def disassemble(images, ranges, image, workdir, covered=frozenset()):
+    """objdump each range -> [(addr, nwords, mnemonic, operands)]; images are the
+    memory dumps as [(base, path, size)] (chip RAM, slow RAM). Every address in
+    `covered` (the instructions the emulator executed) ends up an instruction
+    start: where a linear decode of a range slid out of step over data or
+    padding between executed instructions, the decode restarts at the
+    executed address and what it had made of those bytes is dropped."""
     out = []
     for s, e in ranges:
-        r = subprocess.run(["docker", "run", "--rm", "-v", f"{workdir}:/w", "-w", "/w", image,
-                            "m68k-amigaos-objdump", "-b", "binary", "-m", "m68k:68000", "-D",
-                            f"--start-address={s:#x}", f"--stop-address={e + 10:#x}", rel],
+        cmd = objdump_cmd(images, workdir, s, e + 10)
+        if not cmd:
+            continue                      # code in memory we have no dump of (the ROM)
+        r = subprocess.run(["docker", "run", "--rm", "-v", f"{workdir}:/w", "-w", "/w", image, *cmd],
                            capture_output=True, text=True, errors="replace")
         if r.returncode != 0:
             raise RecompError(f"objdump failed: {r.stderr.strip()[:300]}")
@@ -94,22 +118,65 @@ def disassemble(dump, ranges, image, workdir):
         for line in r.stdout.splitlines():
             parse_objdump(line, got)
         out += [i for i in got if i[0] < e]
+    for _ in range(8):
+        starts = {a for a, *_ in out}
+        missing = sorted(a for a in covered if a not in starts and image_for(images, a))
+        if not missing:
+            break
+        ends = {}
+        for a in missing:
+            for s, e in ranges:
+                if s <= a < e:
+                    ends[a] = e
+                    break
+            else:
+                ends[a] = a + 0x40
+        cmds = [(a, objdump_cmd(images, workdir, a, ends[a] + 10)) for a in missing]
+        script = " ; ".join(f"echo '@ {a:#x}' ; " + " ".join(cmd) for a, cmd in cmds if cmd)
+        r = subprocess.run(["docker", "run", "--rm", "-v", f"{workdir}:/w", "-w", "/w", image, "sh", "-c", script],
+                           capture_output=True, text=True, errors="replace")
+        if r.returncode != 0:
+            raise RecompError(f"objdump failed: {r.stderr.strip()[:300]}")
+        new, run, anchor = [], [], None
+        for line in r.stdout.splitlines() + ["@ end"]:
+            if line.startswith("@ "):
+                new += run
+                run, anchor = [], (int(line[2:], 16) if line != "@ end" else None)
+                continue
+            if anchor is None or (run and run[-1][0] in starts and len(run) > 1):
+                continue
+            before = len(run)
+            if parse_objdump(line, run) and len(run) > before and run[-1][0] in starts:
+                run.pop()                 # back in step with the earlier decode
+                anchor = None
+        if not new:
+            break
+        spans = [(a, a + 2 * w) for a, w, *_ in new]
+        def overlaps(i):
+            a, w = i[0], i[1]
+            return any(a < e2 and s2 < a + 2 * w for s2, e2 in spans)
+        out = sorted([i for i in out if not overlaps(i)] + new)
     return out
 
 
-def disassemble_from(dump, anchors, image, workdir, known, limit=0x800):
+def disassemble_from(images, anchors, image, workdir, known, limit=0x800, trusted=frozenset()):
     """objdump from each anchor address (a branch target the coverage didn't
     reach) until a known instruction, an unconditional jump or data: the code
     the emulator never ran but the game can get to. One docker call for all
-    the anchors. -> new [(addr, nwords, mnemonic, operands)], in order"""
-    rel = os.path.relpath(dump, workdir)
-    script = " ; ".join(f"echo '@ {a:#x}' ; m68k-amigaos-objdump -b binary -m m68k:68000 -D "
-                        f"--start-address={a:#x} --stop-address={a + limit:#x} {rel}" for a in anchors)
+    the anchors. `known` maps every word of an existing instruction to that
+    instruction's address; `trusted` are the instructions the coverage saw. An
+    anchor's own instruction may displace earlier sweep instructions it overlaps
+    (they decoded data or padding), never a trusted one. -> (new instructions
+    in order, the displaced instructions' addresses)"""
+    cmds = [(a, objdump_cmd(images, workdir, a, a + limit)) for a in anchors]
+    script = " ; ".join(f"echo '@ {a:#x}' ; " + " ".join(cmd) for a, cmd in cmds if cmd)
+    if not script:
+        return []
     r = subprocess.run(["docker", "run", "--rm", "-v", f"{workdir}:/w", "-w", "/w", image, "sh", "-c", script],
                        capture_output=True, text=True, errors="replace")
     if r.returncode != 0:
         raise RecompError(f"objdump failed: {r.stderr.strip()[:300]}")
-    out, run, stop = [], [], False
+    out, run, stop, displaced = [], [], False, set()
     for line in r.stdout.splitlines() + ["@ end"]:
         if line.startswith("@ "):
             out += run
@@ -122,7 +189,15 @@ def disassemble_from(dump, anchors, image, workdir, known, limit=0x800):
             continue
         addr, words, mn, ops = run[-1]
         grew = len(run) == before         # a continuation line: the last instruction is longer than it looked
-        if (not grew and addr in known) or any(addr + 2 * i in known for i in range(prev_words if grew else 1, words)):
+        first = len(run) == 1             # the anchor's own instruction
+        overlap = {known[w] for w in (addr + 2 * i for i in range(prev_words if grew else 0, words)) if w in known}
+        if first and overlap and not (overlap & trusted) and addr not in overlap:
+            displaced |= overlap          # the anchor wins over what a sweep made of these bytes
+            for w, start in list(known.items()):
+                if start in overlap:
+                    del known[w]
+            overlap = set()
+        if overlap:
             run.pop()                     # back in known code (or straddling it: this run was misaligned)
             stop = True
             continue
@@ -131,30 +206,43 @@ def disassemble_from(dump, anchors, image, workdir, known, limit=0x800):
             stop = True
             continue
         for i in range(words):
-            known.add(addr + 2 * i)
+            known[addr + 2 * i] = addr
         if re.fullmatch(r"(bra|jmp|rts|rte|rtr|illegal|reset)[swl]?", mn):
             stop = True
-    return out
+    return out, displaced
 
 
-def follow_branches(dump, instrs, image, workdir, hi=0x200000, rounds=12):
+def follow_branches(images, instrs, image, workdir, hi=0x1000000, rounds=12, anchors=()):
     """Add the code reachable by constant branches from `instrs` (repeatedly,
-    until nothing new turns up). -> (instrs sorted, the number added)"""
-    known = set()
+    until nothing new turns up), and from `anchors`: addresses a native run
+    jumped to (needed.txt). -> (instrs sorted, the number added)"""
+    known = {}                            # every word of every instruction -> the instruction's address
     for addr, words, *_ in instrs:
-        known.update(addr + 2 * i for i in range(words))
+        for i in range(words):
+            known[addr + 2 * i] = addr
+    trusted = frozenset(a for a, *_ in instrs)
     added = 0
+    extra = set(anchors)
     for _ in range(rounds):
         t = Translator(instrs, set())
         t.translate()
-        targets = set(t.unknown)
+        targets = set(t.unknown) | extra
+        extra = set()
+        # a target inside an instruction means that instruction was mis-decoded (a
+        # sweep that started in data, or padding that happens to decode): drop it
+        bad = {known[a] for a in targets if a in known and known[a] != a and known[a] not in trusted}
+        if bad:
+            instrs = [i for i in instrs if i[0] not in bad]
+            known = {w: a for w, a in known.items() if a not in bad}
         for addr, words, mn, _ in instrs:          # the fall-through of the last instruction of a range
             if not re.fullmatch(r"(bra|jmp|rts|rte|rtr|illegal|reset|\.short|\.long)[swl]?", mn):
                 targets.add(addr + 2 * words)
         anchors = sorted(a for a in targets if a < hi and a % 2 == 0 and a not in known)
         if not anchors:
             break
-        new = disassemble_from(dump, anchors, image, workdir, known)
+        new, displaced = disassemble_from(images, anchors, image, workdir, known, trusted=trusted)
+        if displaced:
+            instrs = [i for i in instrs if i[0] not in displaced]
         if not new:
             break
         instrs = sorted(instrs + new)
@@ -410,8 +498,9 @@ class Translator:
                 L.append("\t" + s)
 
         # --- moves
-        if base == "move" and o and o[0] in ("%sr", "%ccr", "%usp") or (base == "move" and o and o[1] in ("%sr", "%ccr", "%usp")):
-            src, dst = opnd(0, 16), opnd(1, 16)
+        if base == "move" and o and (o[0] in ("%sr", "%ccr", "%usp") or o[1] in ("%sr", "%ccr", "%usp")):
+            width = 32 if "%usp" in o else 16    # the USP is a whole address; SR and CCR are words
+            src, dst = opnd(0, width), opnd(1, width)
             emit(src); emit(dst, dst.write(src.read()))
             return
         if base == "move":
@@ -684,13 +773,19 @@ def generate(instrs, covered, entry_pc):
     out = ['#include "m68k.h"', "#include <stdlib.h>", "static int recomp_trace;", "",
            "/* Generated by agk recomp. Each label is an instruction's address. */",
            "void run_translated(void) {",
-           "\tstatic void *table[0x100000];", "\tstatic int ready = 0;", "\tu32 ea, tmp; int ok;",
+           "\tstatic void *table[0x100000];       /* chip RAM, by address / 2 */",
+           "\tstatic void *slow[0x100000];        /* $C00000.. likewise */",
+           "\tstatic int ready = 0;", "\tu32 ea, tmp; int ok;",
            "\tif (!ready) {", "\t\tready = 1; recomp_trace = getenv(\"RECOMP_TRACE\") != 0;"]
     for a in sorted(t.addrs):
-        out.append(f"\t\ttable[{a:#x}u >> 1] = &&{t.label(a)};")
+        if a < 0x200000:
+            out.append(f"\t\ttable[{a:#x}u >> 1] = &&{t.label(a)};")
+        elif 0xC00000 <= a < 0xE00000:
+            out.append(f"\t\tslow[({a:#x}u - 0xC00000u) >> 1] = &&{t.label(a)};")
     out += ["\t}", "\tgoto dispatch;", "dispatch:",
             "\tif (recomp_trace) fprintf(stderr, \"-> %06X  sr %04X a7 %06X\\n\", cpu.pc, get_sr(), A[7]);",
-            "\tif (cpu.pc < 0x200000u && table[cpu.pc >> 1]) goto *table[cpu.pc >> 1];",
+            "\tif (cpu.pc < 0x200000u) { if (table[cpu.pc >> 1]) goto *table[cpu.pc >> 1]; }",
+            "\telse if (cpu.pc >= 0xC00000u && cpu.pc < 0xE00000u && slow[(cpu.pc - 0xC00000u) >> 1]) goto *slow[(cpu.pc - 0xC00000u) >> 1];",
             "\ttrace_die(\"jump to code that was never executed under the emulator (run agk inspect --coverage further)\", cpu.pc);",
             "\treturn;"]
     out += body

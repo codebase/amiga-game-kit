@@ -18,10 +18,44 @@ void blitter_run(u16 *regs, u32 *pts) {
 	u8 minterm = (u8)con0;
 	int zero = 1;
 
-	if (con1 & 1) {                       /* line mode: a Bresenham line, one pixel per row */
-		/* (the registers hold the octant and the error terms the way the hardware wants:
-		   enough games draw lines with it that this stays a TODO until one does) */
-		trace_die("blitter line mode isn't implemented yet", 0);
+	if (con1 & 1) {                       /* line mode */
+		/* The CPU set it up the way the HRM says: BLTAPT holds the error term
+		 * (4*dy - 2*dx), BLTAMOD 4*(dy - dx), BLTBMOD 4*dy, BLTCMOD the row
+		 * length, BLTCON1's SUD/SUL/AUL the octant and SIGN the error's sign,
+		 * ASH the start pixel, BLTBDAT the texture, BLTSIZE's height the
+		 * length. Each step: the pixel through the minterm (A = the pixel bit,
+		 * B = the texture bit, C = the word), then a step along the major axis
+		 * and, when the error is positive, along the minor one. SING draws one
+		 * pixel per row, what a fill wants. */
+		int sud = con1 & 0x10, sul = con1 & 0x08, aul = con1 & 0x04, sing = con1 & 0x02;
+		int sign = con1 & 0x40;
+		int dot = 0;                      /* a pixel was drawn on this row (SING) */
+		u16 tex = bdat;
+		for (u32 i = 0; i < h; i++) {
+			u16 c = (u16)rd16(cpt);
+			u16 a = (u16)(0x8000 >> ash) & afwm;
+			u16 b = (u16)((tex >> bsh | tex << (16 - bsh)) & 1 ? 0xFFFF : 0);   /* (the texture rotates by BSH) */
+			u16 d = 0;
+			for (int bit = 0; bit < 16; bit++) {
+				int idx = (a >> bit & 1) << 2 | (b >> bit & 1) << 1 | (c >> bit & 1);
+				if (minterm >> idx & 1) d |= (u16)(1 << bit);
+			}
+			if (!sing || !dot) { if (use_d) wr16(cpt, d); if (d != c) zero = 0; }
+			if (d != c) dot = 1;
+			/* the step: the minor axis when the error says so, then the major one */
+			if (!sign) {
+				if (sud) { if (sul) { cpt -= (u32)cmod; dot = 0; } else { cpt += (u32)cmod; dot = 0; } }
+				else { if (sul) { if (ash-- == 0) { ash = 15; cpt -= 2; } } else { if (++ash == 16) { ash = 0; cpt += 2; } } }
+			}
+			if (sud) { if (aul) { if (ash-- == 0) { ash = 15; cpt -= 2; } } else { if (++ash == 16) { ash = 0; cpt += 2; } } }
+			else { if (aul) { cpt -= (u32)cmod; dot = 0; } else { cpt += (u32)cmod; dot = 0; } }
+			apt += sign ? (u32)(s32)bmod : (u32)(s32)amod;
+			sign = (apt & 0x8000) != 0;
+			tex = (u16)(tex << 1 | tex >> 15);
+		}
+		pts[0] = apt; pts[2] = cpt; pts[3] = cpt;
+		regs[0x002 >> 1] = zero ? 0x2000 : 0;
+		return;
 	}
 	for (u32 y = 0; y < h; y++) {
 		u32 aold = 0, bold = 0;

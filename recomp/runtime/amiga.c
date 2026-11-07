@@ -36,6 +36,8 @@ static u32 beam_line(void) { return (u32)((cpu.cycles - frame_start) / CYCLES_PE
 /* ------------------------------------------------------ custom chips */
 
 static u16 reg[0x100];                    /* the last value written to each register (index = offset / 2) */
+u32 stat_blits, stat_cop1lc;              /* per frame, for --trace: how the game paces itself */
+extern u8 mouse_x, mouse_y, mouse_left, mouse_right;
 #define R(off) reg[(off) >> 1]
 #define DMACON R(0x096)
 #define INTENA R(0x09A)
@@ -95,8 +97,8 @@ void chip_write(u32 addr, u32 value, int bits) {
 	case 0x052: bltpt[0] = (bltpt[0] & 0xFFFF0000u) | (v & 0xFFFE); break;
 	case 0x054: bltpt[3] = (bltpt[3] & 0xFFFF) | ((u32)(v & 0x1F) << 16); break;
 	case 0x056: bltpt[3] = (bltpt[3] & 0xFFFF0000u) | (v & 0xFFFE); break;
-	case 0x058: R(off) = v; blitter_run(reg, bltpt); intreq_set(0x0040); break;   /* BLTSIZE starts it; done at once */
-	case 0x080: cop1lc = (cop1lc & 0xFFFF) | ((u32)(v & 0x1F) << 16); break;
+	case 0x058: stat_blits++; R(off) = v; blitter_run(reg, bltpt); intreq_set(0x0040); break;   /* BLTSIZE starts it; done at once */
+	case 0x080: stat_cop1lc++; cop1lc = (cop1lc & 0xFFFF) | ((u32)(v & 0x1F) << 16); break;
 	case 0x082: cop1lc = (cop1lc & 0xFFFF0000u) | (v & 0xFFFE); break;
 	case 0x084: cop2lc = (cop2lc & 0xFFFF) | ((u32)(v & 0x1F) << 16); break;
 	case 0x086: cop2lc = (cop2lc & 0xFFFF0000u) | (v & 0xFFFE); break;
@@ -136,10 +138,10 @@ u32 chip_read(u32 addr, int bits) {
 		v = (v & ~0x4000) | (R(0x002) & 0x6000); break;
 	case 0x004: { u32 line = beam_line(); v = (line >> 8) & 1; break; }          /* VPOSR */
 	case 0x006: { u32 line = beam_line(); v = ((line & 0xFF) << 8) | (((cpu.cycles - frame_start) % CYCLES_PER_LINE) & 0xFF); break; }  /* VHPOSR */
-	case 0x00A: v = 0; break;                     /* JOY0DAT: the mouse, still */
+	case 0x00A: v = (u16)(mouse_y << 8 | mouse_x); break;   /* JOY0DAT: the mouse */
 	case 0x00C: { extern u16 joy1dat; v = joy1dat; break; }
 	case 0x010: v = ADKCON; break;
-	case 0x016: v = 0xFF00; break;                /* POTGOR: no buttons */
+	case 0x016: v = 0xFF00 & ~(mouse_right ? 0x0400 : 0); break;   /* POTGOR: the right mouse button is bit 10 */
 	case 0x01A: v = 0x8000; break;                /* DSKBYTR: nothing */
 	case 0x01C: v = INTENA; break;
 	case 0x01E: v = INTREQ; break;
@@ -153,12 +155,22 @@ u32 chip_read(u32 addr, int bits) {
 typedef struct {
 	u8 pra, prb, ddra, ddrb, icr_mask, icr_data;
 	u16 ta, ta_latch, tb, tb_latch;
-	u8 cra, crb;
+	u8 cra, crb, sdr;
 	u32 tod;
 } cia_t;
 static cia_t ciaa, ciab;
 u16 joy1dat;
 u8 joy_fire;                              /* 1: pressed */
+u8 mouse_x, mouse_y;                      /* the mouse's counters (JOY0DAT) */
+u8 mouse_left, mouse_right;
+
+/* the keyboard: a byte at a time over CIA-A's serial port, each raising the SP
+ * interrupt; the computer answers by pulsing the line (CRA's SPMODE) before
+ * the next one is sent */
+static u8 kbd_queue[64];
+static int kbd_head, kbd_tail, kbd_busy;
+static u32 kbd_sent_frame;
+void kbd_push(u8 code) { if (((kbd_tail + 1) & 63) != kbd_head) { kbd_queue[kbd_tail] = code; kbd_tail = (kbd_tail + 1) & 63; } }
 
 static void cia_irq(cia_t *c, u8 bit) {
 	c->icr_data |= bit;
@@ -182,7 +194,9 @@ void cia_write(u32 addr, u8 value) {
 	case 6: c->tb_latch = (c->tb_latch & 0xFF00) | value; break;
 	case 7: c->tb_latch = (c->tb_latch & 0x00FF) | (value << 8); if (!(c->crb & 1)) c->tb = c->tb_latch; break;
 	case 13: if (value & 0x80) c->icr_mask |= value & 0x7F; else c->icr_mask &= ~(value & 0x7F); break;
-	case 14: c->cra = value; if (value & 0x10) c->ta = c->ta_latch; break;
+	case 14:
+		if (c == &ciaa && (c->cra & 0x40) && !(value & 0x40)) kbd_busy = 0;   /* the keyboard handshake is over */
+		c->cra = value; if (value & 0x10) c->ta = c->ta_latch; break;
 	case 15: c->crb = value; if (value & 0x10) c->tb = c->tb_latch; break;
 	default: break;
 	}
@@ -194,7 +208,7 @@ u8 cia_read(u32 addr) {
 	switch (r) {
 	case 0:
 		/* CIA-A: /OVL /LED, the drive's /CHNG /WPRO /TK0 /RDY, /FIR0 (the mouse, up), /FIR1 (the joystick) */
-		if (c == &ciaa) return (u8)((c->pra & c->ddra & 3) | (disk_cia_status() & 0x3C) | 0x40 | (joy_fire ? 0 : 0x80));
+		if (c == &ciaa) return (u8)((c->pra & c->ddra & 3) | (disk_cia_status() & 0x3C) | (mouse_left ? 0 : 0x40) | (joy_fire ? 0 : 0x80));
 		return (u8)((c->pra & c->ddra) | (~c->ddra & 0xFF));   /* CIA-B: the serial port's handshake lines, floating high */
 	case 1: return c->prb;
 	case 2: return c->ddra;
@@ -208,6 +222,7 @@ u8 cia_read(u32 addr) {
 		return (u8)(t >> (8 * (r - 8)));
 	}
 	case 13: { u8 v = c->icr_data; c->icr_data = 0; return v; }
+	case 12: return c->sdr;
 	case 14: return c->cra;
 	case 15: return c->crb;
 	default: return 0;
@@ -241,6 +256,13 @@ void run_events(void) {
 		frame_done = 1;
 		{ extern void frame_hook(void); frame_hook(); }
 		ciaa.tod++; ciab.tod += LINES_PER_FRAME;
+		if (kbd_busy && frame_count - kbd_sent_frame > 3) kbd_busy = 0;   /* (no handshake came: the game doesn't do it) */
+		if (!kbd_busy && kbd_head != kbd_tail) {
+			u8 code = kbd_queue[kbd_head]; kbd_head = (kbd_head + 1) & 63;
+			ciaa.sdr = (u8)~((code << 1) | (code >> 7));   /* rotated and inverted, as the keyboard sends it */
+			cia_irq(&ciaa, 0x08);
+			kbd_busy = 1; kbd_sent_frame = frame_count;
+		}
 		if (DMACON & 0x0200) intreq_set(0x0020);  /* VERTB */
 		{ extern int disk_motor_on(void); if (disk_motor_on() && frame_count % 10 == 0) cia_irq(&ciab, 0x10); }   /* the index pulse on CIA-B FLAG, 5 a second */
 	}

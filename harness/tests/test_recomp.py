@@ -64,6 +64,12 @@ class TranslateTests(unittest.TestCase):
         self.assertIn("CC_EQ", text)
         self.assertIn("op_sub(", text)                     # subqw isn't an scc
 
+    def test_usp_moves_are_longs(self):
+        L, _ = lines_of([(0x100, 1, "movel", "a3,%usp"), (0x102, 1, "movel", "%usp,sp")])
+        text = "\n".join(L)
+        self.assertIn("if (cpu.s) cpu.usp = A[3]; else A[7] = A[3];", text)
+        self.assertIn("A[7] = (cpu.s ? cpu.usp : A[7]);", text)
+
     def test_data_in_uncovered_code_stops(self):
         L, _ = lines_of([(0x100, 1, ".short", "0x4489")], covered=set())
         self.assertIn('trace_die("data reached as code", 0x100u);', "\n".join(L))
@@ -109,15 +115,27 @@ FAKE_OBJDUMP = """@ 0x200
 
 class FollowTests(unittest.TestCase):
     def test_sweep_stops_at_jumps_data_and_known_code(self):
-        known = {0x402}
+        known = {0x402: 0x402}
         fake = mock.Mock(returncode=0, stdout=FAKE_OBJDUMP, stderr="")
         with mock.patch.object(recomp.subprocess, "run", return_value=fake):
-            out = recomp.disassemble_from("chip.bin", [0x200, 0x300, 0x400, 0x500], "img", "/tmp", known)
+            out, displaced = recomp.disassemble_from([(0, "chip.bin", 0x80000)], [0x200, 0x300, 0x400, 0x500], "img", "/tmp", known)
         addrs = [a for a, *_ in out]
         self.assertEqual(addrs, [0x200, 0x202, 0x300, 0x400, 0x500, 0x508])   # not past the bra, not the data, not into known code
         self.assertIn(0x202, known)
         self.assertEqual(out[-2][1], 4)                          # the wrapped 8-byte instruction is 4 words
         self.assertIn(0x506, known)
+        self.assertEqual(displaced, set())
+
+    def test_anchor_displaces_a_sweep_that_decoded_padding(self):
+        known = {0x504: 0x504, 0x506: 0x504}                      # a sweep read "2a2a 0c79" as one instruction at $504
+        fake = mock.Mock(returncode=0, stdout=FAKE_OBJDUMP, stderr="")
+        with mock.patch.object(recomp.subprocess, "run", return_value=fake):
+            out, displaced = recomp.disassemble_from([(0, "chip.bin", 0x80000)], [0x500], "img", "/tmp", known)
+        self.assertEqual([a for a, *_ in out if a >= 0x500], [0x500, 0x508])
+        self.assertEqual(displaced, {0x504})
+        with mock.patch.object(recomp.subprocess, "run", return_value=fake):
+            out, displaced = recomp.disassemble_from([(0, "chip.bin", 0x80000)], [0x500], "img", "/tmp", {0x504: 0x504, 0x506: 0x504}, trusted=frozenset({0x504}))
+        self.assertNotIn(0x500, [a for a, *_ in out])             # but never a coverage instruction
 
 
 if __name__ == "__main__":
