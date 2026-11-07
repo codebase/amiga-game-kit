@@ -1,16 +1,25 @@
-# Amiga Game Kit (AGK)
+<h1 align="center">Amiga Game Kit (AGK)</h1>
 
-![Amiga Game Kit: build Commodore Amiga games with AI agents](docs/img/amiga-game-kit-banner.png)
+<p align="center">
+  <img src="docs/img/amiga-game-kit-banner.png" alt="Amiga Game Kit: build and reimagine Amiga games with AI" width="100%">
+</p>
 
-[![AROS selftest](https://github.com/codebase/amiga-game-kit/actions/workflows/selftest.yml/badge.svg?branch=main)](https://github.com/codebase/amiga-game-kit/actions/workflows/selftest.yml)
-[![Latest release](https://img.shields.io/github/v/release/codebase/amiga-game-kit)](https://github.com/codebase/amiga-game-kit/releases/latest)
-[![MIT license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB)](#quick-start)
-[![Amiga A500 and A1200 AGA](https://img.shields.io/badge/Amiga-A500%20%7C%20A1200%20AGA-orange)](docs/aga.md)
-[![MCP tools](https://img.shields.io/badge/MCP-tools-8A63D2)](#mcp-server)
-[![GitHub stars](https://img.shields.io/github/stars/codebase/amiga-game-kit?style=social)](https://github.com/codebase/amiga-game-kit/stargazers)
+<p align="center">
+  <a href="https://github.com/codebase/amiga-game-kit/actions/workflows/selftest.yml"><img src="https://github.com/codebase/amiga-game-kit/actions/workflows/selftest.yml/badge.svg?branch=main" alt="AROS selftest"></a>
+  <a href="https://github.com/codebase/amiga-game-kit/releases/latest"><img src="https://img.shields.io/github/v/release/codebase/amiga-game-kit" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
+  <a href="#quick-start"><img src="https://img.shields.io/badge/Python-3.11%2B-3776AB" alt="Python 3.11+"></a>
+  <a href="docs/aga.md"><img src="https://img.shields.io/badge/Amiga-A500%20%7C%20A1200%20AGA-orange" alt="Amiga A500 and A1200 AGA"></a>
+  <a href="#mcp-server"><img src="https://img.shields.io/badge/MCP-tools-8A63D2" alt="MCP tools"></a>
+  <a href="https://github.com/codebase/amiga-game-kit/stargazers"><img src="https://img.shields.io/github/stars/codebase/amiga-game-kit?style=social" alt="GitHub stars"></a>
+</p>
 
-[Play the demos](docs/play-demos.md) · [Make your first game](docs/first-game.md) · [Roadmap](docs/roadmap.md)
+<p align="center">
+  <a href="docs/play-demos.md">Play the demos</a> ·
+  <a href="docs/first-game.md">Make your first game</a> ·
+  <a href="docs/recomp.md">Native recompilation</a> ·
+  <a href="docs/roadmap.md">Roadmap</a>
+</p>
 
 A kit for building Commodore Amiga games with AI coding agents (Claude Code,
 Codex, Cursor, ...). Agents are only as good as their feedback loop, so AGK
@@ -19,6 +28,11 @@ screenshots, frame-exact joystick input, serial debug output, memory and
 register dumps, and golden-image tests. It's built on proven Amiga tooling:
 [ACE](https://github.com/AmigaPorts/ACE), bebbo's GCC and
 [vAmiga](https://github.com/dirkwhoffmann/vAmiga).
+
+AGK also includes [experimental native recompilation](docs/recomp.md): translate
+68000 game code from your own disk images into C, run it on modern systems, and
+use that as a starting point for improvements. Compatibility is still limited;
+see the guide for what's working and what's next.
 
 ```
 $ agk test examples/hello

@@ -1,0 +1,10 @@
+{
+  "generator": "built-in image_gen",
+  "asset": "amiga-game-kit-banner.png",
+  "references": [
+    "Previous approved banner",
+    "User-supplied classic red and white Amiga Boing Ball reference"
+  ],
+  "prompt": "Use case: precise-object-edit. Image 1 is the edit target. Image 2 is the user's exact reference for the classic Commodore Amiga Boing Ball. Make exactly two changes to image 1. FIRST: replace the red/white ball with a faithful pixel-art rendition of the reference sphere: perfectly round silhouette, smooth coherent latitude/longitude checkerboard wrapping, broad alternating pure red and white square cells curving naturally over its surface, a slightly tilted grid matching the reference, correct perspective compression at the rim. No warped or fragmented cells, no pinched melted top, no dents, no random tiny patches. Reference has roughly six broad checker rows visible. Use strong red, clean white with grey shadows, a subtle upper-left highlight and darker lower-right shading. Render crisp intentional pixel clusters to fit this demoscene artwork, not a pasted photograph. Keep ball position and diameter and its purple motion trail unchanged. SECOND: replace ONLY the small subtitle with the exact text 'Build and reimagine Amiga games with AI', centered in the same white pixel typeface, baseline, size, and decorative line treatment. Keep the large AMIGA GAME KIT title completely unchanged. Preserve the whole Amiga 500 computer exactly, including keyboard geometry, oblique viewpoint, proportions, logo, left expansion cover and lighting. Preserve all landscape, spaceship, stars, colors, composition and other elements. No other changes. Keep the existing wide 3:1 canvas aspect ratio.",
+  "export": "Original generated PNG"
+}
