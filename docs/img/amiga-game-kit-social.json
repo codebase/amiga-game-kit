@@ -1,0 +1,8 @@
+{
+  "asset": "amiga-game-kit-social.jpg",
+  "generator": "built-in image_gen",
+  "reference": "amiga-game-kit-banner.png",
+  "description": "GitHub social preview with the approved banner extended vertically to a 2:1 frame.",
+  "prompt": "Create a 2:1 landscape GitHub social preview version of this approved AMIGA GAME KIT banner. Preserve the entire existing artwork and exact text, especially the precise Amiga 500 computer and its strong oblique perspective, the chrome AMIGA GAME KIT title, and subtitle 'Build Commodore Amiga games with AI agents'. Do not redesign or redraw these features. Expand the canvas vertically by outpainting matching dark starry sky above and purple lake/rock foreground below until the overall aspect ratio is exactly 2:1. Center the existing 3:1 artwork inside the taller 2:1 frame so no original objects or typography are cropped. All original artwork should stay together at the same relative proportions. Seamlessly continue the crisp demoscene pixel art scenery into the added space. Keep text comfortably away from every edge. No new text or logos. Intended output 1280 by 640 pixels or a higher resolution with exactly the same 2:1 aspect ratio.",
+  "export": "Resized to 1280x640 and encoded as JPEG at quality 90 for GitHub's upload size limit."
+}

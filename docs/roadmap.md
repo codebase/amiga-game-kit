@@ -1,4 +1,21 @@
-# Roadmap: what building VOIDRUNNER asked of the kit
+# Roadmap
+
+## Next up
+
+- **Easier setup:** clearer dependency checks and a guided setup command for the
+  compiler, emulator and ROM profiles.
+- **PyPI installation:** package the CLI, templates and runtime so installation
+  works without a Git checkout. Move tool downloads and writable caches outside
+  the installed package, then test a clean wheel install before publishing.
+  `pipx install amiga-game-kit` is the target, not a supported command yet.
+- **Real hardware testing:** boot the demo disks on physical A500 and A1200
+  machines and record the exact configurations, controls, timing and audio
+  results. AGA support remains experimental until this is checked.
+
+These are planned improvements, with no release dates promised. For now, use
+the [source setup](../README.md#quick-start) or [download a demo](play-demos.md).
+
+## Shipped: what building VOIDRUNNER asked of the kit
 
 Each item came from real friction while making `examples/voidrunner` (a
 50 fps shmup) and fitting Retro Diffusion art into it. Status is kept here as

@@ -8,6 +8,9 @@
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB)](#quick-start)
 [![Amiga A500 and A1200 AGA](https://img.shields.io/badge/Amiga-A500%20%7C%20A1200%20AGA-orange)](docs/aga.md)
 [![MCP tools](https://img.shields.io/badge/MCP-tools-8A63D2)](#mcp-server)
+[![GitHub stars](https://img.shields.io/github/stars/codebase/amiga-game-kit?style=social)](https://github.com/codebase/amiga-game-kit/stargazers)
+
+[Play the demos](docs/play-demos.md) · [Make your first game](docs/first-game.md) · [Roadmap](docs/roadmap.md)
 
 A kit for building Commodore Amiga games with AI coding agents (Claude Code,
 Codex, Cursor, ...). Agents are only as good as their feedback loop, so AGK
@@ -68,6 +71,10 @@ too old).
 
 Four games were built with it, by an agent, start to finish: a shoot-'em-up,
 a racer, a platformer and an AGA mech demo, below.
+
+**Just want to play?** [Download the ready-to-boot game disks](docs/play-demos.md).
+No build tools needed. IRON WRAITH needs an **A1200 / AGA** configuration; the other
+three run on an A500.
 
 ## A1200 / AGA demo: IRON WRAITH
 
