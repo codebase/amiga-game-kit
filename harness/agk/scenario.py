@@ -27,6 +27,8 @@ Commands:
                                     code that reads the mouse port as a joystick)
     key CODE                        tap a raw Amiga keycode (e.g. 0x45 = Esc); vAmiga holds it
                                     for 0.5s (25 frames) in the background - use 'wait' to let it act
+    click                           click the left mouse button (port 1): what most cracktros wait for
+    insert PATH / eject             change the disk in df0 (a multi-disk game asking for disk 2)
     screenshot NAME                 capture the current frame
     dump-mem NAME ADDR LEN          save LEN bytes of memory at ADDR to NAME.bin
     dump-chip NAME                  save all 512 KB of chip RAM to NAME.bin and the display
@@ -96,6 +98,7 @@ log. To check an exact state, sync on the game's own output (wait-serial
 "x=100"), then screenshot.
 """
 import re
+import os
 import shlex
 from dataclasses import dataclass, field
 
@@ -225,6 +228,24 @@ def parse(text, name="scenario"):
             except ValueError:
                 raise ScenarioError(f"line {lineno}: DX and DY must be numbers")
             sc.lines.append(f"agk mouse {dx + 10000} {dy + 10000}")  # offset: no "-" args
+
+        elif cmd == "click":
+            if args:
+                raise ScenarioError(f"line {lineno}: usage: click")
+            sc.lines.append("mouse1 press left")
+
+        elif cmd == "insert":
+            if len(args) != 1:
+                raise ScenarioError(f"line {lineno}: usage: insert PATH")
+            path = os.path.abspath(args[0])
+            if not os.path.exists(path):
+                raise ScenarioError(f"line {lineno}: insert: {args[0]} not found")
+            sc.lines.append(f"df0 insert {path}")
+
+        elif cmd == "eject":
+            if args:
+                raise ScenarioError(f"line {lineno}: usage: eject")
+            sc.lines.append("df0 eject")
 
         elif cmd == "key":
             if len(args) != 1:
