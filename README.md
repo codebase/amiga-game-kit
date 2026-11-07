@@ -1,5 +1,14 @@
 # Amiga Game Kit (AGK)
 
+![Amiga Game Kit: build Commodore Amiga games with AI agents](docs/img/amiga-game-kit-banner.png)
+
+[![AROS selftest](https://github.com/codebase/amiga-game-kit/actions/workflows/selftest.yml/badge.svg?branch=main)](https://github.com/codebase/amiga-game-kit/actions/workflows/selftest.yml)
+[![Latest release](https://img.shields.io/github/v/release/codebase/amiga-game-kit)](https://github.com/codebase/amiga-game-kit/releases/latest)
+[![MIT license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB)](#quick-start)
+[![Amiga A500 and A1200 AGA](https://img.shields.io/badge/Amiga-A500%20%7C%20A1200%20AGA-orange)](docs/aga.md)
+[![MCP tools](https://img.shields.io/badge/MCP-tools-8A63D2)](#mcp-server)
+
 A kit for building Commodore Amiga games with AI coding agents (Claude Code,
 Codex, Cursor, ...). Agents are only as good as their feedback loop, so AGK
 gives them a **deterministic, headless build → run → observe → test** cycle:
