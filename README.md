@@ -29,10 +29,15 @@ register dumps, and golden-image tests. It's built on proven Amiga tooling:
 [ACE](https://github.com/AmigaPorts/ACE), bebbo's GCC and
 [vAmiga](https://github.com/dirkwhoffmann/vAmiga).
 
-AGK also includes [experimental native recompilation](docs/recomp.md): translate
-68000 game code from your own disk images into C, run it on modern systems, and
-use that as a starting point for improvements. Compatibility is still limited;
-see the guide for what's working and what's next.
+AGK also [recompiles other people's games to run natively](docs/recomp.md):
+`agk inspect --coverage` watches a game run in the emulator, `agk recomp`
+translates the 68000 code it executed into C and links it with a runtime that
+stands in for the chips (copper, blitter, Paula, the drive reading your own
+ADF), and the result is a Mac/Linux binary that is checked against the emulator
+instruction by instruction and pixel by pixel. Ocean's RoboCop (1989) plays
+natively with sound, pixel-identical to vAmiga; RoboCop 3 (1992, the 3D one)
+runs at 50 fps instead of the A500's ~4 with `--speed 16`. The repo holds the
+tools only: every byte of a game comes from the user's disk image.
 
 ```
 $ agk test examples/hello
@@ -240,10 +245,23 @@ tables with `agk map`: tiles for ACE's tile buffer, property bits for the
 rules, and objects for spawns and triggers (`examples/sidescroller`).
 
 **Reading other people's games:** `agk inspect GAME.adf` boots any disk image,
-scripts the way in, samples where the CPU spends its time (by address: no
-symbols needed), snapshots and dumps memory; `agk rip` pulls the screen and
-bitmaps out of a dump. [docs/reading-games.md](docs/reading-games.md) walks
-through Ocean's RoboCop with it: the groundwork for a port.
+scripts the way in (joystick, mouse, keys, disk swaps), samples where the CPU
+spends its time (by address: no symbols needed), snapshots and dumps memory;
+`agk rip` pulls the screen and bitmaps out of a dump.
+[docs/reading-games.md](docs/reading-games.md) walks through Ocean's RoboCop
+with it.
+
+**Running them natively:** `agk inspect --coverage` records every instruction
+the game executes; `agk recomp` turns that code into C (branches followed into
+code the emulator never ran, jump-table targets picked up from the native
+run's own `needed.txt`), links it with `recomp/runtime` (custom registers,
+copper, bitplanes, sprites, a software blitter with line mode, Paula, both
+CIAs, the keyboard, the mouse, a drive that MFM-encodes the ADF on the fly)
+and builds a binary with an SDL window. `--diff` traces the emulator and the
+native build in lockstep and reports the first instruction where they part;
+`--input` replays the same keys in both. `--speed N` gives the game a 68000 N
+times faster, which is how a CPU-bound 3D game gets its frame rate.
+[docs/recomp.md](docs/recomp.md) has the reference and the two ports.
 
 **Shipping:** `agk release` zips the ADF, the executable, a README and a
 screenshot into `build/release/NAME-VERSION.zip`, with an Aminet `.readme`
