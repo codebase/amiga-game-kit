@@ -181,9 +181,17 @@ build recording the addresses it needed in `needed.txt` for the next
 WAIT for the end of a line taking effect on the next one.
 
 Then the point of it: at the A500's speed the game renders a frame every
-13 video frames. `--speed 16` makes the 68000 sixteen times faster as the
-game sees it, and because the game syncs to the vertical blank it renders
-every frame: 50 fps, from the same code.
+13 video frames. `--speed N` makes the 68000 N times faster as the game
+sees it, and because the game syncs to the vertical blank it renders more
+often: every frame at 16x. But only part of the game's simulation is
+time-based: it reads the VBLs elapsed since the last frame (`$29472`,
+counted by the VBL handler, consumed at `$1742A` into `$18200` and the
+movement step at `$20C00`) for movement, while acceleration and the
+traffic step once per rendered frame, so above about 4x the world runs
+away (the car covers two to three times the distance at 16x). 4x, about
+12 fps, is where it stays honest. A real 50 fps needs the per-frame parts
+scaled by that delta too: a hand edit of a few routines, which is what the
+tools are for next.
 
 ## What's next
 
