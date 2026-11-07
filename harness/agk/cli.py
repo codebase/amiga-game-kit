@@ -535,9 +535,15 @@ def cmd_inspect(args):
         if sc.start_at or sc.checkpoints:
             raise SystemExit("inspect: use 'snapshot NAME' and --from, not checkpoints (those need a project)")
         boot = int(round(args.boot * 50))
+        if args.coverage:
+            # every executed instruction address, and the CPU at the end: what agk recomp needs
+            sc.lines = ["agk coverage start"] + sc.lines + [f"agk coverage save {outdir}/coverage.bin",
+                                                             f"agk cpu {outdir}/cpu.txt",
+                                                             f"mem save bin {outdir}/slow.bin {0xC00000} {0x80000}"]
+            sc.origins = [0] + sc.origins + [0, 0, 0]
         with runner.outdir_lock(outdir):
             res = runner.run(adf, args.profile, sc, outdir, boot, sync="frames", snapshot=args.start,
-                             sample=args.sample or bool(args.disasm))
+                             sample=args.sample or bool(args.disasm) or args.coverage)
         _report(res, False)
         for f in sorted(os.listdir(outdir)):
             if f.endswith(".vasnap"):
@@ -564,6 +570,163 @@ def cmd_inspect(args):
         except RuntimeError as e:
             raise SystemExit(f"inspect: {e}")
     return 0 if res is None or res["ok"] else 1
+
+
+def cmd_recomp(args):
+    from . import recomp
+    src = os.path.abspath(args.dir)
+    need = {n: os.path.join(src, n) for n in ("chip.bin", "coverage.bin", "cpu.txt", "chip.regs.txt")}
+    for n, p in need.items():
+        if not os.path.exists(p):
+            raise SystemExit(f"recomp: {rel(p)} missing: run agk inspect GAME.adf ... --coverage first")
+    out = os.path.abspath(args.out or os.path.join(src, "recomp"))
+    image = os.environ.get("AGK_TOOLCHAIN_IMAGE", "amigadev/crosstools:m68k-amigaos")
+    cov_files = sorted(os.path.join(src, f) for f in os.listdir(src) if f.startswith("coverage") and f.endswith(".bin"))
+    ranges, covered = recomp.coverage_ranges(cov_files)
+    print(f"coverage from {len(cov_files)} file(s): {', '.join(os.path.basename(f) for f in cov_files)}")
+    if not ranges:
+        raise SystemExit("recomp: the coverage is empty")
+    print(f"{len(covered)} instructions executed in {len(ranges)} ranges, "
+          f"${ranges[0][0]:06X}..${ranges[-1][1]:06X}")
+    try:
+        instrs = recomp.disassemble(need["chip.bin"], ranges, image, src)
+    except recomp.RecompError as e:
+        raise SystemExit(f"recomp: {e}")
+    if not args.no_follow:
+        try:
+            instrs, added = recomp.follow_branches(need["chip.bin"], instrs, image, src)
+        except recomp.RecompError as e:
+            raise SystemExit(f"recomp: {e}")
+        print(f"{added} more instructions reached by following branches the emulator didn't take")
+    cpu_regs = recomp.read_cpu(need["cpu.txt"])
+    from . import rip
+    regs = rip.read_regs(need["chip.regs.txt"])
+    if "df0_cyl" not in regs and os.path.exists(args.snapshot or os.path.join(src, "end.vasnap")):
+        print("the register dump predates the drive's position: taking it again from the snapshot")
+        _recomp_regs(args, src, need["chip.regs.txt"])
+        regs = rip.read_regs(need["chip.regs.txt"])
+    flat = {k.upper(): v for k, v in regs.items() if k != "colors"}
+    for i, c in enumerate(regs["colors"]):
+        flat[f"COLOR{i:02d}"] = c
+    mem_files = [(need["chip.bin"], 0)]
+    slow = os.path.join(src, "slow.bin")
+    if os.path.exists(slow):
+        mem_files.append((slow, 0xC00000))
+    runtime_dir = os.path.join(ROOT, "recomp", "runtime")
+    try:
+        unknown = recomp.write_project(out, instrs, covered, cpu_regs, mem_files, flat, runtime_dir)
+    except recomp.RecompError as e:
+        raise SystemExit(f"recomp: {e}")
+    print(f"wrote {rel(out)}/game.c: {len(instrs)} instructions; {len(unknown)} branch targets never executed "
+          f"(they stop the program if reached)")
+    cc = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc")
+    if not cc:
+        raise SystemExit("recomp: no host C compiler")
+    srcs = [os.path.join(out, f) for f in os.listdir(out) if f.endswith(".c")]
+    cmd = [cc, "-std=gnu11", "-O1", "-Wall", "-Wno-unused-label", "-Wno-unused-variable", "-Wno-unused-but-set-variable",
+           "-Wno-unused-function", "-I", out, *srcs, "-o", os.path.join(out, "game")]
+    sdl = _sdl_flags()
+    if sdl:
+        cmd = cmd[:1] + ["-DUSE_SDL"] + sdl + cmd[1:]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        print(r.stderr[-3000:])
+        raise SystemExit("recomp: the generated C didn't compile (a translator bug: the message above says where)")
+    if r.stderr.strip():
+        print(r.stderr.strip()[-1500:])
+    game = rel(os.path.join(out, "game"))
+    if sdl:
+        print(f"built {game}: play it with {game} --play --adf GAME.adf (arrows/WASD, space, F for full speed, Esc), "
+              f"or --frames N --png out.png headless")
+    else:
+        print(f"built {game} headless (no SDL2 found: brew install sdl2 / apt install libsdl2-dev for a window): "
+              f"run it with --frames N --png out.png [--adf GAME.adf]")
+    if args.diff:
+        return _recomp_diff(args, src, out, cmd)
+    return 0
+
+
+def _recomp_regs(args, src, path):
+    """re-dump the start registers (agk regs) from the snapshot the data came from"""
+    from . import rip
+    snap = args.snapshot or os.path.join(src, "end.vasnap")
+    profile, rom, ext = profiles.resolve(args.profile)
+    lines = runner._setup_lines(profile, rom, ext) + [f"agk snapload {os.path.abspath(snap)}", *runner._display_lines(),
+                                                      f"agk regs {path}", "wait 1 frames"]
+    code, outp, secs = runner._run_vamiga(lines, src, timeout=120)
+    if "df0_cyl" not in rip.read_regs(path):
+        raise SystemExit(f"recomp: the emulator didn't write the drive position (is vAmiga rebuilt with the kit's patch?):\n{outp[-400:]}")
+
+
+def _sdl_flags():
+    """the compiler flags for SDL2, or [] when it isn't installed"""
+    cfg = shutil.which("sdl2-config") or next((p for p in ("/opt/homebrew/bin/sdl2-config", "/usr/local/bin/sdl2-config")
+                                                if os.path.exists(p)), None)
+    if not cfg:
+        return []
+    r = subprocess.run([cfg, "--cflags", "--libs"], capture_output=True, text=True)
+    return r.stdout.split() if r.returncode == 0 else []
+
+
+def _recomp_diff(args, src, out, cmd):
+    """Trace N instructions in the emulator (from the snapshot the data came from)
+    and in the native build, and show where they part."""
+    snap = args.snapshot or os.path.join(src, "end.vasnap")
+    if not os.path.exists(snap):
+        raise SystemExit(f"recomp --diff needs the snapshot the data was taken at ('snapshot end' in the inspect "
+                         f"steps, or --snapshot FILE); {rel(snap)} not found")
+    n = args.diff
+    emu_trace = os.path.join(out, "trace_emu.txt")
+    profile, rom, ext = profiles.resolve(args.profile)
+    lines = runner._setup_lines(profile, rom, ext) + [f"agk snapload {os.path.abspath(snap)}", *runner._display_lines(),
+                                                      f"agk trace {emu_trace} {n}", f"wait {max(2, n // 2000 + 2)} frames"]
+    code, outp, secs = runner._run_vamiga(lines, out, timeout=600)
+    if not os.path.exists(emu_trace):
+        raise SystemExit(f"recomp --diff: the emulator wrote no trace:\n{outp[-500:]}")
+    tcmd = list(cmd)
+    tcmd[tcmd.index("-o") + 1] = os.path.join(out, "game_trace")
+    tcmd.insert(1, "-DRECOMP_ITRACE")
+    r = subprocess.run(tcmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit("recomp --diff: the traced build failed:\n" + r.stderr[-1500:])
+    nat_trace = os.path.join(out, "trace_native.txt")
+    run_cmd = [os.path.join(out, "game_trace"), "--memory", os.path.join(out, "memory.bin"), "--itrace", nat_trace, str(n)]
+    if args.adf:
+        run_cmd += ["--adf", os.path.abspath(args.adf)]
+    r = subprocess.run(run_cmd, capture_output=True, text=True, timeout=600)
+    # Interrupts land at different instructions (the native timing is approximate):
+    # compare the main program only, the instructions at interrupt level 0
+    def main_stream(path):
+        if not os.path.exists(path):
+            return [], 0
+        kept, handlers = [], 0
+        for line in open(path):
+            line = line.rstrip()
+            if (int(line[-4:], 16) >> 8) & 7:
+                handlers += 1
+            else:
+                kept.append(line)
+        return kept, handlers
+    emu, emu_h = main_stream(emu_trace)
+    nat, nat_h = main_stream(nat_trace)
+    print(f"traces: emulator {len(emu)} main + {emu_h} handler instructions, native {len(nat)} + {nat_h}")
+    names = ["PC"] + [f"D{i}" for i in range(8)] + [f"A{i}" for i in range(8)] + ["SR"]
+    for i, (e, na) in enumerate(zip(emu, nat)):
+        if e != na:
+            ef, nf = e.split(), na.split()
+            diffs = [f"{names[k]}: emulator {ef[k]} native {nf[k]}" for k in range(len(names)) if ef[k] != nf[k]]
+            print(f"diverge at instruction {i} (emulator pc ${ef[0]}): " + "; ".join(diffs))
+            for k in range(max(0, i - 8), i):
+                print(f"  {k}: {emu[k]}")
+            print(f"  {i}: {e}   <- emulator")
+            print(f"  {i}: {na}   <- native")
+            return 1
+    if len(nat) < len(emu):
+        print(f"the native run stopped after {len(nat)} of {len(emu)} instructions"
+              + (": " + r.stderr.strip()[-300:] if r.stderr.strip() else ""))
+        return 1
+    print(f"identical for {min(len(emu), len(nat))} instructions")
+    return 0
 
 
 def cmd_rip(args):
@@ -965,8 +1128,23 @@ def main(argv=None):
     p.add_argument("--boot", type=float, default=3.0, help="seconds to wait after power-on (default 3)")
     p.add_argument("--from", dest="start", metavar="SNAPSHOT", help="start from this .vasnap instead of booting")
     p.add_argument("--sample", action="store_true", help="sample the program counter; dump chip RAM at the end")
+    p.add_argument("--coverage", action="store_true",
+                   help="record every instruction address executed, and the CPU and memory at the end (for agk recomp)")
     p.add_argument("--disasm", metavar="ADDR[:LEN]", help="disassemble the chip-RAM dump at ADDR (hex ok)")
     p.add_argument("-o", "--out", help="output directory (default agk-inspect/<disk name>)")
+
+    p = sub.add_parser("recomp", help="recompile a game (from agk inspect --coverage) to a native program",
+                       description="Translates every instruction the game executed under the emulator into C "
+                                   "(labels per address, the kit's 68000 helpers), bundles the chip runtime and "
+                                   "the memory image, and compiles a native binary. See agk recomp's docs.")
+    p.add_argument("dir", help="the agk inspect output directory (chip.bin, coverage.bin, cpu.txt, chip.regs.txt)")
+    p.add_argument("-o", "--out", help="output directory (default DIR/recomp)")
+    p.add_argument("--diff", type=int, metavar="N", help="trace N instructions in the emulator and natively, show the first difference")
+    p.add_argument("--snapshot", help="the .vasnap the data was taken at (default DIR/end.vasnap)")
+    p.add_argument("--adf", help="the disk, for the native run")
+    p.add_argument("--no-follow", action="store_true",
+                   help="translate only what the coverage saw; don't follow branches into code the emulator never ran")
+    p.add_argument("-p", "--profile", default="a500")
 
     p = sub.add_parser("rip", help="graphics out of a chip-RAM dump: the screen, a bitmap, a tile sheet",
                        description="Reads a chip-RAM dump (agk inspect's 'dump-chip NAME'). --copper lists the "
@@ -1170,7 +1348,7 @@ def main(argv=None):
                 "art-export": cmd_art_export, "art-animate": cmd_art_animate,
                 "play": cmd_play, "art-clean": cmd_art_clean, "sound": cmd_sound,
                 "record": cmd_record, "lint": cmd_lint,
-                "profile": cmd_profile, "release": cmd_release, "map": cmd_map, "inspect": cmd_inspect, "rip": cmd_rip}[args.cmd](args)
+                "profile": cmd_profile, "release": cmd_release, "map": cmd_map, "inspect": cmd_inspect, "rip": cmd_rip, "recomp": cmd_recomp}[args.cmd](args)
     except runner.RunError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
