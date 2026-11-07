@@ -511,6 +511,111 @@ def _report(res, as_json):
     print(f"  serial: {rel(os.path.join(res['outdir'], 'serial.txt'))}")
 
 
+def cmd_inspect(args):
+    from . import inspect as insp
+    adf = os.path.abspath(args.adf)
+    if not os.path.isfile(adf):
+        raise SystemExit(f"{args.adf} not found")
+    stem = os.path.splitext(os.path.basename(adf))[0]
+    outdir = os.path.abspath(args.out or os.path.join("agk-inspect", stem))
+    os.makedirs(outdir, exist_ok=True)
+    image = os.environ.get("AGK_TOOLCHAIN_IMAGE", "amigadev/crosstools:m68k-amigaos")
+    dump = os.path.join(outdir, "chip.bin")
+    steps = list(args.step or [])
+    if args.file:
+        steps = open(args.file).read().splitlines() + steps
+    if not steps and not (args.disasm and os.path.exists(dump)):
+        steps = ["screenshot screen"]
+    res = None
+    if steps:
+        try:
+            sc = scenario.parse("\n".join(steps), "inspect")
+        except scenario.ScenarioError as e:
+            raise SystemExit(f"scenario error: {e}")
+        if sc.start_at or sc.checkpoints:
+            raise SystemExit("inspect: use 'snapshot NAME' and --from, not checkpoints (those need a project)")
+        boot = int(round(args.boot * 50))
+        with runner.outdir_lock(outdir):
+            res = runner.run(adf, args.profile, sc, outdir, boot, sync="frames", snapshot=args.start,
+                             sample=args.sample or bool(args.disasm))
+        _report(res, False)
+        for f in sorted(os.listdir(outdir)):
+            if f.endswith(".vasnap"):
+                print(f"  snapshot: {rel(os.path.join(outdir, f))} (start there with --from)")
+            elif f.endswith(".bin"):
+                print(f"  memory: {rel(os.path.join(outdir, f))}")
+        if args.sample and os.path.exists(os.path.join(outdir, "profile.bin")):
+            _, lines = prof_load(os.path.join(outdir, "profile.bin"))
+            print()
+            for line in insp.report(lines):
+                print(line)
+    if args.disasm:
+        if not os.path.exists(dump):
+            raise SystemExit(f"--disasm needs a memory dump: run with --sample or a 'dump-chip' step first")
+        addr, _, length = args.disasm.partition(":")
+        try:
+            addr, length = int(addr, 0), int(length or "0x100", 0)
+        except ValueError:
+            raise SystemExit("--disasm takes ADDR[:LENGTH], e.g. 0x21D00:0x200")
+        print(f"\n{rel(dump)} at ${addr:06X}, {length} bytes:")
+        try:
+            for line in insp.disassemble(dump, addr, length, image, outdir):
+                print("  " + line)
+        except RuntimeError as e:
+            raise SystemExit(f"inspect: {e}")
+    return 0 if res is None or res["ok"] else 1
+
+
+def cmd_rip(args):
+    from . import rip
+    from .image import Image
+    data = open(args.dump, "rb").read()
+    if args.copper or args.screen:
+        lists = rip.find_copper_lists(data)
+        if args.copper:
+            for line in rip.copper_report(lists):
+                print(line)
+        if args.screen:
+            shown = rip.display_lists(lists)
+            if not shown:
+                raise SystemExit("rip: no copper list that sets up a display in the dump")
+            c = shown[0]
+            regs_path = args.regs or os.path.splitext(args.dump)[0] + ".regs.txt"
+            regs = rip.read_regs(regs_path) if os.path.exists(regs_path) else None
+            if regs is None:
+                print("note: no .regs.txt next to the dump (dump-chip writes one): colours the list "
+                      "doesn't set come out black", file=sys.stderr)
+            img = rip.screen_from_copper(data, c, regs=regs)
+            out = args.out or "screen.png"
+            img.save_png(out)
+            print(f"wrote {out} from the copper list at ${c['addr']:06X} ({len(c['bplpt'])} planes)")
+        return 0
+    if not args.addr or not args.size:
+        raise SystemExit("rip: give ADDR and WIDTHxHEIGHTxPLANES, or --copper / --screen")
+    try:
+        addr = int(args.addr, 0)
+        w, h, planes = (int(v) for v in args.size.lower().split("x"))
+    except ValueError:
+        raise SystemExit("rip: ADDR is a number (hex ok) and the size is WIDTHxHEIGHTxPLANES, e.g. 320x256x4")
+    if w % 8 or not 1 <= planes <= 8:
+        raise SystemExit("rip: the width must be a multiple of 8 and planes 1-8")
+    pal = rip.parse_palette(args.palette, data) if args.palette else None
+    if args.count:
+        img = rip.tiles_sheet(data, addr, w, h, planes, args.count, pal, interleaved=args.interleaved)
+    else:
+        img = rip.planar_to_image(data, addr, w, h, planes, pal, interleaved=args.interleaved, modulo=args.modulo,
+                                 planes_apart=args.planes_apart)
+    out = args.out or f"rip_{addr:06X}.png"
+    img.save_png(out)
+    print(f"wrote {out} ({img.width}x{img.height})")
+    return 0
+
+
+def prof_load(path):
+    from . import profile as prof
+    return prof.load(path)
+
+
 def cmd_run(args):
     # Friendly: `agk run tests/foo.agk` means "run this scenario file".
     if args.project and args.project.endswith(".agk") and os.path.isfile(args.project):
@@ -845,6 +950,42 @@ def main(argv=None):
                    help="CMake option, e.g. -D ACE_DEBUG=ON. It stays in build/'s cache until changed or "
                         "build/ is deleted; put permanent ones in agk.toml [cmake]")
 
+    p = sub.add_parser("inspect", help="boot any ADF (not ours): script it, screenshots, snapshots, dumps, profile",
+                       description="Runs a scenario against any Amiga disk image, with no project and no kit "
+                                   "runtime in the game. A foreign game prints no 'AGK ready', so --boot waits "
+                                   "that many seconds instead (cached). Steps are the scenario language plus "
+                                   "'snapshot NAME' and 'dump-chip NAME'. --sample records the program counter "
+                                   "every raster line and reports the hot code by address and the shape of a "
+                                   "frame; --disasm ADDR[:LEN] disassembles the chip-RAM dump there. See "
+                                   "docs/reading-games.md.")
+    p.add_argument("adf")
+    p.add_argument("-s", "--step", action="append", help="scenario line (repeatable)")
+    p.add_argument("-f", "--file", help="scenario file")
+    p.add_argument("-p", "--profile", default="a500")
+    p.add_argument("--boot", type=float, default=3.0, help="seconds to wait after power-on (default 3)")
+    p.add_argument("--from", dest="start", metavar="SNAPSHOT", help="start from this .vasnap instead of booting")
+    p.add_argument("--sample", action="store_true", help="sample the program counter; dump chip RAM at the end")
+    p.add_argument("--disasm", metavar="ADDR[:LEN]", help="disassemble the chip-RAM dump at ADDR (hex ok)")
+    p.add_argument("-o", "--out", help="output directory (default agk-inspect/<disk name>)")
+
+    p = sub.add_parser("rip", help="graphics out of a chip-RAM dump: the screen, a bitmap, a tile sheet",
+                       description="Reads a chip-RAM dump (agk inspect's 'dump-chip NAME'). --copper lists the "
+                                   "copper lists it finds (bitplane pointers, modulos, colours); --screen writes "
+                                   "the picture the display was showing; ADDR and WIDTHxHEIGHTxPLANES write a "
+                                   "bitmap, with --count N a sheet of N tiles stored one after another.")
+    p.add_argument("dump")
+    p.add_argument("addr", nargs="?")
+    p.add_argument("size", nargs="?", help="WIDTHxHEIGHTxPLANES")
+    p.add_argument("--copper", action="store_true")
+    p.add_argument("--screen", action="store_true")
+    p.add_argument("--count", type=int, help="tiles, one after another, as a sheet")
+    p.add_argument("--interleaved", action="store_true")
+    p.add_argument("--modulo", type=int, default=0, help="bytes between a row and the next, per plane")
+    p.add_argument("--planes-apart", type=int, help="bytes from one plane to the next (non-interleaved)")
+    p.add_argument("--palette", help="0xRGB,... or @ADDR (colour words in the dump); default a grey ramp")
+    p.add_argument("--regs", help="the NAME.regs.txt from dump-chip (default: next to the dump)")
+    p.add_argument("-o", "--out")
+
     p = sub.add_parser("lint", help="find game functions that call the slow 68000 maths library",
                        description="Lists the project's functions whose C compiles to libgcc calls: 32-bit "
                                    "multiply, divide and %%, 64-bit and float maths. Setup functions "
@@ -1029,7 +1170,7 @@ def main(argv=None):
                 "art-export": cmd_art_export, "art-animate": cmd_art_animate,
                 "play": cmd_play, "art-clean": cmd_art_clean, "sound": cmd_sound,
                 "record": cmd_record, "lint": cmd_lint,
-                "profile": cmd_profile, "release": cmd_release, "map": cmd_map}[args.cmd](args)
+                "profile": cmd_profile, "release": cmd_release, "map": cmd_map, "inspect": cmd_inspect, "rip": cmd_rip}[args.cmd](args)
     except runner.RunError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

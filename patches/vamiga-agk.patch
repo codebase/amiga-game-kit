@@ -98,10 +98,10 @@ index 1b7087b..a316d29 100644
      }
      
 diff --git a/Core/Misc/RetroShell/Console.cpp b/Core/Misc/RetroShell/Console.cpp
-index b661c82..6f3fb98 100644
+index b661c82..8a91e42 100644
 --- a/Core/Misc/RetroShell/Console.cpp
 +++ b/Core/Misc/RetroShell/Console.cpp
-@@ -1185,16 +1185,249 @@ Console::initCommonCommands(RSCommand &root)
+@@ -1185,16 +1185,275 @@ Console::initCommonCommands(RSCommand &root)
              .flags  = vAmigaDOS ? rs::disabled : rs::hidden,
              .args   = {
                  { .name = { "seconds", "Delay" } },
@@ -271,6 +271,32 @@ index b661c82..6f3fb98 100644
 +                for (auto s : pcm) le16(u16(s));
 +                std::ofstream marks(path.string() + ".marks");
 +                for (auto &m : audioPort.agkMarks) marks << m.first << " " << m.second << "\n";
++            }
++        });
++
++        root.add({
++
++            .tokens = { "agk", "regs" },
++            .chelp  = { "Write the display registers (COLOR00-31, BPLCON0-2, DIWSTRT/STOP, DDFSTRT/STOP, BPL1MOD/2MOD) as text" },
++            .args   = { { .name = { "path", "File path" } } },
++            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
++
++                auto path = host.makeAbsolute(args.at("path"));
++                std::ofstream file(path);
++                if (!file.is_open()) throw IOError(IOError::FILE_CANT_CREATE, path);
++                auto hex = [&](const char *name, long v) { file << name << " " << std::hex << std::uppercase << v << std::dec << "\n"; };
++                for (isize i = 0; i < 32; i++) {
++                    file << "COLOR" << (i < 10 ? "0" : "") << i << " " << std::hex << std::uppercase << (denise.colorRegValue(i) & 0xFFF) << std::dec << "\n";
++                }
++                hex("BPLCON0", denise.bplcon0);
++                hex("BPLCON1", denise.bplcon1);
++                hex("BPLCON2", denise.bplcon2);
++                hex("DIWSTRT", denise.diwstrt);
++                hex("DIWSTOP", denise.diwstop);
++                hex("DDFSTRT", agnus.sequencer.ddfstrt);
++                hex("DDFSTOP", agnus.sequencer.ddfstop);
++                hex("BPL1MOD", agnus.bpl1mod);
++                hex("BPL2MOD", agnus.bpl2mod);
 +            }
 +        });
 +

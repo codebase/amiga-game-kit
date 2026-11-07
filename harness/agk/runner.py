@@ -44,7 +44,7 @@ def _display_lines():
 
 
 def boot_key(adf, profile_name, rom, boot_text):
-    parts = [_sha(adf), profile_name, _sha(rom), boot_text, _sha(VAMIGA)]
+    parts = [_sha(adf), profile_name, _sha(rom), str(boot_text), _sha(VAMIGA)]
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()[:20]
 
 
@@ -166,9 +166,12 @@ def _ensure_boot_locked(adf, profile_name, profile, rom, ext, boot_text, boot_ti
         os.utime(snap)
         return snap, None
     os.makedirs(workdir, exist_ok=True)
+    # A foreign ADF prints nothing: its boot is a number of frames, not a text
+    booted = (f"wait {int(boot_text)} frames" if isinstance(boot_text, int)
+              else f"waitserial {serial_text(boot_text)} {boot_timeout}")
     lines = _setup_lines(profile, rom, ext) + [
         f"regression run {os.path.abspath(adf)}",
-        f"waitserial {serial_text(boot_text)} {boot_timeout}",
+        booted,
         "wait 1 frames",
         f"agk serial {snap}.serial.txt",
         f"agk snapsave {snap}.tmp.vasnap",
@@ -296,10 +299,14 @@ class outdir_lock:
         self.f.close()
 
 
-def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frames"):
+def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frames", snapshot=None,
+        sample=False):
     """Play a parsed scenario. Returns a result dict (never raises for test
     failures). Call inside `with outdir_lock(outdir):` if other processes may
-    use the same outdir."""
+    use the same outdir. boot_text: the serial text that means booted, or a
+    number of frames to wait (a foreign ADF). snapshot: start from this
+    .vasnap instead of the boot. sample: record the program counter every
+    raster line into profile.bin, and chip RAM into chip.bin at the end."""
     for f in os.listdir(outdir):
         if f.endswith((".raw", ".png", ".bin", ".txt", ".wav", ".marks")):
             os.remove(os.path.join(outdir, f))
@@ -321,6 +328,9 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
         # Like a boot snapshot: display settings, a full frame, then a frame start
         snap = ensure_boot(adf, profile_name, boot_text)[0]
         lines += [f"agk snapload {ckpt}", *_display_lines()]
+    elif snapshot:
+        snap = snapshot
+        lines += [f"agk snapload {os.path.abspath(snapshot)}", *_display_lines()]
     elif fresh:
         # Boot inside this run (no snapshot) - used to verify snapshot parity.
         lines += [f"regression run {os.path.abspath(adf)}",
@@ -344,10 +354,15 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
     else:
         lines.append("wait 1 frames")
     lines.append("agk audio start")   # audio.wav starts at scenario time 0
+    if sample:
+        lines.append("agk profile start")
     first = len(lines) + 1   # script line number (1-based) of the scenario's first line
     lines += _sync_lines([l.replace("{out}", outdir) for l in _checkpoint_lines(scenario, adf, profile_name,
                                                                              boot_text)], sync)
     lines.append(f"agk audio save {outdir}/audio.wav")
+    if sample:
+        lines += [f"agk profile save {outdir}/profile.bin", f"mem save bin {outdir}/chip.bin 0 {0x80000}",
+                  f"agk regs {outdir}/chip.regs.txt"]
 
     def line_to_source(n):
         i = n - first
@@ -361,7 +376,7 @@ def run(adf, profile_name, scenario, outdir, boot_text, fresh=False, sync="frame
     result["seconds"] = round(secs, 2)
 
     serial = ""
-    if not fresh and os.path.exists(f"{snap}.serial.txt"):
+    if not fresh and not snapshot and os.path.exists(f"{snap}.serial.txt"):
         # The serial log isn't part of the snapshot: prepend the boot output
         serial = open(f"{snap}.serial.txt", errors="replace").read()
     if ckpt and os.path.exists(f"{ckpt}.serial.txt"):

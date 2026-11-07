@@ -29,6 +29,8 @@ all tests pass. Check both.
 | `harness/agk/sound.py` | sound pipeline: effect synthesis, MML → ProTracker MOD, previews, spectrograms (`agk sound`) |
 | `harness/agk/tilemap.py` | `agk map`: Tiled `.tmj` → `build/maps/maps.h` (tile tables, property bits, objects) |
 | `harness/agk/release.py` | `agk release`: the zip and the Aminet readme |
+| `harness/agk/inspect.py` | `agk inspect`: any ADF booted and scripted, the sampled program counter by address, disassembly of a dump |
+| `harness/agk/rip.py` | `agk rip`: copper lists, the screen and bitmaps out of a chip-RAM dump |
 | `harness/agk/pack.py` | `disk/` → packed files on the ADF (the LZ packer; `runtime/src/unpack.c` reads them) |
 | `harness/agk/motion.py` | `expect-scroll`: how far a region moved between consecutive frames |
 | `harness/agk/profile.py` | `agk profile`: places the emulator's per-line PC and bus samples in the game (linker map + disassembly) |

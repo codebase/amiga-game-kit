@@ -174,6 +174,12 @@ above is `examples/sidescroller/demo/showcase.agk`.
 tables with `agk map`: tiles for ACE's tile buffer, property bits for the
 rules, and objects for spawns and triggers (`examples/sidescroller`).
 
+**Reading other people's games:** `agk inspect GAME.adf` boots any disk image,
+scripts the way in, samples where the CPU spends its time (by address: no
+symbols needed), snapshots and dumps memory; `agk rip` pulls the screen and
+bitmaps out of a dump. [docs/reading-games.md](docs/reading-games.md) walks
+through Ocean's RoboCop with it: the groundwork for a port.
+
 **Shipping:** `agk release` zips the ADF, the executable, a README and a
 screenshot into `build/release/NAME-VERSION.zip`, with an Aminet `.readme`
 beside it, from `agk.toml`'s `[release]` section.

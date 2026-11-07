@@ -48,6 +48,14 @@ for e in "$KIT"/examples/*/; do
   "$AGK" test "$e" ${SELECTED[@]+"${SELECTED[@]}"}
 done
 
+step "inspect and rip a disk as if it were someone else's (examples/hello)"
+INSPECT="$KIT/out/selftest-inspect"
+rm -rf "$INSPECT"
+"$AGK" inspect "$KIT/examples/hello/build/hello.adf" --boot 40 -s "wait 50" -s "screenshot s" -s "dump-chip ram" --sample -o "$INSPECT" | grep -q "the game's code spans"
+"$AGK" rip "$INSPECT/ram.bin" --copper | grep -q "planes: BPL1"
+"$AGK" rip "$INSPECT/ram.bin" --screen -o "$INSPECT/screen.png" | grep -q "wrote"
+rm -rf "$INSPECT"
+
 step "techniques"
 for t in "$KIT"/techniques/*/; do
   [ -f "$t/agk.toml" ] || continue

@@ -29,6 +29,11 @@ Commands:
                                     for 0.5s (25 frames) in the background - use 'wait' to let it act
     screenshot NAME                 capture the current frame
     dump-mem NAME ADDR LEN          save LEN bytes of memory at ADDR to NAME.bin
+    dump-chip NAME                  save all 512 KB of chip RAM to NAME.bin and the display
+                                    registers (the palette, BPLCON0...) to NAME.regs.txt: what
+                                    agk rip --screen needs
+    snapshot NAME                   save the whole machine to NAME.vasnap (agk inspect --from NAME.vasnap
+                                    starts there; unlike checkpoint it's a plain file, not cached)
     regs NAME [cpu|agnus|copper|denise|paula|blitter|ciaa|ciab]...   save register view to NAME.txt
     expect-serial "REGEX"           serial log must match (checked after the run)
     expect-no-serial "REGEX"        serial log must not match
@@ -246,6 +251,22 @@ def parse(text, name="scenario"):
                                     f"(0x000000-0xFFFFFF), length > 0")
             sc.dumps.append((n, "mem"))
             sc.lines.append(f"mem save bin {{out}}/{n}.bin {addr} {length}")
+
+        elif cmd == "dump-chip":
+            if len(args) != 1:
+                raise ScenarioError(f"line {lineno}: usage: dump-chip NAME")
+            n = _name(args[0], lineno, names)
+            sc.dumps.append((n, "mem"))
+            sc.lines.append(f"mem save bin {{out}}/{n}.bin 0 {0x80000}")
+            sc.lines.append(f"agk regs {{out}}/{n}.regs.txt")
+
+        elif cmd == "snapshot":
+            if len(args) != 1:
+                raise ScenarioError(f"line {lineno}: usage: snapshot NAME")
+            n = _name(args[0], lineno, checkpoint_names)   # (its own file: may share a screenshot's name)
+            sc.lines.append("wait 1 frame")      # (a video-frame boundary restores cleanly)
+            sc.frames += 1
+            sc.lines.append(f"agk snapsave {{out}}/{n}.vasnap")
 
         elif cmd == "regs":
             if not args:
