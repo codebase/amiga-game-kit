@@ -35,6 +35,7 @@ typedef struct {
 	u32 s;                                /* the supervisor bit */
 	u32 ipl;                              /* the interrupt mask, 0-7 */
 	u32 stopped;                          /* STOP: waiting for an interrupt */
+	u32 frac;                             /* cycles not yet counted at --speed (the fraction) */
 	u64 cycles;                           /* an approximation, for timing */
 } cpu_t;
 
@@ -323,10 +324,12 @@ static inline u32 take_interrupt(int level, u32 pc) {
 }
 
 extern int cycle_shift;                   /* --speed: the CPU this much faster than an A500 (cycles >> shift) */
-#define TICK(n) do { cpu.cycles += (n) >> cycle_shift; if (cpu.cycles >= next_event) run_events(); } while (0)
 /* the translated code charges each instruction as it executes (CYC) and looks
- * at the chips' events at control flow (EVENTS); the interpreter does the same */
-#define CYC(n) (cpu.cycles += (n) >> cycle_shift)
+ * at the chips' events at control flow (EVENTS); the interpreter does the same.
+ * --speed divides the cost by 2^cycle_shift; the remainder carries over, so a
+ * fast CPU still advances time (8 >> 4 would be 0) */
+#define CYC(n) do { cpu.frac += (n); cpu.cycles += cpu.frac >> cycle_shift; cpu.frac &= (1u << cycle_shift) - 1; } while (0)
+#define TICK(n) do { CYC(n); if (cpu.cycles >= next_event) run_events(); } while (0)
 #define EVENTS() do { if (cpu.cycles >= next_event) run_events(); } while (0)
 
 /* the per-instruction trace, for agk recomp --diff (built with -DRECOMP_ITRACE) */
