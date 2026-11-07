@@ -17,6 +17,49 @@ PASS move [a500] 0.4s
 9/9 passed
 ```
 
+## Quick start
+
+```sh
+tools/setup                    # fetch pinned ACE + vAmiga, apply patches, build emulator, pull toolchain
+export PATH="$PWD/tools:$PATH"
+agk doctor                     # check Docker, emulator, ROMs, profiles
+
+agk new ~/games/mygame         # start a game from the template (AGENTS.md, tests, .mcp.json included)
+cd ~/games/mygame
+agk unit                       # game rules compiled for the host: milliseconds
+agk build                      # C + ACE -> build/mygame.adf (bootable floppy), compiled in Docker
+agk test --update              # record the first golden screenshots
+agk run -s "press right 20" -s "screenshot moved"   # try things; prints the PNG paths
+agk play                       # play it yourself in FS-UAE: arrow keys + Space
+```
+
+`agk play` needs FS-UAE (`brew install --cask fs-uae-emulator` on macOS). It
+writes an FS-UAE config for the game's profile (ROM, memory, the game disk,
+keyboard as the joystick in port 2) and opens it.
+
+Then open the project in Claude Code (or any agent). It picks up `AGENTS.md`
+and the `amiga` MCP server from `.mcp.json`, whose tools return screenshots as
+images.
+
+Requirements: Docker, git, cmake, Python 3.11+, a host C compiler, and a C++20
+compiler for vAmiga (on macOS: `brew install llvm`, because Apple's clang 15 is
+too old).
+
+## What's in the box
+
+| | |
+|---|---|
+| **Build and run** | `agk new`, `build`, `run`, `test` (golden screenshots on Kickstart 1.3, 3.1, AROS and A1200), `unit` (the rules on the host, in milliseconds), `play` (FS-UAE) |
+| **See what's wrong** | `agk profile` (where the frame goes: functions, blitter, DMA), `lint` (slow 68000 maths the compiler hid), `expect-scroll` and checkpoints in tests, a chip-RAM meter |
+| **Art, sound, levels** | text art and PNGs to sprites and BOBs (`agk art`), Retro Diffusion in (`art-gen`, `art-export` fits it), MML and samples to ProTracker (`agk sound`), Tiled maps (`agk map`), packed files on the disk |
+| **A runtime** | `agk/` headers for what every game ends up writing: a blit queue, a copper writer, text lines with a font, a sprite starfield, a loader, the frame meter |
+| **Ship it** | `agk record` (an MP4 and a GIF for a README), `agk release` (a zip and an Aminet readme) |
+| **Read other games** | `agk inspect` and `agk rip` boot any disk, sample its code by address and pull the graphics out ([docs/reading-games.md](docs/reading-games.md)) |
+| **For agents** | every project's `AGENTS.md`, an MCP server whose tools return screenshots, and `techniques/`: seven small tested games, one trick each, with the measured cost |
+
+Four games were built with it, by an agent, start to finish: a shoot-'em-up,
+a racer, a platformer and an AGA mech demo, below.
+
 ## A1200 / AGA demo: IRON WRAITH
 
 [![IRON WRAITH — AGA mech combat against MOLOCH](examples/ironwraith/demo/boss.gif)](examples/ironwraith/demo/ironwraith.mp4)
@@ -77,34 +120,6 @@ A horizontal shoot-'em-up at 50 fps: level 1 of VOIDRUNNER, built by an AI agent
 - A sampled synth soundtrack and effects, and an attract mode that plays the whole level.
 
 Its README covers the tricks and what it took to hold 50 fps on a 7 MHz 68000.
-
-## Quick start
-
-```sh
-tools/setup                    # fetch pinned ACE + vAmiga, apply patches, build emulator, pull toolchain
-export PATH="$PWD/tools:$PATH"
-agk doctor                     # check Docker, emulator, ROMs, profiles
-
-agk new ~/games/mygame         # start a game from the template (AGENTS.md, tests, .mcp.json included)
-cd ~/games/mygame
-agk unit                       # game rules compiled for the host: milliseconds
-agk build                      # C + ACE -> build/mygame.adf (bootable floppy), compiled in Docker
-agk test --update              # record the first golden screenshots
-agk run -s "press right 20" -s "screenshot moved"   # try things; prints the PNG paths
-agk play                       # play it yourself in FS-UAE: arrow keys + Space
-```
-
-`agk play` needs FS-UAE (`brew install --cask fs-uae-emulator` on macOS). It
-writes an FS-UAE config for the game's profile (ROM, memory, the game disk,
-keyboard as the joystick in port 2) and opens it.
-
-Then open the project in Claude Code (or any agent). It picks up `AGENTS.md`
-and the `amiga` MCP server from `.mcp.json`, whose tools return screenshots as
-images.
-
-Requirements: Docker, git, cmake, Python 3.11+, a host C compiler, and a C++20
-compiler for vAmiga (on macOS: `brew install llvm`, because Apple's clang 15 is
-too old).
 
 ## How a run works
 

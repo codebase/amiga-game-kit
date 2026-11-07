@@ -7,3 +7,15 @@ unit_sources = ["src/logic.c"]                       # host-compiled for agk uni
 
 [cmake]                                              # build options, see CMakeLists.txt
 # ACE_BOB_WRAP_Y = false
+
+[release]                                            # agk release (agk help-release)
+title = "MUSHROOM RUN"
+version = "1.0"
+author = "the Amiga Game Kit"
+short = "Dual-playfield parallax platformer"
+type = "game/jump"
+description = """
+A platformer over a dual-playfield parallax landscape: run, jump, stomp the
+mushroom critters and reach the far right of the level without falling in.
+"""
+controls = "Joystick in port 2: left/right to run, up or fire to jump. Esc quits."

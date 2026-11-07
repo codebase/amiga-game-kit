@@ -7,3 +7,16 @@ unit_sources = ["src/logic.c"]                       # host-compiled for agk uni
 
 [cmake]                                              # build options, see CMakeLists.txt
 # ACE_BOB_WRAP_Y = false
+
+[release]                                            # agk release (agk help-release)
+title = "REDLINE"
+version = "1.0"
+author = "the Amiga Game Kit"
+short = "Pseudo-3D road racer, metal soundtrack"
+type = "game/race"
+description = """
+A pseudo-3D racer on a copper-driven road: traffic, hills, roadside signs
+and a two-minute run against the clock, with a sampled metal soundtrack.
+Left on the title, it drives itself.
+"""
+controls = "Joystick in port 2: up or fire to accelerate, down to brake, left/right to steer. Fire starts. Esc quits."
