@@ -71,6 +71,7 @@ static inline u32 rd16(u32 a) {
 static inline u32 rd32(u32 a) {
 	a &= 0xFFFFFF;
 	if (IS_CUSTOM(a)) return chip_read(a, 32);
+	if (IS_CIA(a)) return (u32)cia_read(a) << 24 | (u32)cia_read(a + 1) << 16 | (u32)cia_read(a + 2) << 8 | cia_read(a + 3);   /* (games read a long: the same register four times) */
 	return (u32)mem[a] << 24 | (u32)mem[a + 1] << 16 | (u32)mem[a + 2] << 8 | mem[a + 3];
 }
 static inline void wr8(u32 a, u32 v) {
@@ -90,6 +91,7 @@ static inline void wr16(u32 a, u32 v) {
 static inline void wr32(u32 a, u32 v) {
 	a &= 0xFFFFFF;
 	if (IS_CUSTOM(a)) { chip_write(a, v, 32); return; }
+	if (IS_CIA(a)) { cia_write(a, (u8)(v >> 24)); cia_write(a + 1, (u8)(v >> 16)); cia_write(a + 2, (u8)(v >> 8)); cia_write(a + 3, (u8)v); return; }
 	if (a >= 0xF80000) return;
 	mem[a] = (u8)(v >> 24); mem[a + 1] = (u8)(v >> 16); mem[a + 2] = (u8)(v >> 8); mem[a + 3] = (u8)v;
 }

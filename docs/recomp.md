@@ -112,9 +112,11 @@ Determinism is the product here too. Three comparisons, cheapest first:
   is compared and the handlers' instructions are skipped. RoboCop's first
   divergence is a frame counter the VBL handler had incremented once more
   in one of the two: a timing artefact, not a translation bug.
-- **Replays.** The same inputs in both: a scenario of `hold`/`release`/`wait`
-  lines for the emulator, the same frames in a `--input` file natively,
-  `dump-chip` and `--dump` at the same frame. Where the game's behaviour
+- **Replays.** The same inputs in both: `--diff N --input keys.txt` plays
+  the keys file in the emulator and natively (or, by hand, a scenario of
+  `hold`/`release`/`wait` lines against `--input`, with `dump-chip` and
+  `--dump` at the same frame). Snapshots taken mid-play (`snapshot end` in
+  the steps) move the start of the comparison to just before the trouble. Where the game's behaviour
   depends on timing (RoboCop seeds its enemies from it), the two runs drift
   within a few hundred frames; the data a loader brought in still has to be
   identical, which is how the disk model's bugs were found.
@@ -133,7 +135,14 @@ each is the kind of thing the next game will hit too:
 - the disk turns: a read starts where the head is, so the loader's "wait for
   the sector before the gap, then read the track" trick works;
 - the head position at the snapshot matters: the loader seeks relative to it;
-- DSKBLK must arrive after the loader has cleared INTREQ, not before.
+- DSKBLK must arrive after the loader has cleared INTREQ, not before;
+- a 32-bit read of a CIA register (RoboCop seeds its randomness with
+  `move.l` from CIA-B's TOD) must reach the CIA, and CIA-B's TOD counts
+  raster lines, not frames: with either wrong the enemies stop coming;
+- objdump wraps instructions longer than three words onto a second line, so
+  their length (and the next instruction's address) was 2 bytes short;
+- the fall-through of the last covered instruction of a range is code too:
+  without it a `beq` fell straight into the next label in the file.
 
 ## What's next
 

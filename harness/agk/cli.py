@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+import types
 
 from . import profiles, runner, scenario
 from .image import SCREEN_X0, SCREEN_Y0, Image, diff
@@ -664,8 +665,77 @@ def _sdl_flags():
                                                 if os.path.exists(p)), None)
     if not cfg:
         return []
-    r = subprocess.run([cfg, "--cflags", "--libs"], capture_output=True, text=True)
+    # static when possible: the binary then runs on a Mac without Homebrew
+    libdir = os.path.join(os.path.dirname(os.path.dirname(cfg)), "lib")
+    static = os.path.exists(os.path.join(libdir, "libSDL2.a"))
+    r = subprocess.run([cfg, "--cflags", "--static-libs" if static else "--libs"], capture_output=True, text=True)
     return r.stdout.split() if r.returncode == 0 else []
+
+
+def _input_lines(path, frames):
+    """a native --input file (lines of "FRAME right left up down fire") as RetroShell
+    joystick lines for the emulator, running `frames` frames in all"""
+    from .scenario import DIRECTIONS
+    out, cur = [], 0
+    if path:
+        for line in open(path):
+            parts = line.split()
+            if not parts:
+                continue
+            f = int(parts[0])
+            if f > cur:
+                out.append(f"wait {f - cur} frames")
+                cur = f
+            out += [f"joystick2 {DIRECTIONS[d][1]}" for d in ("left", "up", "fire")]      # release everything
+            out += [f"joystick2 {DIRECTIONS[w][0]}" for w in parts[1:] if w in DIRECTIONS]
+    if frames > cur:
+        out.append(f"wait {frames - cur} frames")
+    return out
+
+
+def _compare_traces(emu, nat, native_stderr=""):
+    """the two main-program instruction streams -> 0 if they agree, 1 (and a report) where they part"""
+    r = types.SimpleNamespace(stderr=native_stderr)
+    names = ["PC"] + [f"D{i}" for i in range(8)] + [f"A{i}" for i in range(8)] + ["SR"]
+    # The timing differs, so a loop that polls the vertical blank (or a frame counter
+    # the handler bumps) runs a different number of times on each side, and the
+    # flags differ at its test. Compare modulo that: ignore the SR, and when the
+    # streams part, look ahead a little on either side for where they meet again.
+    core = lambda line: line[:-5]            # the line without its SR
+    i = j = 0
+    resyncs = 0
+    while i < len(emu) and j < len(nat):
+        if core(emu[i]) == core(nat[j]):
+            i += 1
+            j += 1
+            continue
+        found = None
+        for skip in range(1, 20000):      # (a polling loop can run for most of a frame)
+            if i + skip < len(emu) and core(emu[i + skip]) == core(nat[j]):
+                found = (skip, 0)
+                break
+            if j + skip < len(nat) and core(nat[j + skip]) == core(emu[i]):
+                found = (0, skip)
+                break
+        if found and (emu[i].split()[1:-1] == nat[j].split()[1:-1]):   # only the pc/loop count differs
+            i += found[0]
+            j += found[1]
+            resyncs += 1
+            continue
+        ef, nf = emu[i].split(), nat[j].split()
+        diffs = [f"{names[k]}: emulator {ef[k]} native {nf[k]}" for k in range(len(names) - 1) if ef[k] != nf[k]]
+        print(f"diverge at instruction {i} (emulator pc ${ef[0]}, after {resyncs} loop resyncs): " + "; ".join(diffs))
+        for k in range(max(0, i - 8), i):
+            print(f"  {k}: {emu[k]}")
+        print(f"  {i}: {emu[i]}   <- emulator")
+        print(f"  {j}: {nat[j]}   <- native")
+        return 1
+    if j >= len(nat) and i < len(emu) - 20000:
+        print(f"the native run stopped after {len(nat)} of {len(emu)} instructions"
+              + (": " + r.stderr.strip()[-300:] if r.stderr.strip() else ""))
+        return 1
+    print(f"identical for {i} instructions (up to the flags in polling loops; {resyncs} resyncs)")
+    return 0
 
 
 def _recomp_diff(args, src, out, cmd):
@@ -679,7 +749,8 @@ def _recomp_diff(args, src, out, cmd):
     emu_trace = os.path.join(out, "trace_emu.txt")
     profile, rom, ext = profiles.resolve(args.profile)
     lines = runner._setup_lines(profile, rom, ext) + [f"agk snapload {os.path.abspath(snap)}", *runner._display_lines(),
-                                                      f"agk trace {emu_trace} {n}", f"wait {max(2, n // 2000 + 2)} frames"]
+                                                      f"agk trace {emu_trace} {n}"]
+    lines += _input_lines(args.input, max(2, n // 2000 + 2))
     code, outp, secs = runner._run_vamiga(lines, out, timeout=600)
     if not os.path.exists(emu_trace):
         raise SystemExit(f"recomp --diff: the emulator wrote no trace:\n{outp[-500:]}")
@@ -691,6 +762,8 @@ def _recomp_diff(args, src, out, cmd):
         raise SystemExit("recomp --diff: the traced build failed:\n" + r.stderr[-1500:])
     nat_trace = os.path.join(out, "trace_native.txt")
     run_cmd = [os.path.join(out, "game_trace"), "--memory", os.path.join(out, "memory.bin"), "--itrace", nat_trace, str(n)]
+    if args.input:
+        run_cmd += ["--input", os.path.abspath(args.input)]
     if args.adf:
         run_cmd += ["--adf", os.path.abspath(args.adf)]
     r = subprocess.run(run_cmd, capture_output=True, text=True, timeout=600)
@@ -710,23 +783,7 @@ def _recomp_diff(args, src, out, cmd):
     emu, emu_h = main_stream(emu_trace)
     nat, nat_h = main_stream(nat_trace)
     print(f"traces: emulator {len(emu)} main + {emu_h} handler instructions, native {len(nat)} + {nat_h}")
-    names = ["PC"] + [f"D{i}" for i in range(8)] + [f"A{i}" for i in range(8)] + ["SR"]
-    for i, (e, na) in enumerate(zip(emu, nat)):
-        if e != na:
-            ef, nf = e.split(), na.split()
-            diffs = [f"{names[k]}: emulator {ef[k]} native {nf[k]}" for k in range(len(names)) if ef[k] != nf[k]]
-            print(f"diverge at instruction {i} (emulator pc ${ef[0]}): " + "; ".join(diffs))
-            for k in range(max(0, i - 8), i):
-                print(f"  {k}: {emu[k]}")
-            print(f"  {i}: {e}   <- emulator")
-            print(f"  {i}: {na}   <- native")
-            return 1
-    if len(nat) < len(emu):
-        print(f"the native run stopped after {len(nat)} of {len(emu)} instructions"
-              + (": " + r.stderr.strip()[-300:] if r.stderr.strip() else ""))
-        return 1
-    print(f"identical for {min(len(emu), len(nat))} instructions")
-    return 0
+    return _compare_traces(emu, nat, r.stderr)
 
 
 def cmd_rip(args):
@@ -1142,6 +1199,7 @@ def main(argv=None):
     p.add_argument("--diff", type=int, metavar="N", help="trace N instructions in the emulator and natively, show the first difference")
     p.add_argument("--snapshot", help="the .vasnap the data was taken at (default DIR/end.vasnap)")
     p.add_argument("--adf", help="the disk, for the native run")
+    p.add_argument("--input", help="for --diff: a file of 'FRAME right left up down fire' lines, played in both")
     p.add_argument("--no-follow", action="store_true",
                    help="translate only what the coverage saw; don't follow branches into code the emulator never ran")
     p.add_argument("-p", "--profile", default="a500")

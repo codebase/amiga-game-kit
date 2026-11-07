@@ -100,6 +100,10 @@ FAKE_OBJDUMP = """@ 0x200
 @ 0x400
      400:\t4e71           \tnop
      402:\t4e71           \tnop
+@ 0x500
+     500:\t0c79 0013 0001 \tcmpiw #19,0x1afb2
+     506:\tafb2 
+     508:\t4e71           \tnop
 """
 
 
@@ -108,10 +112,12 @@ class FollowTests(unittest.TestCase):
         known = {0x402}
         fake = mock.Mock(returncode=0, stdout=FAKE_OBJDUMP, stderr="")
         with mock.patch.object(recomp.subprocess, "run", return_value=fake):
-            out = recomp.disassemble_from("chip.bin", [0x200, 0x300, 0x400], "img", "/tmp", known)
+            out = recomp.disassemble_from("chip.bin", [0x200, 0x300, 0x400, 0x500], "img", "/tmp", known)
         addrs = [a for a, *_ in out]
-        self.assertEqual(addrs, [0x200, 0x202, 0x300, 0x400])   # not past the bra, not the data, not into known code
+        self.assertEqual(addrs, [0x200, 0x202, 0x300, 0x400, 0x500, 0x508])   # not past the bra, not the data, not into known code
         self.assertIn(0x202, known)
+        self.assertEqual(out[-2][1], 4)                          # the wrapped 8-byte instruction is 4 words
+        self.assertIn(0x506, known)
 
 
 if __name__ == "__main__":

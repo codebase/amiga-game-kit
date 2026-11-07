@@ -60,6 +60,25 @@ def coverage_ranges(paths, lo=0, hi=0x200000, gap=64):
     return [(s, e) for s, e in ranges], set(addrs)
 
 
+OBJDUMP_LINE = re.compile(r"^\s*([0-9a-f]+):\t([0-9a-f ]+)\t(\S+)(?:\s+(.*))?$")
+OBJDUMP_MORE = re.compile(r"^\s*([0-9a-f]+):\t([0-9a-f ]+?)\s*$")     # the rest of an instruction longer than 3 words
+
+
+def parse_objdump(line, out):
+    """append the instruction on an objdump line to out (or extend the last one
+    with a continuation line); True if the line was one"""
+    m = OBJDUMP_LINE.match(line)
+    if m:
+        out.append((int(m.group(1), 16), len(m.group(2).split()), m.group(3), (m.group(4) or "").strip()))
+        return True
+    m = OBJDUMP_MORE.match(line)
+    if m and out and out[-1][0] + 2 * out[-1][1] == int(m.group(1), 16):
+        addr, words, mn, ops = out[-1]
+        out[-1] = (addr, words + len(m.group(2).split()), mn, ops)
+        return True
+    return False
+
+
 def disassemble(dump, ranges, image, workdir):
     """objdump each range -> [(addr, nwords, mnemonic, operands)]"""
     rel = os.path.relpath(dump, workdir)
@@ -71,15 +90,10 @@ def disassemble(dump, ranges, image, workdir):
                            capture_output=True, text=True, errors="replace")
         if r.returncode != 0:
             raise RecompError(f"objdump failed: {r.stderr.strip()[:300]}")
+        got = []
         for line in r.stdout.splitlines():
-            m = re.match(r"^\s*([0-9a-f]+):\t([0-9a-f ]+)\t(\S+)(?:\s+(.*))?$", line)
-            if not m:
-                continue
-            addr = int(m.group(1), 16)
-            if addr >= e:
-                break
-            words = len(m.group(2).split())
-            out.append((addr, words, m.group(3), (m.group(4) or "").strip()))
+            parse_objdump(line, got)
+        out += [i for i in got if i[0] < e]
     return out
 
 
@@ -103,17 +117,19 @@ def disassemble_from(dump, anchors, image, workdir, known, limit=0x800):
             continue
         if stop:
             continue
-        m = re.match(r"^\s*([0-9a-f]+):\t([0-9a-f ]+)\t(\S+)(?:\s+(.*))?$", line)
-        if not m:
+        before, prev_words = len(run), (run[-1][1] if run else 0)
+        if not parse_objdump(line, run):
             continue
-        addr, words, mn = int(m.group(1), 16), len(m.group(2).split()), m.group(3)
-        if addr in known or any(addr + 2 * i in known for i in range(1, words)):
-            stop = True                   # back in known code (or straddling it: this run was misaligned)
+        addr, words, mn, ops = run[-1]
+        grew = len(run) == before         # a continuation line: the last instruction is longer than it looked
+        if (not grew and addr in known) or any(addr + 2 * i in known for i in range(prev_words if grew else 1, words)):
+            run.pop()                     # back in known code (or straddling it: this run was misaligned)
+            stop = True
             continue
         if mn in (".short", ".long", "illegal"):
-            stop = True                   # data: this target was a jump table entry or similar, leave it
+            run.pop()                     # data: this target was a jump table entry or similar, leave it
+            stop = True
             continue
-        run.append((addr, words, mn, (m.group(4) or "").strip()))
         for i in range(words):
             known.add(addr + 2 * i)
         if re.fullmatch(r"(bra|jmp|rts|rte|rtr|illegal|reset)[swl]?", mn):
@@ -131,7 +147,11 @@ def follow_branches(dump, instrs, image, workdir, hi=0x200000, rounds=12):
     for _ in range(rounds):
         t = Translator(instrs, set())
         t.translate()
-        anchors = sorted(a for a in t.unknown if a < hi and a % 2 == 0 and a not in known)
+        targets = set(t.unknown)
+        for addr, words, mn, _ in instrs:          # the fall-through of the last instruction of a range
+            if not re.fullmatch(r"(bra|jmp|rts|rte|rtr|illegal|reset|\.short|\.long)[swl]?", mn):
+                targets.add(addr + 2 * words)
+        anchors = sorted(a for a in targets if a < hi and a % 2 == 0 and a not in known)
         if not anchors:
             break
         new = disassemble_from(dump, anchors, image, workdir, known)
@@ -370,6 +390,9 @@ class Translator:
                 raise RecompError(f"at ${addr:06X} '{mn} {ops}': {e}")
             if not self.traced:
                 L.insert(label_at + 1, f"\tITRACE({addr:#x}u);")
+            if nxt not in self.addrs and not re.fullmatch(r"(bra|jmp|rts|rte|rtr|illegal|reset|\.short|\.long)[swl]?", mn):
+                self.unknown[nxt] = addr
+                L.append(f"\t{{ cpu.pc = {nxt:#x}u; goto dispatch; }}   /* the next instruction was never seen */")
         return L
 
     def instr(self, addr, nxt, mn, ops):

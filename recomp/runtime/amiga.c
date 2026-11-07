@@ -202,9 +202,10 @@ u8 cia_read(u32 addr) {
 	case 5: return (u8)(c->ta >> 8);
 	case 6: return (u8)c->tb;
 	case 7: return (u8)(c->tb >> 8);
-	case 8: return (u8)c->tod;
-	case 9: return (u8)(c->tod >> 8);
-	case 10: return (u8)(c->tod >> 16);
+	case 8: case 9: case 10: {                /* TOD: CIA-A counts frames, CIA-B raster lines (HSYNC) */
+		u32 t = c == &ciab ? c->tod + (u32)((cpu.cycles - frame_start) / CYCLES_PER_LINE) : c->tod;
+		return (u8)(t >> (8 * (r - 8)));
+	}
 	case 13: { u8 v = c->icr_data; c->icr_data = 0; return v; }
 	case 14: return c->cra;
 	case 15: return c->crb;
@@ -238,7 +239,7 @@ void run_events(void) {
 		frame_count++;
 		frame_done = 1;
 		{ extern void frame_hook(void); frame_hook(); }
-		ciaa.tod++; ciab.tod++;
+		ciaa.tod++; ciab.tod += LINES_PER_FRAME;
 		if (DMACON & 0x0200) intreq_set(0x0020);  /* VERTB */
 		{ extern int disk_motor_on(void); if (disk_motor_on() && frame_count % 10 == 0) cia_irq(&ciab, 0x10); }   /* the index pulse on CIA-B FLAG, 5 a second */
 	}
