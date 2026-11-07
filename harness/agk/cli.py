@@ -625,7 +625,7 @@ def cmd_recomp(args):
     except recomp.RecompError as e:
         raise SystemExit(f"recomp: {e}")
     print(f"wrote {rel(out)}/game.c: {len(instrs)} instructions; {len(unknown)} branch targets never executed "
-          f"(they stop the program if reached)")
+          f"(the interpreter takes them if reached)")
     cc = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc")
     if not cc:
         raise SystemExit("recomp: no host C compiler")

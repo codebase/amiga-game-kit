@@ -236,8 +236,10 @@ static void sdl_input(void) {
 		int dx, dy;
 		u32 b = SDL_GetRelativeMouseState(&dx, &dy);
 		mouse_x = (u8)(mouse_x + dx / 2); mouse_y = (u8)(mouse_y + dy / 2);
-		mouse_left = (b & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
-		mouse_right = (b & SDL_BUTTON(SDL_BUTTON_RIGHT)) != 0;
+		const Uint8 *k = SDL_GetKeyboardState(NULL);
+		/* (with the mouse grabbed, space or up also press the left button, down the right: a trackpad is awkward to hold) */
+		mouse_left = (b & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0 || k[SDL_SCANCODE_SPACE] || k[SDL_SCANCODE_UP];
+		mouse_right = (b & SDL_BUTTON(SDL_BUTTON_RIGHT)) != 0 || k[SDL_SCANCODE_DOWN];
 	}
 	const Uint8 *k = SDL_GetKeyboardState(NULL);
 	int up = k[SDL_SCANCODE_UP] || k[SDL_SCANCODE_W], down = k[SDL_SCANCODE_DOWN] || k[SDL_SCANCODE_S];
