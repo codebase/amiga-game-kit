@@ -5,7 +5,8 @@
  * joystick, every key reaches the Amiga keyboard, a click grabs the mouse
  * and F11 lets it go, F12 toggles full speed, Esc quits when the mouse
  * isn't grabbed). --adf gives the floppy; given several, Cmd/Alt+1..9
- * swaps them, the first is in the drive at the start. */
+ * swaps them (in the order given), and --adf-in N says which one is in
+ * the drive at the start. */
 #ifdef USE_SDL
 #include <SDL.h>                          /* (before m68k.h: its A and D macros would mangle SDL's prototypes) */
 #endif
@@ -23,6 +24,7 @@ void disk_set_adf(const char *path);
 void disk_change(const char *path);
 static const char *adfs[9];               /* --adf, repeatable: the game's disks; Cmd/Win+1..9 swaps */
 static int nadfs;
+static int adf_in = 1;                    /* --adf-in N: the Nth --adf is in the drive at the start */
 void disk_set_position(int cyl, int side, int motor);
 extern u8 frame_rgb[320 * 256 * 3];
 extern u32 frame_count;
@@ -266,6 +268,10 @@ static long input_frame = -1;
 static char input_words[64];
 
 static void apply_input(const char *words) {
+	const char *d = strstr(words, "disk ");     /* "disk N": the Nth --adf goes in the drive */
+	if (d) { int n = atoi(d + 5); if (n >= 1 && n <= nadfs) disk_change(adfs[n - 1]); }
+	const char *k = strstr(words, "key ");      /* "key HH": an Amiga keycode tapped */
+	if (k) { unsigned code = (unsigned)strtoul(k + 4, NULL, 16); kbd_push((u8)code); kbd_push((u8)(code | 0x80)); }
 	const char *m = strstr(words, "mouse");
 	if (m) { int dx = 0, dy = 0; if (sscanf(m + 5, "%d %d", &dx, &dy) == 2) { mouse_x = (u8)(mouse_x + dx); mouse_y = (u8)(mouse_y + dy); } }
 	mouse_left = strstr(words, "click") != NULL;
@@ -346,6 +352,7 @@ int main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "--speed") && i + 1 < argc) { int sp = atoi(argv[++i]); cycle_shift = sp >= 32 ? 5 : sp >= 16 ? 4 : sp >= 8 ? 3 : sp >= 4 ? 2 : sp >= 2 ? 1 : 0; }
 		else if (!strcmp(argv[i], "--wav") && i + 1 < argc) { wavf = fopen(argv[++i], "wb"); if (wavf) { u8 z[44] = { 0 }; fwrite(z, 1, 44, wavf); } }
 		else if (!strcmp(argv[i], "--adf") && i + 1 < argc) { adf = argv[++i]; if (nadfs < 9) adfs[nadfs++] = adf; if (nadfs > 1) adf = adfs[0]; }
+		else if (!strcmp(argv[i], "--adf-in") && i + 1 < argc) adf_in = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--memory") && i + 1 < argc) image = argv[++i];
 		else if (!strcmp(argv[i], "--trace") && i + 1 < argc) trace_path = argv[++i];
 		else if (!strcmp(argv[i], "--play")) play = 1;
@@ -355,11 +362,12 @@ int main(int argc, char **argv) {
 #ifdef RECOMP_ITRACE
 		else if (!strcmp(argv[i], "--itrace") && i + 2 < argc) { itrace_f = fopen(argv[++i], "w"); itrace_left = atol(argv[++i]); }
 #endif
-		else { fprintf(stderr, "usage: game [--memory memory.bin] [--adf disk.adf] [--frames N] [--png out.png] [--dump chip.bin] [--wav out.wav] [--pngs DIR] [--speed 1|2|4|8|16|32] [--trace file] [--input keys.txt] [--timeout SEC] [--play [--fast]]\n"); return 2; }
+		else { fprintf(stderr, "usage: game [--memory memory.bin] [--adf disk.adf]... [--adf-in N] [--frames N] [--png out.png] [--dump chip.bin] [--wav out.wav] [--pngs DIR] [--speed 1|2|4|8|16|32] [--trace file] [--input keys.txt] [--timeout SEC] [--play [--fast]]\n"); return 2; }
 	}
 	amiga_init();
 	load_memory(image);
 	{ static char d[1024]; const char *slash = strrchr(image, '/'); if (slash) { snprintf(d, sizeof d, "%.*s", (int)(slash - image), image); image_dir = d; } }
+	if (nadfs > 1 && adf_in >= 1 && adf_in <= nadfs) adf = adfs[adf_in - 1];
 	if (adf) disk_set_adf(adf);
 	if (trace_path) tracef = fopen(trace_path, "w");
 	for (unsigned i = 0; i < sizeof start_regs / sizeof start_regs[0]; i++) amiga_set_reg(start_regs[i].off, start_regs[i].val);
