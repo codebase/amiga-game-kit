@@ -448,10 +448,11 @@ def mnemonic_size(mn):
 
 
 class Translator:
-    def __init__(self, instrs, covered, memory=()):
+    def __init__(self, instrs, covered, memory=(), hooks=None):
         self.instrs = instrs
         self.covered = covered
         self.memory = memory              # [(base, bytes)]: the dumps, for each instruction's first word
+        self.hooks = hooks or {}          # address -> C function called before the instruction there
         self.addrs = {a for a, *_ in instrs}
         self.lines = []
         self.pending_ticks = 0
@@ -491,6 +492,8 @@ class Translator:
             label_at = len(L)
             L.append(f"{self.label(addr)}:")
             self.words[addr] = self.word_at(addr)
+            if addr in self.hooks:        # a hook: 1 = it did the work (continue at cpu.pc), 0 = run the original
+                L.append(f"\tif ({self.hooks[addr]}()) goto dispatch;")
             if addr not in self.covered and mn in ("illegal", ".short", ".long"):
                 self.not_code.add(addr)
                 L.append(f"\t{{ cpu.pc = {addr:#x}u; goto dispatch; }}   /* data, or code loaded later: the interpreter's */")
@@ -800,10 +803,11 @@ class Translator:
         raise RecompError(f"instruction not translated: {mn}")
 
 
-def generate(instrs, covered, entry_pc, memory=()):
-    t = Translator(instrs, covered, memory)
+def generate(instrs, covered, entry_pc, memory=(), hooks=None):
+    t = Translator(instrs, covered, memory, hooks)
     body = t.translate()
     out = ['#include "m68k.h"', "#include <stdlib.h>", "static int recomp_trace;",
+           *[f"int {fn}(void);" for fn in sorted(set((hooks or {}).values()))],
            "static void *table[0x100000];       /* chip RAM, by address / 2: the label, or 0 */",
            "static void *slow[0x100000];        /* $C00000.. likewise */",
            "static u16 opword[0x100000], opword_slow[0x100000];   /* the first word of each, as translated */",
@@ -839,11 +843,11 @@ def generate(instrs, covered, entry_pc, memory=()):
     return "\n".join(out), t.unknown
 
 
-def write_project(outdir, instrs, covered, cpu_regs, mem_files, regs, runtime_dir):
+def write_project(outdir, instrs, covered, cpu_regs, mem_files, regs, runtime_dir, hooks=None):
     import shutil
     os.makedirs(outdir, exist_ok=True)
     memory = [(base, open(path, "rb").read()) for path, base in mem_files]
-    text, unknown = generate(instrs, covered, cpu_regs["PC"], memory)
+    text, unknown = generate(instrs, covered, cpu_regs["PC"], memory, hooks)
     with open(os.path.join(outdir, "game.c"), "w") as f:
         f.write(text)
     for name in os.listdir(runtime_dir):

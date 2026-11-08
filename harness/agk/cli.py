@@ -623,8 +623,20 @@ def cmd_recomp(args):
         flat[f"COLOR{i:02d}"] = c
     mem_files = [(path, base) for base, path, _ in images]
     runtime_dir = os.path.join(ROOT, "recomp", "runtime")
+    # --hook ADDR=file.c:function: the function runs before the instruction at ADDR
+    hooks, hook_files = {}, []
+    for spec in args.hook or []:
+        m = re.fullmatch(r"(?:0x)?([0-9a-fA-F]+)=([^:]+\.c):(\w+)", spec)
+        if not m:
+            raise SystemExit(f"recomp: --hook wants ADDR=file.c:function, not {spec!r}")
+        if not os.path.exists(m.group(2)):
+            raise SystemExit(f"recomp: hook file {m.group(2)} not found")
+        hooks[int(m.group(1), 16)] = m.group(3)
+        hook_files.append(os.path.abspath(m.group(2)))
     try:
-        unknown = recomp.write_project(out, instrs, covered, cpu_regs, mem_files, flat, runtime_dir)
+        unknown = recomp.write_project(out, instrs, covered, cpu_regs, mem_files, flat, runtime_dir, hooks)
+        for hf in set(hook_files):
+            shutil.copy(hf, out)
     except recomp.RecompError as e:
         raise SystemExit(f"recomp: {e}")
     print(f"wrote {rel(out)}/game.c: {len(instrs)} instructions; {len(unknown)} branch targets never executed "
@@ -1217,6 +1229,9 @@ def main(argv=None):
     p.add_argument("--adf", help="the disk, for the native run")
     p.add_argument("--input", help="for --diff: a file of 'FRAME right left up down fire' lines, played in both")
     p.add_argument("--anchor", action="append", metavar="HEX", help="also translate the code at this address (repeatable)")
+    p.add_argument("--hook", action="append", metavar="ADDR=file.c:function",
+                   help="call this C function before the instruction at ADDR; it returns 1 to replace it (continuing at cpu.pc) "
+                        "or 0 to let it run. The file is compiled in. Repeatable: how a port improves the game.")
     p.add_argument("--diff-pc", action="store_true", help="with --diff: compare the path only (where the branches differ), not the register values")
     p.add_argument("--no-resnap", action="store_true", help="use DIR's dumps as they are instead of re-taking them from end.vasnap")
     p.add_argument("--no-follow", action="store_true",

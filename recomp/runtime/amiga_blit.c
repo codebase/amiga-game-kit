@@ -1,11 +1,17 @@
 /* The blitter: area mode (copies, cookie cuts, fills) and line mode,
  * run to completion the moment BLTSIZE is written. */
 #include "m68k.h"
+#include <stdlib.h>
 
 static u16 ror16(u16 v, int n) { return n ? (u16)((v >> n) | (v << (16 - n))) : v; }
 
 void blitter_run(u16 *regs, u32 *pts) {
 	u16 con0 = regs[0x040 >> 1], con1 = regs[0x042 >> 1];
+	{ static int bt = -1; if (bt < 0) bt = getenv("RECOMP_BLIT_TRACE") != NULL;
+	  if (bt) { extern u32 frame_count; u16 sz = regs[0x058 >> 1];
+	    fprintf(stderr, "blit: frame %u %s con0 %04X con1 %04X size %ux%u A %06X B %06X C %06X D %06X mods %d %d %d %d\n", frame_count,
+	            (con1 & 1) ? "LINE" : (con1 & 0x18) ? "FILL" : "AREA", con0, con1, sz >> 6 ? sz >> 6 : 1024, sz & 63 ? sz & 63 : 64,
+	            pts[0], pts[1], pts[2], pts[3], (s16)regs[0x064 >> 1], (s16)regs[0x062 >> 1], (s16)regs[0x060 >> 1], (s16)regs[0x066 >> 1]); } }
 	u16 afwm = regs[0x044 >> 1], alwm = regs[0x046 >> 1];
 	s16 amod = (s16)regs[0x064 >> 1], bmod = (s16)regs[0x062 >> 1], cmod = (s16)regs[0x060 >> 1], dmod = (s16)regs[0x066 >> 1];
 	u16 size = regs[0x058 >> 1];

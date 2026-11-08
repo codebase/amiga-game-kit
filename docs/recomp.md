@@ -217,9 +217,42 @@ away (the car covers two to three times the distance at 16x). 4x, about
 scaled by that delta too: a hand edit of a few routines, which is what the
 tools are for next.
 
+## Improving a game: hooks
+
+`agk recomp DIR --hook ADDR=file.c:function` compiles `file.c` into the
+build and calls `function()` just before the instruction at `ADDR` runs.
+The function sees everything the translated code sees (`cpu`, `mem`,
+`rd16`/`wr16`, the flag helpers, from `m68k.h`); it returns 0 to let the
+original instruction run or 1 to replace it, having set `cpu.pc` to where
+execution continues. That's the whole mechanism: a port improves a game by
+replacing its routines one address at a time, and the differential tester
+checks the rest still matches.
+
+The worked example is `examples/recomp-hooks/robocop3.c`. RoboCop 3 steps
+some of its physics once per rendered frame (coasting friction at `$205D4`,
+air drag at `$2071A`, the steering at `$20208`), so a faster CPU made the
+car sluggish and twitchy. Three hooks scale those steps by the frame's share
+of the A500's 13 VBLs per frame, the game's own timer (`$18200`); the
+steering one keeps a full-precision heading because the game rounds it to
+64ths right after. With them, `--speed 16` renders every frame at 50 fps
+and the car covers the same ground at the same speed as at 1x (frame 300:
+Z 23284 vs 23298). Finding the three took the memory diffs and the write
+watch above: compare the variables at a fixed frame across `--speed`
+settings, and whatever drifts is per-frame logic.
+
+```sh
+agk recomp cov -o native --adf robocop3-disk2.adf \
+    --hook 205D4=examples/recomp-hooks/robocop3.c:friction \
+    --hook 2071A=examples/recomp-hooks/robocop3.c:drag \
+    --hook 20208=examples/recomp-hooks/robocop3.c:steering
+native/game --play --speed 16 --adf disk1.adf --adf disk2.adf --adf disk3.adf --adf-in 2
+```
+
 ## What's next
 
-- The blitter's line mode.
+- A sharper picture for the 3D games: RoboCop 3 fills its polygons with the
+  CPU (the hot span filler at `$7A800`), so a higher-resolution view means
+  hooking that filler with a rasteriser fed from the game's vertex lists.
 - A cycle model close enough that timing-seeded games replay identically.
 - Hooks for improvements: the renderer and the vertical-blank wait are
   known addresses (`agk inspect` found them), so a 60 fps or high-resolution

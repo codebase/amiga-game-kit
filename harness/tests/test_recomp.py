@@ -73,6 +73,12 @@ class TranslateTests(unittest.TestCase):
         self.assertIn("setd(0, 0x5u, 32)", text)                           # in the opcode word: constant
         self.assertIn("tmp = 0x1u;", text)                                  # addq's constant: in the opcode word
 
+    def test_hooks_run_before_the_instruction(self):
+        text, _ = recomp.generate([(0x100, 1, "nop", ""), (0x102, 1, "rts", "")], {0x100, 0x102}, 0x100,
+                                  hooks={0x100: "my_hook"})
+        self.assertIn("int my_hook(void);", text)
+        self.assertIn("L_000100:\n\tif (my_hook()) goto dispatch;", text)
+
     def test_usp_moves_are_longs(self):
         L, _ = lines_of([(0x100, 1, "movel", "a3,%usp"), (0x102, 1, "movel", "%usp,sp")])
         text = "\n".join(L)
