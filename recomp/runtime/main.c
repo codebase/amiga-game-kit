@@ -220,7 +220,7 @@ static void sdl_input(void) {
 		if (e.type == SDL_QUIT) { interp_report(); exit(0); }
 		if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE && !mouse_grabbed) { interp_report(); exit(0); }
 		if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F12) { fast = !fast; next_present = SDL_GetPerformanceCounter(); }
-		if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F11) { mouse_grabbed = 0; SDL_SetRelativeMouseMode(SDL_FALSE); }
+		if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F11) { mouse_grabbed = 0; SDL_ShowCursor(SDL_ENABLE); SDL_SetWindowGrab(win, SDL_FALSE); }
 		if (e.type == SDL_KEYDOWN && (e.key.keysym.mod & (KMOD_GUI | KMOD_ALT)) && e.key.keysym.sym >= SDLK_1 && e.key.keysym.sym <= SDLK_9) {
 			int n = e.key.keysym.sym - SDLK_1;
 			if (n < nadfs) { disk_change(adfs[n]); fprintf(stderr, "recomp: disk %d (%s) in the drive\n", n + 1, adfs[n]); }
@@ -230,11 +230,21 @@ static void sdl_input(void) {
 			u8 code = amiga_key(e.key.keysym.scancode);
 			if (code != 0xFF) kbd_push(e.type == SDL_KEYUP ? (code | 0x80) : code);
 		}
-		if (e.type == SDL_MOUSEBUTTONDOWN && !mouse_grabbed) { mouse_grabbed = 1; SDL_SetRelativeMouseMode(SDL_TRUE); }
+		if (e.type == SDL_MOUSEBUTTONDOWN && !mouse_grabbed) {
+			/* grab: the cursor hidden and kept at the window's centre; the motion is what
+			   moved it away from there each frame (SDL's relative mode on macOS reports
+			   phantom motion while the pointer is still) */
+			int w, h; SDL_GetWindowSize(win, &w, &h);
+			mouse_grabbed = 1; SDL_ShowCursor(SDL_DISABLE); SDL_SetWindowGrab(win, SDL_TRUE); SDL_WarpMouseInWindow(win, w / 2, h / 2);
+			SDL_PumpEvents(); SDL_FlushEvent(SDL_MOUSEMOTION);
+		}
 	}
-	if (mouse_grabbed) {                  /* the mouse: relative motion into Paula's 8-bit counters */
-		int dx, dy;
-		u32 b = SDL_GetRelativeMouseState(&dx, &dy);
+	if (mouse_grabbed) {                  /* the mouse: its motion since the last frame into Paula's 8-bit counters */
+		int w, h, x, y; SDL_GetWindowSize(win, &w, &h);
+		u32 b = SDL_GetMouseState(&x, &y);
+		int dx = x - w / 2, dy = y - h / 2;
+		if (dx || dy) SDL_WarpMouseInWindow(win, w / 2, h / 2);
+		if (dx > 127) dx = 127; if (dx < -127) dx = -127; if (dy > 127) dy = 127; if (dy < -127) dy = -127;
 		mouse_x = (u8)(mouse_x + dx / 2); mouse_y = (u8)(mouse_y + dy / 2);
 		const Uint8 *k = SDL_GetKeyboardState(NULL);
 		/* (with the mouse grabbed, space or up also press the left button, down the right: a trackpad is awkward to hold) */
@@ -318,6 +328,8 @@ static void scripted_input(void) {
 /* called by the runtime after every rendered frame */
 void frame_hook(void) {
 	scripted_input();
+	{ static int it = -1; if (it < 0) it = getenv("RECOMP_INPUT_TRACE") != NULL;
+	  if (it && frame_count % 50 == 0) fprintf(stderr, "input: frame %u mouse %u,%u left %u right %u joy %04X fire %u\n", frame_count, mouse_x, mouse_y, mouse_left, mouse_right, joy1dat, joy_fire); }
 	if (wavf) wav_frame();
 	if (pngs_dir) { char path[1024]; snprintf(path, sizeof path, "%s/f%05u.png", pngs_dir, frame_count); write_png(path); }
 #ifdef USE_SDL
