@@ -2,7 +2,7 @@
  * per rendered frame, so with a faster CPU (more frames a second) the car
  * felt more drag. These hooks scale those steps by the frame's share of the
  * A500's 13 VBLs per frame, so the car behaves as at 1x whatever the rate.
- *   agk recomp DIR --hook 205D4=robocop3.c:friction --hook 2071A=robocop3.c:drag --hook 20208=robocop3.c:steering --hook 1742A=robocop3.c:frame_begin */
+ *   agk recomp DIR --hook 205D4=robocop3.c:friction --hook 2071A=robocop3.c:drag --hook 20208=robocop3.c:steering --hook 1742A=robocop3.c:frame_begin --hook 259BE=robocop3.c:traffic */
 #include "m68k.h"
 
 #define VBL_DELTA 0x18200u               /* VBLs since the last frame, as the game measured it (a word) */
@@ -66,4 +66,28 @@ int steering(void) {
 int frame_begin(void) {
 	frame_sync();
 	return 0;                             /* then the original instruction */
+}
+
+/* $259BE..$259DE: the pursued car moves by direction x speed once per rendered
+ * frame (d0-d2 the direction, $2579C its speed, $2594E its position): the
+ * same step spread over the frame's share of 13 VBLs, with the remainder
+ * carried so nothing is lost at a high frame rate */
+#define CAR_POS 0x2594Eu
+#define CAR_SPEED 0x2579Cu
+static long long car_acc0, car_acc2;
+static long long floordiv(long long a, long long b) { long long q = a / b; if ((a % b) && ((a < 0) != (b < 0))) q--; return q; }
+int traffic(void) {
+	int delta = (s16)rd16(VBL_DELTA);
+	if (delta <= 0) return 0;
+	long long spd = (s16)rd16(CAR_SPEED);
+	long long d0 = (s16)D[0], d2 = (s16)D[2];
+	car_acc0 += d0 * spd * delta;
+	car_acc2 += d2 * spd * delta;
+	long long den = 65536LL * A500_FRAME;
+	long long s0 = floordiv(car_acc0, den), s2 = floordiv(car_acc2, den);
+	car_acc0 -= s0 * den; car_acc2 -= s2 * den;
+	wr32(CAR_POS, (u32)((s32)rd32(CAR_POS) - (s32)s0));
+	wr32(CAR_POS + 8, (u32)((s32)rd32(CAR_POS + 8) + (s32)s2));
+	cpu.pc = 0x259E0u;                    /* the rts */
+	return 1;
 }

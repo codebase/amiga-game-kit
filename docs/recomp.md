@@ -249,6 +249,7 @@ agk recomp cov -o native --adf robocop3-disk2.adf \
     --hook 205D4=examples/recomp-hooks/robocop3.c:friction \
     --hook 2071A=examples/recomp-hooks/robocop3.c:drag \
     --hook 20208=examples/recomp-hooks/robocop3.c:steering \\
+    --hook 259BE=examples/recomp-hooks/robocop3.c:traffic \\
     --hook 1742A=examples/recomp-hooks/robocop3.c:frame_begin
 native/game --play --speed 16 --adf disk1.adf --adf disk2.adf --adf disk3.adf --adf-in 2
 ```
