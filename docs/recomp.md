@@ -234,9 +234,13 @@ air drag at `$2071A`, the steering at `$20208`), so a faster CPU made the
 car sluggish and twitchy. Three hooks scale those steps by the frame's share
 of the A500's 13 VBLs per frame, the game's own timer (`$18200`); the
 steering one keeps a full-precision heading because the game rounds it to
-64ths right after. With them, `--speed 16` renders every frame at 50 fps
-and the car covers the same ground at the same speed as at 1x (frame 300:
-Z 23284 vs 23298). Finding the three took the memory diffs and the write
+64ths right after. A fourth hook, at the point where the game begins a frame, calls the
+runtime's `frame_sync()`: the picture just finished is captured and the
+CPU waits for the vertical blank, so a game that never synced (it didn't
+have to at 4 fps) shows one whole frame per video frame instead of
+tearing. With them, `--speed 16` renders every frame at 50 fps and the car
+covers the same ground at the same speed as at 1x (frame 300: Z 23360 vs
+23298). Finding the three took the memory diffs and the write
 watch above: compare the variables at a fixed frame across `--speed`
 settings, and whatever drifts is per-frame logic.
 
@@ -244,7 +248,8 @@ settings, and whatever drifts is per-frame logic.
 agk recomp cov -o native --adf robocop3-disk2.adf \
     --hook 205D4=examples/recomp-hooks/robocop3.c:friction \
     --hook 2071A=examples/recomp-hooks/robocop3.c:drag \
-    --hook 20208=examples/recomp-hooks/robocop3.c:steering
+    --hook 20208=examples/recomp-hooks/robocop3.c:steering \\
+    --hook 1742A=examples/recomp-hooks/robocop3.c:frame_begin
 native/game --play --speed 16 --adf disk1.adf --adf disk2.adf --adf disk3.adf --adf-in 2
 ```
 

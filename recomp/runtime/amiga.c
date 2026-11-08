@@ -251,13 +251,26 @@ static void cia_tick(cia_t *c, u32 ticks) {
 
 static u64 last_cia_cycles;
 int frame_done;                           /* for main.c: a frame was rendered since it last looked */
+static int display_held;                  /* the picture for this frame was captured by frame_sync */
+
+/* For a hook at the point where the game begins a new frame: capture the
+ * picture it just finished and spend the rest of this video frame waiting, so
+ * a game that never synced to the vertical blank (it didn't need to at 4 fps)
+ * shows exactly one whole frame per video frame instead of tearing. */
+void frame_sync(void) {
+	display_render();
+	display_held = 1;
+	u64 target = frame_start + CYCLES_PER_FRAME;
+	if (cpu.cycles < target) cpu.cycles = target;
+	run_events();
+}
 
 void run_events(void) {
 	u32 ticks = (u32)((cpu.cycles - last_cia_cycles) / 10);
 	if (ticks) { cia_tick(&ciaa, ticks); cia_tick(&ciab, ticks); last_cia_cycles += (u64)ticks * 10; }
 	while (cpu.cycles - frame_start >= CYCLES_PER_FRAME) {
 		frame_start += CYCLES_PER_FRAME;
-		display_render();
+		if (display_held) display_held = 0; else display_render();   /* (frame_sync captured this frame already) */
 		frame_count++;
 		frame_done = 1;
 		{ extern void frame_hook(void); frame_hook(); }

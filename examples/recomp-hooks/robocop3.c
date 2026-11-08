@@ -2,7 +2,7 @@
  * per rendered frame, so with a faster CPU (more frames a second) the car
  * felt more drag. These hooks scale those steps by the frame's share of the
  * A500's 13 VBLs per frame, so the car behaves as at 1x whatever the rate.
- *   agk recomp DIR --hook 205D4=robocop3.c:friction --hook 2071A=robocop3.c:drag --hook 20208=robocop3.c:steering */
+ *   agk recomp DIR --hook 205D4=robocop3.c:friction --hook 2071A=robocop3.c:drag --hook 20208=robocop3.c:steering --hook 1742A=robocop3.c:frame_begin */
 #include "m68k.h"
 
 #define VBL_DELTA 0x18200u               /* VBLs since the last frame, as the game measured it (a word) */
@@ -57,4 +57,13 @@ int steering(void) {
 	last_written = (s16)((h & 0xFFFF) & ~63);                /* what the game's andi will leave */
 	cpu.pc = 0x2020Eu;
 	return 1;
+}
+
+/* $1742A: the game begins a new frame here (it reads its VBL counter). The
+ * frame it just drew is complete: show it, and wait for the vertical blank so
+ * each video frame shows one whole picture (the game never synced: at 4 fps
+ * it didn't have to, at 50 it tears). */
+int frame_begin(void) {
+	frame_sync();
+	return 0;                             /* then the original instruction */
 }
