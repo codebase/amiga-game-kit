@@ -40,14 +40,13 @@ static const char *png_path;
 static const char *dump_path;             /* --dump: chip RAM at the end, to compare with the emulator's */
 static const char *pngs_dir;              /* --pngs DIR: every frame as DIR/fNNNNN.png */
 static FILE *wavf;                        /* --wav: the sound of the run, headless */
+static s16 audio_buf[48000 / 50 * 2];     /* this frame's Paula output (rendered every frame, see frame_hook) */
 static u32 wav_bytes;
 void audio_render(s16 *out, int n, int rate);
 
 static void wav_frame(void) {
-	static s16 buf[48000 / 50 * 2];
-	audio_render(buf, 48000 / 50, 48000);
-	fwrite(buf, 1, sizeof buf, wavf);
-	wav_bytes += sizeof buf;
+	fwrite(audio_buf, 1, sizeof audio_buf, wavf);
+	wav_bytes += sizeof audio_buf;
 }
 
 static void wav_close(void) {
@@ -213,6 +212,7 @@ static u8 amiga_key(SDL_Scancode sc) {
 }
 
 static int mouse_grabbed;
+static int centre_x, centre_y;            /* where the warped pointer reads back, in SDL's mouse space */
 
 static void sdl_input(void) {
 	SDL_Event e;
@@ -227,8 +227,11 @@ static void sdl_input(void) {
 			continue;
 		}
 		if ((e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) && !e.key.repeat) {
-			u8 code = amiga_key(e.key.keysym.scancode);
-			if (code != 0xFF) kbd_push(e.type == SDL_KEYUP ? (code | 0x80) : code);
+			SDL_Scancode sc = e.key.keysym.scancode;
+			int control = sc == SDL_SCANCODE_UP || sc == SDL_SCANCODE_DOWN || sc == SDL_SCANCODE_LEFT || sc == SDL_SCANCODE_RIGHT
+			           || sc == SDL_SCANCODE_SPACE || sc == SDL_SCANCODE_LCTRL || sc == SDL_SCANCODE_RCTRL;
+			u8 code = amiga_key(sc);
+			if (code != 0xFF && !control) kbd_push(e.type == SDL_KEYUP ? (code | 0x80) : code);   /* (the controls aren't typed) */
 		}
 		if (e.type == SDL_MOUSEBUTTONDOWN && !mouse_grabbed) {
 			/* grab: the cursor hidden and kept at the window's centre; the motion is what
@@ -237,13 +240,15 @@ static void sdl_input(void) {
 			int w, h; SDL_GetWindowSize(win, &w, &h);
 			mouse_grabbed = 1; SDL_ShowCursor(SDL_DISABLE); SDL_SetWindowGrab(win, SDL_TRUE); SDL_WarpMouseInWindow(win, w / 2, h / 2);
 			SDL_PumpEvents(); SDL_FlushEvent(SDL_MOUSEMOTION);
+			SDL_GetMouseState(&centre_x, &centre_y);   /* (in whatever space SDL reports: the logical size scales it) */
+			continue;
 		}
 	}
 	if (mouse_grabbed) {                  /* the mouse: its motion since the last frame into Paula's 8-bit counters */
 		int w, h, x, y; SDL_GetWindowSize(win, &w, &h);
 		u32 b = SDL_GetMouseState(&x, &y);
-		int dx = x - w / 2, dy = y - h / 2;
-		if (dx || dy) SDL_WarpMouseInWindow(win, w / 2, h / 2);
+		int dx = x - centre_x, dy = y - centre_y;
+		if (dx || dy) { SDL_WarpMouseInWindow(win, w / 2, h / 2); SDL_PumpEvents(); SDL_GetMouseState(&centre_x, &centre_y); }
 		if (dx > 127) dx = 127; if (dx < -127) dx = -127; if (dy > 127) dy = 127; if (dy < -127) dy = -127;
 		mouse_x = (u8)(mouse_x + dx / 2); mouse_y = (u8)(mouse_y + dy / 2);
 		const Uint8 *k = SDL_GetKeyboardState(NULL);
@@ -264,12 +269,8 @@ static void sdl_input(void) {
 }
 
 static void sdl_present(void) {
-	if (adev) {                           /* a frame's worth of Paula, unless we're ahead (full speed) */
-		static s16 buf[AUDIO_RATE / 50 * 2];
-		if (SDL_GetQueuedAudioSize(adev) < sizeof buf * 4) {
-			audio_render(buf, AUDIO_RATE / 50, AUDIO_RATE);
-			SDL_QueueAudio(adev, buf, sizeof buf);
-		}
+	if (adev) {                           /* the frame's Paula output, queued unless we're far ahead (full speed) */
+		if (SDL_GetQueuedAudioSize(adev) < sizeof audio_buf * 4) SDL_QueueAudio(adev, audio_buf, sizeof audio_buf);
 	}
 	SDL_UpdateTexture(tex, NULL, frame_rgb, 320 * 3);
 	SDL_RenderClear(ren);
@@ -325,9 +326,13 @@ static void scripted_input(void) {
 	}
 }
 
+/* Paula is rendered every frame whatever the build is doing with the sound, so
+ * the chip state it leaves (channel reloads, INTREQ bits) doesn't depend on
+ * whether a window, a wav file or nothing is listening: the same run is the same */
 /* called by the runtime after every rendered frame */
 void frame_hook(void) {
 	scripted_input();
+	audio_render(audio_buf, 48000 / 50, 48000);
 	{ static int it = -1; if (it < 0) it = getenv("RECOMP_INPUT_TRACE") != NULL;
 	  if (it && frame_count % 50 == 0) fprintf(stderr, "input: frame %u mouse %u,%u left %u right %u joy %04X fire %u\n", frame_count, mouse_x, mouse_y, mouse_left, mouse_right, joy1dat, joy_fire); }
 	if (wavf) wav_frame();
