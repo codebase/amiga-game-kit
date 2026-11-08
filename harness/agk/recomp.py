@@ -296,11 +296,12 @@ class Operand:
     """One operand as C: setup statements, the address (for memory), the read
     expression and a write statement. `bits` is the access size."""
 
-    def __init__(self, text, bits, pc_next):
+    def __init__(self, text, bits, pc_next, live=None):
         self.text, self.bits = text, bits
         self.setup, self.addr, self.kind = [], None, None
         self.reg = None
         self.imm = None
+        self.live = live                  # the address of an immediate's extension word: read it at run time
         t = text.strip()
         m = re.fullmatch(r"#(-?\d+)", t)
         if m:
@@ -360,6 +361,8 @@ class Operand:
 
     def read(self):
         if self.kind == "imm":
+            if self.live is not None:     # games patch constants into their code (a 3D engine's rotation matrix)
+                return f"rd32({self.live:#x}u)" if self.bits == 32 else f"(rd16({self.live:#x}u) & MASK({self.bits}))"
             return f"{self.imm:#x}u"
         if self.kind == "dreg":
             return f"({self.reg} & MASK({self.bits}))" if self.bits != 32 else self.reg
@@ -510,8 +513,15 @@ class Translator:
         base, bits = mnemonic_size(mn)
         o = split_operands(ops) if ops else []
 
+        # an immediate in an extension word (the first word after the opcode) is read
+        # from the code at run time: self-modifying games patch it. Not moveq, addq,
+        # subq, the shifts or trap, whose constant is in the opcode word itself.
+        LIVE_IMM = ("move", "add", "sub", "cmp", "and", "or", "eor", "addi", "subi", "cmpi", "andi", "ori", "eori",
+                    "adda", "suba", "cmpa", "mulu", "muls", "divu", "divs")
+
         def opnd(i, b=None):
-            return Operand(o[i], b or bits or 16, nxt)
+            live = addr + 2 if (i == 0 and o[i].startswith("#") and base in LIVE_IMM) else None
+            return Operand(o[i], b or bits or 16, nxt, live)
 
         def emit(op, *stmts):
             for s in op.setup:

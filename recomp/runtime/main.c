@@ -13,6 +13,7 @@
 #include "m68k.h"
 #include "start.h"
 #include <string.h>
+#include <time.h>
 #include <signal.h>
 #include <unistd.h>
 
@@ -213,6 +214,7 @@ static u8 amiga_key(SDL_Scancode sc) {
 
 static int mouse_grabbed;
 static int centre_x, centre_y;            /* where the warped pointer reads back, in SDL's mouse space */
+static int settle;                        /* frames after a grab during which the warp is still landing */
 
 static void sdl_input(void) {
 	SDL_Event e;
@@ -241,6 +243,7 @@ static void sdl_input(void) {
 			mouse_grabbed = 1; SDL_ShowCursor(SDL_DISABLE); SDL_SetWindowGrab(win, SDL_TRUE); SDL_WarpMouseInWindow(win, w / 2, h / 2);
 			SDL_PumpEvents(); SDL_FlushEvent(SDL_MOUSEMOTION);
 			SDL_GetMouseState(&centre_x, &centre_y);   /* (in whatever space SDL reports: the logical size scales it) */
+			settle = 5;                       /* (macOS applies the warp a frame or two later: no deltas until it has) */
 			continue;
 		}
 	}
@@ -248,7 +251,8 @@ static void sdl_input(void) {
 		int w, h, x, y; SDL_GetWindowSize(win, &w, &h);
 		u32 b = SDL_GetMouseState(&x, &y);
 		int dx = x - centre_x, dy = y - centre_y;
-		if (dx || dy) { SDL_WarpMouseInWindow(win, w / 2, h / 2); SDL_PumpEvents(); SDL_GetMouseState(&centre_x, &centre_y); }
+		if (settle) { settle--; centre_x = x; centre_y = y; dx = dy = 0; }
+		else if (dx || dy) { SDL_WarpMouseInWindow(win, w / 2, h / 2); SDL_PumpEvents(); SDL_GetMouseState(&centre_x, &centre_y); }
 		if (dx > 127) dx = 127; if (dx < -127) dx = -127; if (dy > 127) dy = 127; if (dy < -127) dy = -127;
 		mouse_x = (u8)(mouse_x + dx / 2); mouse_y = (u8)(mouse_y + dy / 2);
 		const Uint8 *k = SDL_GetKeyboardState(NULL);
@@ -334,7 +338,7 @@ void frame_hook(void) {
 	scripted_input();
 	audio_render(audio_buf, 48000 / 50, 48000);
 	{ static int it = -1; if (it < 0) it = getenv("RECOMP_INPUT_TRACE") != NULL;
-	  if (it && frame_count % 50 == 0) fprintf(stderr, "input: frame %u mouse %u,%u left %u right %u joy %04X fire %u\n", frame_count, mouse_x, mouse_y, mouse_left, mouse_right, joy1dat, joy_fire); }
+	  if (it && frame_count % 50 == 0) fprintf(stderr, "input: frame %u t %.1fs mouse %u,%u left %u right %u joy %04X fire %u\n", frame_count, (double)clock() / CLOCKS_PER_SEC, mouse_x, mouse_y, mouse_left, mouse_right, joy1dat, joy_fire); }
 	if (wavf) wav_frame();
 	if (pngs_dir) { char path[1024]; snprintf(path, sizeof path, "%s/f%05u.png", pngs_dir, frame_count); write_png(path); }
 #ifdef USE_SDL

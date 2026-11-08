@@ -64,6 +64,15 @@ class TranslateTests(unittest.TestCase):
         self.assertIn("CC_EQ", text)
         self.assertIn("op_sub(", text)                     # subqw isn't an scc
 
+    def test_immediates_are_read_from_the_code(self):
+        L, _ = lines_of([(0x100, 2, "mulsw", "#32710,d1"), (0x104, 3, "addil", "#100,d2"), (0x10a, 1, "moveq", "#5,d0"),
+                         (0x10c, 1, "addqw", "#1,d3")])
+        text = "\n".join(L)
+        self.assertIn("tmp = (rd16(0x102u) & MASK(16));", text)            # a 3D engine patches these
+        self.assertIn("rd32(0x106u)", text)
+        self.assertIn("setd(0, 0x5u, 32)", text)                           # in the opcode word: constant
+        self.assertIn("tmp = 0x1u;", text)                                  # addq's constant: in the opcode word
+
     def test_usp_moves_are_longs(self):
         L, _ = lines_of([(0x100, 1, "movel", "a3,%usp"), (0x102, 1, "movel", "%usp,sp")])
         text = "\n".join(L)

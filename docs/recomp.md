@@ -80,9 +80,12 @@ What happens:
    `recomp/runtime/m68k.h`'s helpers: registers, flags, memory access that
    traps the chips. Branches are `goto`s; calls push the return address on
    the game's own stack; `rts`, `rte`, `jmp (an)` and exceptions go through
-   a table from address to label. Each instruction is charged a fixed
-   cost as it executes; the chips' events are looked at and interrupts
-   taken at control flow (before a backward branch, a dbcc, a call).
+   a table from address to label. An immediate operand in an extension
+   word is read from the code at run time (games patch constants into
+   their instructions); one in the opcode word (moveq, addq, a shift
+   count) is a constant. Each instruction is charged a fixed cost as it
+   executes; the chips' events are looked at and interrupts taken at
+   control flow (before a backward branch, a dbcc, a call).
 5. **The runtime** (`recomp/runtime/`): the custom registers, DMACON /
    INTENA / INTREQ, the copper interpreted line by line at the end of each
    frame, the bitplanes fetched as the registers say (DDF, modulos, fine
@@ -187,6 +190,19 @@ instructions, sliding out of step and swallowing the real ones); the native
 build recording the addresses it needed in `needed.txt` for the next
 `agk recomp`; `move usp` being a long; the mouse and the keyboard; a copper
 WAIT for the end of a line taking effect on the next one.
+
+And then the one that took longest: the car drove (position, speed and
+heading all evolved exactly as in the emulator) but the view never moved.
+RoboCop 3's engine patches its rotation-matrix coefficients straight into
+the code every frame (`move.w d6,(17,a0,d3.w)` writing the immediates of
+`muls #coef,dN` at `$7A7E0`), so a translation that froze the immediates
+rendered the world through a dead camera. Immediates that live in an
+extension word are now read from the code at run time (`rd16(addr+2)`
+rather than a constant; the opcode word itself is checked at dispatch), and
+the view follows the car. Memory-vs-memory diffs, the emulator-side write
+watch and `--diff` found it in that order; the lesson for the tooling is
+that a divergence of *memory* with identical register streams means the
+code bytes themselves changed.
 
 Then the point of it: at the A500's speed the game renders a frame every
 13 video frames. `--speed N` makes the 68000 N times faster as the game
