@@ -29,6 +29,7 @@ Commands:
                                     for 0.5s (25 frames) in the background - use 'wait' to let it act
     click                           click the left mouse button (port 1): what most cracktros wait for
     mouse-down / mouse-up           hold the left mouse button / let it go (driving games accelerate with it)
+    watch ADDR NAME                 log the pc of every CPU write to ADDR into NAME.txt (who updates this variable?)
     insert PATH / eject             change the disk in df0 (a multi-disk game asking for disk 2)
     screenshot NAME                 capture the current frame
     dump-mem NAME ADDR LEN          save LEN bytes of memory at ADDR to NAME.bin
@@ -234,6 +235,11 @@ def parse(text, name="scenario"):
             if args:
                 raise ScenarioError(f"line {lineno}: usage: click")
             sc.lines.append("mouse1 press left")
+
+        elif cmd == "watch":
+            if len(args) != 2:
+                raise ScenarioError(f"line {lineno}: usage: watch ADDR NAME  (the pc of every CPU write to ADDR -> NAME.txt)")
+            sc.lines.append(f"agk watch {_int(args[0], lineno, 'address'):x} {{out}}/{args[1]}.txt")
 
         elif cmd in ("mouse-down", "mouse-up"):
             if args:

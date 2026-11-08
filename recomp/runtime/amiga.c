@@ -13,6 +13,7 @@
  * them.
  */
 #include "m68k.h"
+#include <stdlib.h>
 #include <string.h>
 
 cpu_t cpu;
@@ -138,7 +139,10 @@ u32 chip_read(u32 addr, int bits) {
 		v = (v & ~0x4000) | (R(0x002) & 0x6000); break;
 	case 0x004: { u32 line = beam_line(); v = (line >> 8) & 1; break; }          /* VPOSR */
 	case 0x006: { u32 line = beam_line(); v = ((line & 0xFF) << 8) | (((cpu.cycles - frame_start) % CYCLES_PER_LINE) & 0xFF); break; }  /* VHPOSR */
-	case 0x00A: v = (u16)(mouse_y << 8 | mouse_x); break;   /* JOY0DAT: the mouse */
+	case 0x00A: v = (u16)(mouse_y << 8 | mouse_x);          /* JOY0DAT: the mouse */
+		{ static int io_trace = -1; if (io_trace < 0) io_trace = getenv("RECOMP_IO_TRACE") != NULL;
+		  if (io_trace) fprintf(stderr, "io: JOY0DAT read at %06X\n", cpu.pc); }
+		break;
 	case 0x00C: { extern u16 joy1dat; v = joy1dat; break; }
 	case 0x010: v = ADKCON; break;
 	case 0x016: v = 0xFF00 & ~(mouse_right ? 0x0400 : 0); break;   /* POTGOR: the right mouse button is bit 10 */
@@ -208,6 +212,8 @@ u8 cia_read(u32 addr) {
 	switch (r) {
 	case 0:
 		/* CIA-A: /OVL /LED, the drive's /CHNG /WPRO /TK0 /RDY, /FIR0 (the mouse, up), /FIR1 (the joystick) */
+		{ static int io_trace = -1; if (io_trace < 0) io_trace = getenv("RECOMP_IO_TRACE") != NULL;
+		  if (io_trace && c == &ciaa) fprintf(stderr, "io: CIAA PRA read at %06X\n", cpu.pc); }
 		if (c == &ciaa) return (u8)((c->pra & c->ddra & 3) | (disk_cia_status() & 0x3C) | (mouse_left ? 0 : 0x40) | (joy_fire ? 0 : 0x80));
 		return (u8)((c->pra & c->ddra) | (~c->ddra & 0xFF));   /* CIA-B: the serial port's handshake lines, floating high */
 	case 1: return c->prb;

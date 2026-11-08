@@ -75,8 +75,14 @@ static inline u32 rd32(u32 a) {
 	if (IS_CIA(a)) return (u32)cia_read(a) << 24 | (u32)cia_read(a + 1) << 16 | (u32)cia_read(a + 2) << 8 | cia_read(a + 3);   /* (games read a long: the same register four times) */
 	return (u32)mem[a] << 24 | (u32)mem[a + 1] << 16 | (u32)mem[a + 2] << 8 | mem[a + 3];
 }
+#ifdef RECOMP_WATCH                       /* -DRECOMP_WATCH=0x1234: say who writes there (the pc is exact under RECOMP_INTERP) */
+#define WATCH(a, bits) do { if ((a) <= (RECOMP_WATCH) && (a) + (bits) / 8 > (RECOMP_WATCH)) fprintf(stderr, "watch: write %d bits at %06X from pc %06X\n", bits, (a), cpu.pc); } while (0)
+#else
+#define WATCH(a, bits) ((void)0)
+#endif
 static inline void wr8(u32 a, u32 v) {
 	a &= 0xFFFFFF;
+	WATCH(a, 8);
 	if (IS_CUSTOM(a)) { chip_write(a, v, 8); return; }
 	if (IS_CIA(a)) { cia_write(a, (u8)v); return; }
 	if (a >= 0xF80000) return;             /* the ROM: writes vanish */
@@ -84,6 +90,7 @@ static inline void wr8(u32 a, u32 v) {
 }
 static inline void wr16(u32 a, u32 v) {
 	a &= 0xFFFFFF;
+	WATCH(a, 16);
 	if (IS_CUSTOM(a)) { chip_write(a, v, 16); return; }
 	if (IS_CIA(a)) { cia_write(a, (u8)(v >> 8)); cia_write(a + 1, (u8)v); return; }
 	if (a >= 0xF80000) return;
@@ -91,6 +98,7 @@ static inline void wr16(u32 a, u32 v) {
 }
 static inline void wr32(u32 a, u32 v) {
 	a &= 0xFFFFFF;
+	WATCH(a, 32);
 	if (IS_CUSTOM(a)) { chip_write(a, v, 32); return; }
 	if (IS_CIA(a)) { cia_write(a, (u8)(v >> 24)); cia_write(a + 1, (u8)(v >> 16)); cia_write(a + 2, (u8)(v >> 8)); cia_write(a + 3, (u8)v); return; }
 	if (a >= 0xF80000) return;

@@ -848,7 +848,7 @@ def write_project(outdir, instrs, covered, cpu_regs, mem_files, regs, runtime_di
             f.write(f"#define START_A{i} {cpu_regs[f'A{i}']:#x}u\n")
         f.write(f"#define START_PC {cpu_regs['PC']:#x}u\n#define START_SR {cpu_regs['SR']:#x}u\n")
         f.write(f"#define START_USP {cpu_regs['USP']:#x}u\n#define START_SSP {cpu_regs['SSP']:#x}u\n")
-        for name in ("DF0_CYL", "DF0_SIDE", "DF0_MOTOR"):     # the drive's head (older dumps: at track 0)
+        for name in ("DF0_CYL", "DF0_SIDE", "DF0_MOTOR", "JOY0DAT", "JOY1DAT"):   # the drive's head, the mouse counters
             f.write(f"#define START_{name} {regs.get(name, 0)}\n")
         f.write("static const struct { unsigned off, val; } start_regs[] = {\n")
         offsets = {"BPLCON0": 0x100, "BPLCON1": 0x102, "BPLCON2": 0x104, "DIWSTRT": 0x8E, "DIWSTOP": 0x90,

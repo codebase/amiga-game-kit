@@ -397,6 +397,7 @@ int main(int argc, char **argv) {
 	cpu.a[0] = START_A0; cpu.a[1] = START_A1; cpu.a[2] = START_A2; cpu.a[3] = START_A3;
 	cpu.a[4] = START_A4; cpu.a[5] = START_A5; cpu.a[6] = START_A6; cpu.a[7] = START_A7;
 	disk_set_position(START_DF0_CYL, START_DF0_SIDE, START_DF0_MOTOR);
+	mouse_x = (u8)START_JOY0DAT; mouse_y = (u8)(START_JOY0DAT >> 8);   /* the counters where the game last saw them */
 	cpu.usp = START_USP; cpu.ssp = START_SSP;
 	cpu.s = (START_SR >> 13) & 1; cpu.ipl = (START_SR >> 8) & 7;
 	set_ccr(START_SR & 0xFF);
@@ -406,6 +407,7 @@ int main(int argc, char **argv) {
 #else
 	if (play) { fprintf(stderr, "recomp: this build has no window (built without SDL2: brew install sdl2 / apt install libsdl2-dev, then agk recomp again)\n"); return 2; }
 #endif
+	scripted_input();                     /* (a line for frame 0 applies before the first frame, as in the emulator) */
 	run_translated();
 	return 0;
 }

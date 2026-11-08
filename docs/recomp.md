@@ -135,6 +135,14 @@ Determinism is the product here too. Three comparisons, cheapest first:
   is compared and the handlers' instructions are skipped. RoboCop's first
   divergence is a frame counter the VBL handler had incremented once more
   in one of the two: a timing artefact, not a translation bug.
+- **Who writes this?** When a variable moves in the emulator and not
+  natively, the scenario step `watch ADDR NAME` logs the pc of every CPU
+  write to it in the emulator, and `-DRECOMP_WATCH=ADDR` does the same in
+  the native build (exact under `RECOMP_INTERP=1`). `--diff --diff-pc`
+  compares the two paths rather than the register values, for when a
+  counter is legitimately one tick apart. The native start state is taken
+  from the snapshot itself (`end.vasnap`), so both sides of a diff begin
+  identically; `--no-resnap` keeps the directory's dumps.
 - **Replays.** The same inputs in both: `--diff N --input keys.txt` plays
   the keys file in the emulator and natively (or, by hand, a scenario of
   `hold`/`release`/`wait` lines against `--input`, with `dump-chip` and

@@ -1626,10 +1626,41 @@ index 87200c4..8aa833f 100644
  
          case Opt::DENISE_HIDDEN_BITPLANES:
 diff --git a/Core/Components/Memory/Memory.cpp b/Core/Components/Memory/Memory.cpp
-index 1b7087b..a316d29 100644
+index 1b7087b..dfbde07 100644
 --- a/Core/Components/Memory/Memory.cpp
 +++ b/Core/Components/Memory/Memory.cpp
-@@ -3095,6 +3095,9 @@ Memory::pokeCustom16(u32 addr, u16 value)
+@@ -1728,10 +1728,22 @@ Memory::poke16 <Accessor::CPU, MemSrc::NONE> (u32 addr, u16 value)
+     dataBus = value;
+ }
+ 
++// AGK: 'agk watch ADDR FILE' logs the pc of every CPU write to ADDR (a word)
++u32 agkWatchAddr = 0xFFFFFFFF;
++FILE *agkWatchFile = nullptr;
++static inline void agkWatch(u32 addr, int bytes, u32 pc)
++{
++    if (addr <= agkWatchAddr && addr + (u32)bytes > agkWatchAddr && agkWatchFile) {
++        fprintf(agkWatchFile, "%06X\n", pc);
++        fflush(agkWatchFile);
++    }
++}
++
+ template <> void
+ Memory::poke8 <Accessor::CPU, MemSrc::CHIP> (u32 addr, u8 value)
+ {
+     ASSERT_CHIP_ADDR(addr);
++    agkWatch(addr, 1, cpu.getPC0());
+     
+     if CONSTEXPR (BLT_MEM_GUARD) {
+         if (blitter.checkMemguard(addr & mem.chipMask)) {
+@@ -1754,6 +1766,7 @@ template <> void
+ Memory::poke16 <Accessor::CPU, MemSrc::CHIP> (u32 addr, u16 value)
+ {
+     ASSERT_CHIP_ADDR(addr);
++    agkWatch(addr, 2, cpu.getPC0());
+     
+     if CONSTEXPR (BLT_MEM_GUARD) {
+         if (blitter.checkMemguard(addr & mem.chipMask)) {
+@@ -3095,6 +3108,9 @@ Memory::pokeCustom16(u32 addr, u16 value)
          case 0x1FC >> 1: // FMODE (AGA)
              agnus.pokeFMODE<s>(value); return;
          case 0x1FE >> 1: // NO-OP
@@ -1640,10 +1671,10 @@ index 1b7087b..a316d29 100644
      }
      
 diff --git a/Core/Misc/RetroShell/Console.cpp b/Core/Misc/RetroShell/Console.cpp
-index b661c82..8dbf003 100644
+index b661c82..5d5fc0d 100644
 --- a/Core/Misc/RetroShell/Console.cpp
 +++ b/Core/Misc/RetroShell/Console.cpp
-@@ -1185,16 +1185,382 @@ Console::initCommonCommands(RSCommand &root)
+@@ -1185,16 +1185,400 @@ Console::initCommonCommands(RSCommand &root)
              .flags  = vAmigaDOS ? rs::disabled : rs::hidden,
              .args   = {
                  { .name = { "seconds", "Delay" } },
@@ -1729,6 +1760,21 @@ index b661c82..8dbf003 100644
 +            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
 +
 +                shell.tickSync = parseBool(args.at("mode"));
++            }
++        });
++
++        root.add({
++
++            .tokens = { "agk", "watch" },
++            .chelp  = { "Log the pc of every CPU write to a chip RAM address (agk recomp: who writes this?)" },
++            .args   = { { .name = { "addr", "Address (hex)" } }, { .name = { "path", "File path" } } },
++            .func   = [this] (std::ostream &os, const Arguments &args, const std::vector<isize> &values) {
++
++                extern u32 agkWatchAddr; extern FILE *agkWatchFile;
++                agkWatchAddr = (u32)std::stoul(args.at("addr"), nullptr, 16);
++                if (agkWatchFile) fclose(agkWatchFile);
++                agkWatchFile = fopen(host.makeAbsolute(args.at("path")).c_str(), "w");
++                if (!agkWatchFile) throw IOError(IOError::FILE_CANT_CREATE, args.at("path"));
 +            }
 +        });
 +
@@ -1933,6 +1979,9 @@ index b661c82..8dbf003 100644
 +                for (int i = 0; i < 8; i++) { file << "BPL" << i + 1 << "PT " << std::hex << std::uppercase << agnus.bplpt[i] << std::dec << "\n"; }
 +                for (int i = 0; i < 8; i++) { file << "SPR" << i << "PT " << std::hex << std::uppercase << agnus.sprpt[i] << std::dec << "\n"; }
 +                for (int i = 0; i < 4; i++) { file << "AUD" << i << "LC " << std::hex << std::uppercase << agnus.audlc[i] << std::dec << "\n"; }
++                // the mouse and joystick counters: a game steers by their deltas
++                hex("JOY0DAT", denise.peekJOY0DATR());
++                hex("JOY1DAT", denise.peekJOY1DATR());
 +                // the drive: where its head is (the game's loader seeks relative to it)
 +                hex("DF0_CYL", df0.head.cylinder);
 +                hex("DF0_SIDE", df0.head.head);

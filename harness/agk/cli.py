@@ -608,13 +608,16 @@ def cmd_recomp(args):
         except recomp.RecompError as e:
             raise SystemExit(f"recomp: {e}")
         print(f"{added} more instructions reached by following branches the emulator didn't take")
-    cpu_regs = recomp.read_cpu(need["cpu.txt"])
     from . import rip
+    snap = args.snapshot or os.path.join(src, "end.vasnap")
+    if os.path.exists(snap) and not args.no_resnap:
+        # the memory, the CPU and the registers straight from the snapshot: the dumps a
+        # scenario wrote at its end can be a frame away from the snapshot it saved, and
+        # the native build must start exactly where --diff's emulator run starts
+        print(f"start state taken from {rel(snap)}")
+        _recomp_state(args, src, snap)
+    cpu_regs = recomp.read_cpu(need["cpu.txt"])
     regs = rip.read_regs(need["chip.regs.txt"])
-    if "df0_cyl" not in regs and os.path.exists(args.snapshot or os.path.join(src, "end.vasnap")):
-        print("the register dump predates the drive's position: taking it again from the snapshot")
-        _recomp_regs(args, src, need["chip.regs.txt"])
-        regs = rip.read_regs(need["chip.regs.txt"])
     flat = {k.upper(): v for k, v in regs.items() if k != "colors"}
     for i, c in enumerate(regs["colors"]):
         flat[f"COLOR{i:02d}"] = c
@@ -654,16 +657,17 @@ def cmd_recomp(args):
     return 0
 
 
-def _recomp_regs(args, src, path):
-    """re-dump the start registers (agk regs) from the snapshot the data came from"""
+def _recomp_state(args, src, snap):
+    """chip.bin, slow.bin, cpu.txt and chip.regs.txt from the snapshot the coverage run saved"""
     from . import rip
-    snap = args.snapshot or os.path.join(src, "end.vasnap")
     profile, rom, ext = profiles.resolve(args.profile)
     lines = runner._setup_lines(profile, rom, ext) + [f"agk snapload {os.path.abspath(snap)}", *runner._display_lines(),
-                                                      f"agk regs {path}", "wait 1 frames"]
+                                                      f"mem save bin {src}/chip.bin 0 {0x80000}",
+                                                      f"mem save bin {src}/slow.bin {0xC00000} {0x80000}",
+                                                      f"agk cpu {src}/cpu.txt", f"agk regs {src}/chip.regs.txt", "wait 1 frames"]
     code, outp, secs = runner._run_vamiga(lines, src, timeout=120)
-    if "df0_cyl" not in rip.read_regs(path):
-        raise SystemExit(f"recomp: the emulator didn't write the drive position (is vAmiga rebuilt with the kit's patch?):\n{outp[-400:]}")
+    if "df0_cyl" not in rip.read_regs(os.path.join(src, "chip.regs.txt")):
+        raise SystemExit(f"recomp: the emulator didn't write the state (is vAmiga rebuilt with the kit's patch?):\n{outp[-400:]}")
 
 
 def _sdl_flags():
@@ -704,15 +708,16 @@ def _input_lines(path, frames):
     return out
 
 
-def _compare_traces(emu, nat, native_stderr=""):
-    """the two main-program instruction streams -> 0 if they agree, 1 (and a report) where they part"""
+def _compare_traces(emu, nat, native_stderr="", pc_only=False):
+    """the two main-program instruction streams -> 0 if they agree, 1 (and a report) where they part;
+    pc_only compares the path alone (where the two take different branches), not the values"""
     r = types.SimpleNamespace(stderr=native_stderr)
     names = ["PC"] + [f"D{i}" for i in range(8)] + [f"A{i}" for i in range(8)] + ["SR"]
     # The timing differs, so a loop that polls the vertical blank (or a frame counter
     # the handler bumps) runs a different number of times on each side, and the
     # flags differ at its test. Compare modulo that: ignore the SR, and when the
     # streams part, look ahead a little on either side for where they meet again.
-    core = lambda line: line[:-5]            # the line without its SR
+    core = (lambda line: line[:6]) if pc_only else (lambda line: line[:-5])   # the pc, or the line without its SR
     i = j = 0
     resyncs = 0
     while i < len(emu) and j < len(nat):
@@ -728,7 +733,7 @@ def _compare_traces(emu, nat, native_stderr=""):
             if j + skip < len(nat) and core(nat[j + skip]) == core(emu[i]):
                 found = (0, skip)
                 break
-        if found and (emu[i].split()[1:-1] == nat[j].split()[1:-1]):   # only the pc/loop count differs
+        if found and (pc_only or emu[i].split()[1:-1] == nat[j].split()[1:-1]):   # only the pc/loop count differs
             i += found[0]
             j += found[1]
             resyncs += 1
@@ -794,7 +799,7 @@ def _recomp_diff(args, src, out, cmd):
     emu, emu_h = main_stream(emu_trace)
     nat, nat_h = main_stream(nat_trace)
     print(f"traces: emulator {len(emu)} main + {emu_h} handler instructions, native {len(nat)} + {nat_h}")
-    return _compare_traces(emu, nat, r.stderr)
+    return _compare_traces(emu, nat, r.stderr, pc_only=args.diff_pc)
 
 
 def cmd_rip(args):
@@ -1212,6 +1217,8 @@ def main(argv=None):
     p.add_argument("--adf", help="the disk, for the native run")
     p.add_argument("--input", help="for --diff: a file of 'FRAME right left up down fire' lines, played in both")
     p.add_argument("--anchor", action="append", metavar="HEX", help="also translate the code at this address (repeatable)")
+    p.add_argument("--diff-pc", action="store_true", help="with --diff: compare the path only (where the branches differ), not the register values")
+    p.add_argument("--no-resnap", action="store_true", help="use DIR's dumps as they are instead of re-taking them from end.vasnap")
     p.add_argument("--no-follow", action="store_true",
                    help="translate only what the coverage saw; don't follow branches into code the emulator never ran")
     p.add_argument("-p", "--profile", default="a500")
