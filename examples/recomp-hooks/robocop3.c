@@ -76,11 +76,14 @@ int steering(void) {
 #define CAR_SPEED 0x2579Cu
 static long long car_acc0, car_acc2;
 static long long floordiv(long long a, long long b) { long long q = a / b; if ((a % b) && ((a < 0) != (b < 0))) q--; return q; }
+/* RECOMP_CAR_SPEED=0.7 slows (or speeds) the pursued car by taste: at 50 fps the
+ * same speed reads as faster than it did in a 4 fps slideshow; 1.0 is the A500's */
 int traffic(void) {
 	NO_HOOKS("traffic");
 	int delta = (s16)rd16(VBL_DELTA);
 	if (delta <= 0) return 0;
-	long long spd = (s16)rd16(CAR_SPEED);
+	static double factor = -1; if (factor < 0) { const char *e = getenv("RECOMP_CAR_SPEED"); factor = e ? atof(e) : 1.0; if (factor <= 0) factor = 1.0; }
+	long long spd = (long long)((s16)rd16(CAR_SPEED) * factor);
 	long long d0 = (s16)D[0], d2 = (s16)D[2];
 	car_acc0 += d0 * spd * delta;
 	car_acc2 += d2 * spd * delta;

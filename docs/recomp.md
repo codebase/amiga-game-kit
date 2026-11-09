@@ -136,6 +136,7 @@ game --frames N --png out.png      headless: run N frames, write the last pictur
      --timeout SEC                 report where the game is if it's still running after SEC
 RECOMP_DISK_TRACE=1                say what the drive does (steps, reads)
 RECOMP_WORD_TRACE=hex[,hex...]     those words of memory after every frame (a camera angle, a speed)
+RECOMP_CAR_SPEED=0.7               (RoboCop 3 hooks) the pursued car's speed as a fraction of the A500's
 ```
 
 ## 3. Check it against the emulator
