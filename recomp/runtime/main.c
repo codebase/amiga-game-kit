@@ -36,6 +36,8 @@ extern u8 mouse_x, mouse_y, mouse_left, mouse_right;
 void kbd_push(u8 code);
 
 static u32 max_frames;
+static FILE *recf;                        /* --record FILE: the live input as --input lines (a session replayed headless is the same run) */
+static char rec_events[64];               /* this frame's key taps and disk swaps, for the record */
 int cycle_shift;                          /* --speed N: a 68000 N times faster than the A500's, as the game sees it */
 static const char *png_path;
 static const char *dump_path;             /* --dump: chip RAM at the end, to compare with the emulator's */
@@ -179,7 +181,10 @@ static void sdl_open(void) {
 	win = SDL_CreateWindow("agk recomp", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 320 * scale, 256 * scale, SDL_WINDOW_RESIZABLE);
 	ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 	if (!ren) ren = SDL_CreateRenderer(win, -1, 0);
-	SDL_RenderSetLogicalSize(ren, 320 * 4, 256 * 4);   /* keeps the 5:4 picture whatever the window */
+	/* the picture at a whole-number scale: with a fractional one, rows alternate
+	   between n and n+1 pixels tall and anything that moves vertically shimmers */
+	SDL_RenderSetLogicalSize(ren, 320, 256);
+	SDL_RenderSetIntegerScale(ren, SDL_TRUE);
 	tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, 320, 256);
 	next_present = SDL_GetPerformanceCounter();
 }
@@ -227,7 +232,8 @@ static void sdl_input(void) {
 		if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F11) { mouse_grabbed = 0; SDL_ShowCursor(SDL_ENABLE); SDL_SetWindowGrab(win, SDL_FALSE); }
 		if (e.type == SDL_KEYDOWN && (e.key.keysym.mod & (KMOD_GUI | KMOD_ALT)) && e.key.keysym.sym >= SDLK_1 && e.key.keysym.sym <= SDLK_9) {
 			int n = e.key.keysym.sym - SDLK_1;
-			if (n < nadfs) { disk_change(adfs[n]); any_key_in = 25; fprintf(stderr, "recomp: disk %d (%s) in the drive\n", n + 1, adfs[n]); }
+			if (n < nadfs) { disk_change(adfs[n]); any_key_in = 25; fprintf(stderr, "recomp: disk %d (%s) in the drive\n", n + 1, adfs[n]);
+			                 if (recf) snprintf(rec_events + strlen(rec_events), sizeof rec_events - strlen(rec_events), " disk %d", n + 1); }
 			continue;
 		}
 		if ((e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) && !e.key.repeat) {
@@ -235,7 +241,8 @@ static void sdl_input(void) {
 			int control = sc == SDL_SCANCODE_UP || sc == SDL_SCANCODE_DOWN || sc == SDL_SCANCODE_LEFT || sc == SDL_SCANCODE_RIGHT
 			           || sc == SDL_SCANCODE_SPACE || sc == SDL_SCANCODE_LCTRL || sc == SDL_SCANCODE_RCTRL;
 			u8 code = amiga_key(sc);
-			if (code != 0xFF && !control) kbd_push(e.type == SDL_KEYUP ? (code | 0x80) : code);   /* (the controls aren't typed) */
+			if (code != 0xFF && !control) { kbd_push(e.type == SDL_KEYUP ? (code | 0x80) : code);   /* (the controls aren't typed) */
+			                                 if (recf && e.type == SDL_KEYDOWN) snprintf(rec_events + strlen(rec_events), sizeof rec_events - strlen(rec_events), " key %02X", code); }
 		}
 		if (e.type == SDL_MOUSEBUTTONDOWN && !mouse_grabbed) {
 			/* grab: the cursor hidden and kept at the window's centre; the motion is what
@@ -249,7 +256,8 @@ static void sdl_input(void) {
 			continue;
 		}
 	}
-	if (any_key_in && --any_key_in == 0) { kbd_push(0x44); kbd_push(0x44 | 0x80); }   /* "press any key to continue": Return */
+	if (any_key_in && --any_key_in == 0) { kbd_push(0x44); kbd_push(0x44 | 0x80);   /* "press any key to continue": Return */
+	                                        if (recf) snprintf(rec_events + strlen(rec_events), sizeof rec_events - strlen(rec_events), " key 44"); }
 	if (mouse_grabbed) {                  /* the mouse: its motion since the last frame into Paula's 8-bit counters */
 		int w, h, x, y; SDL_GetWindowSize(win, &w, &h);
 		u32 b = SDL_GetMouseState(&x, &y);
@@ -299,40 +307,72 @@ static void sdl_present(void) {
 }
 #endif
 
-/* scripted input: lines of "FRAME right left up down fire" (any subset of
- * the words), the state from that frame on, plus "mouse DX DY" (moved by
- * that much at that frame) and "click" (the left button held); the same
- * words as a scenario's, so an emulator run can be replayed natively */
+/* scripted input: lines of "FRAME right left up down fire click rclick" (any
+ * subset of the words), the state from that frame on, plus "mouse DX DY"
+ * (moved by that much at that frame), "key HH" (an Amiga keycode tapped) and
+ * "disk N" (the Nth --adf into the drive); the same words as a scenario's, so
+ * an emulator run can be replayed natively, and what --record writes */
 static FILE *inputf;
 static long input_frame = -1;
-static char input_words[64];
+static char input_words[128];
+
+static void record_frame(void) {
+	static u8 last_x, last_y, last_state = 0xFF, first = 1;
+	static u16 last_joy;
+	if (first) { last_x = mouse_x; last_y = mouse_y; first = 0; }
+	int dx = (s8)(mouse_x - last_x), dy = (s8)(mouse_y - last_y);
+	u8 state = (u8)(mouse_left | mouse_right << 1 | joy_fire << 2);
+	if (!dx && !dy && !rec_events[0] && state == last_state && joy1dat == last_joy) return;
+	fprintf(recf, "%u", frame_count);
+	if (mouse_left) fputs(" click", recf);
+	if (mouse_right) fputs(" rclick", recf);
+	if (joy_fire) fputs(" fire", recf);
+	if (joy1dat & 0x0002) fputs(" right", recf);
+	if (joy1dat & 0x0200) fputs(" left", recf);
+	if (((joy1dat >> 1) ^ joy1dat) & 0x0001) fputs(" down", recf);
+	if (((joy1dat >> 9) ^ (joy1dat >> 8)) & 0x0001) fputs(" up", recf);
+	if (dx || dy) fprintf(recf, " mouse %d %d", dx, dy);
+	if (rec_events[0]) fputs(rec_events, recf);
+	fputc('\n', recf);
+	fflush(recf);
+	last_x = mouse_x; last_y = mouse_y; last_state = state; last_joy = joy1dat; rec_events[0] = 0;
+}
+
+static int has_word(const char *words, const char *w) {   /* w as a whole word of the line */
+	size_t n = strlen(w);
+	for (const char *p = words; (p = strstr(p, w)) != NULL; p += n)
+		if ((p == words || p[-1] == ' ') && (p[n] == 0 || p[n] == ' ' || p[n] == '\n')) return 1;
+	return 0;
+}
 
 static void apply_input(const char *words) {
 	const char *d = strstr(words, "disk ");     /* "disk N": the Nth --adf goes in the drive */
 	if (d) { int n = atoi(d + 5); if (n >= 1 && n <= nadfs) disk_change(adfs[n - 1]); }
-	const char *k = strstr(words, "key ");      /* "key HH": an Amiga keycode tapped */
-	if (k) { unsigned code = (unsigned)strtoul(k + 4, NULL, 16); kbd_push((u8)code); kbd_push((u8)(code | 0x80)); }
+	for (const char *k = words; (k = strstr(k, "key ")) != NULL; k += 4) {   /* "key HH": an Amiga keycode tapped */
+		unsigned code = (unsigned)strtoul(k + 4, NULL, 16); kbd_push((u8)code); kbd_push((u8)(code | 0x80));
+	}
 	const char *m = strstr(words, "mouse");
 	if (m) { int dx = 0, dy = 0; if (sscanf(m + 5, "%d %d", &dx, &dy) == 2) { mouse_x = (u8)(mouse_x + dx); mouse_y = (u8)(mouse_y + dy); } }
-	mouse_left = strstr(words, "click") != NULL;
-	int up = strstr(words, "up") != NULL, down = strstr(words, "down") != NULL;
-	int left = strstr(words, "left") != NULL, right = strstr(words, "right") != NULL;
+	mouse_left = has_word(words, "click");
+	mouse_right = has_word(words, "rclick");
+	int up = has_word(words, "up"), down = has_word(words, "down");
+	int left = has_word(words, "left"), right = has_word(words, "right");
 	u16 v = 0;
 	if (right) v |= 0x0002;
 	if (left) v |= 0x0200;
 	if (down ^ right) v |= 0x0001;
 	if (up ^ left) v |= 0x0100;
 	joy1dat = v;
-	joy_fire = strstr(words, "fire") != NULL;
+	joy_fire = has_word(words, "fire");
 }
 
 static void scripted_input(void) {
 	while (inputf && input_frame <= (long)frame_count) {
 		if (input_frame >= 0) apply_input(input_words);
-		char line[80];
+		char line[160];
 		if (!fgets(line, sizeof line, inputf)) { fclose(inputf); inputf = NULL; break; }
 		input_words[0] = 0;
-		if (sscanf(line, "%ld %63[^\n]", &input_frame, input_words) < 1) input_frame = -1;
+		if (sscanf(line, "%ld %127[^\n]", &input_frame, input_words) < 1) input_frame = -1;
 	}
 }
 
@@ -345,14 +385,14 @@ void frame_hook(void) {
 	audio_render(audio_buf, 48000 / 50, 48000);
 	{ static int it = -1; if (it < 0) it = getenv("RECOMP_INPUT_TRACE") != NULL;
 	  if (it && frame_count % 50 == 0) fprintf(stderr, "input: frame %u t %.1fs mouse %u,%u left %u right %u joy %04X fire %u\n", frame_count, (double)clock() / CLOCKS_PER_SEC, mouse_x, mouse_y, mouse_left, mouse_right, joy1dat, joy_fire);
-	  { static int ft = -1; const char *w = getenv("RECOMP_WORD_TRACE");   /* RECOMP_WORD_TRACE=hex: that word of memory, every frame */
-	    if (ft < 0) ft = w ? (int)strtoul(w, NULL, 16) : 0;
-	    if (ft) fprintf(stderr, "word: frame %u $%06X = %u\n", frame_count, ft, rd16((u32)ft)); } }
+	  { static int nft = -1; static u32 ft[16]; const char *w = getenv("RECOMP_WORD_TRACE");   /* RECOMP_WORD_TRACE=hex[,hex...]: those words of memory, every frame */
+	    if (nft < 0) { nft = 0; while (w && *w && nft < 16) { ft[nft++] = (u32)strtoul(w, (char **)&w, 16); if (*w == ',') w++; else break; } }
+	    if (nft) { fprintf(stderr, "word: frame %u", frame_count); for (int i = 0; i < nft; i++) fprintf(stderr, " $%06X=%d", ft[i], (s16)rd16(ft[i])); fputc('\n', stderr); } } }
 	if (wavf) wav_frame();
 	if (pngs_dir) { char path[1024]; snprintf(path, sizeof path, "%s/f%05u.png", pngs_dir, frame_count); write_png(path); }
 #ifdef USE_SDL
 	if (win) {
-		if (!inputf) sdl_input();
+		if (!inputf) { sdl_input(); if (recf) record_frame(); }
 		else {                            /* scripted input: still pump events, or macOS never shows the window */
 			SDL_Event e;
 			while (SDL_PollEvent(&e)) {
@@ -418,11 +458,12 @@ int main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "--play")) play = 1;
 		else if (!strcmp(argv[i], "--fast")) fast_start = 1;
 		else if (!strcmp(argv[i], "--timeout") && i + 1 < argc) { signal(SIGALRM, on_timeout); alarm((unsigned)atoi(argv[++i])); }
+		else if (!strcmp(argv[i], "--record") && i + 1 < argc) { recf = fopen(argv[++i], "w"); if (!recf) { fprintf(stderr, "recomp: can't open %s\n", argv[i]); return 2; } }
 		else if (!strcmp(argv[i], "--input") && i + 1 < argc) { inputf = fopen(argv[++i], "r"); if (!inputf) { fprintf(stderr, "recomp: can't open %s\n", argv[i]); return 2; } }
 #ifdef RECOMP_ITRACE
 		else if (!strcmp(argv[i], "--itrace") && i + 2 < argc) { itrace_f = fopen(argv[++i], "w"); itrace_left = atol(argv[++i]); }
 #endif
-		else { fprintf(stderr, "usage: game [--memory memory.bin] [--adf disk.adf]... [--adf-in N] [--frames N] [--png out.png] [--dump chip.bin] [--wav out.wav] [--pngs DIR] [--speed 1|2|4|8|16|32] [--trace file] [--input keys.txt] [--timeout SEC] [--play [--fast]]\n"); return 2; }
+		else { fprintf(stderr, "usage: game [--memory memory.bin] [--adf disk.adf]... [--adf-in N] [--frames N] [--png out.png] [--dump chip.bin] [--wav out.wav] [--pngs DIR] [--speed 1|2|4|8|16|32] [--trace file] [--input keys.txt] [--record keys.txt] [--timeout SEC] [--play [--fast]]\n"); return 2; }
 	}
 	amiga_init();
 	load_memory(image);

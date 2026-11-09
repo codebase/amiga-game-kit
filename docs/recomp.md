@@ -117,11 +117,16 @@ game --frames N --png out.png      headless: run N frames, write the last pictur
      --wav out.wav                 ... and the sound of the run
      --pngs DIR                    every frame as DIR/fNNNNN.png
      --speed N                     a 68000 N times faster (2, 4, 8, 16, 32), as the game sees it
-     --input keys.txt              scripted input: lines of "FRAME right left up down fire",
-                                   plus "mouse DX DY" and "click" (the left button)
+     --input keys.txt              scripted input: lines of "FRAME right left up down fire click rclick"
+                                   (the state from that frame on), plus "mouse DX DY" (moved by that
+                                   much), "key HH" (an Amiga keycode tapped), "disk N" (the Nth --adf in)
+     --record keys.txt             (with --play) write what was played in that form: replaying it
+                                   headless is the same run, frame for frame, so a glitch someone saw
+                                   can be reproduced, dumped and diffed without them
      --trace file                  the registers after every frame
      --timeout SEC                 report where the game is if it's still running after SEC
 RECOMP_DISK_TRACE=1                say what the drive does (steps, reads)
+RECOMP_WORD_TRACE=hex[,hex...]     those words of memory after every frame (a camera angle, a speed)
 ```
 
 ## 3. Check it against the emulator
