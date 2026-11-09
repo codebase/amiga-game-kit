@@ -64,15 +64,30 @@ int steering(void) {
  * frame it just drew is complete: show it, and wait for the vertical blank so
  * each video frame shows one whole picture (the game never synced: at 4 fps
  * it didn't have to, at 50 it tears). */
-/* A crash draws one jolted frame into the other view buffer (the copper list's
- * BPL1PT high word at $19F84 reads 4 instead of 3) and the next frame is back
- * to normal: a quarter of a second on the A500, 20 ms at 50 fps. Hold it. */
+/* The view is double-buffered: the copper list's BPL1PT (high word at $19F84)
+ * alternates between the buffers at $3AA88 and $42AA8 each frame. If the game
+ * ever shows a buffer it hasn't redrawn since it was last shown, that frame is
+ * stale: RECOMP_STALE_TRACE reports it (and the hook can show the fresh one). */
 #define VIEW_BPL1PTH 0x19F84u
-static int hold;
+#define VIEW_A 0x3AA88u
+#define VIEW_B 0x42AA8u
+static unsigned long long view_sum(u32 base) {
+	unsigned long long h = 1469598103934665603ULL;
+	for (u32 a = base; a < base + 8000 * 4; a += 16) h = (h ^ rd32(a)) * 1099511628211ULL;   /* a sample of the 4 planes */
+	return h;
+}
+static unsigned long long shown_sum[2];
+static int stale_frames, frames_seen;
 int frame_begin(void) {
 	if (getenv("RECOMP_BLIT_TRACE")) fprintf(stderr, "blit: ---- frame_begin ----\n");
-	if (rd16(VIEW_BPL1PTH) == 4) { frame_sync(); hold = A500_FRAME - 1; return 0; }
-	if (hold) { hold--; frame_wait(); return 0; }
+	int which = rd16(VIEW_BPL1PTH) == 4;  /* which buffer the copper shows */
+	unsigned long long h = view_sum(which ? VIEW_B : VIEW_A);
+	frames_seen++;
+	if (h == shown_sum[which] && frames_seen > 2) {
+		stale_frames++;
+		if (getenv("RECOMP_STALE_TRACE")) fprintf(stderr, "stale: frame %d shows buffer %c unchanged since it was last shown\n", frames_seen, which ? 'B' : 'A');
+	}
+	shown_sum[which] = h;
 	frame_sync();
 	return 0;                             /* then the original instruction */
 }
