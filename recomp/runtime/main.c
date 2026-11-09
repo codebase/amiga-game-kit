@@ -340,11 +340,24 @@ void frame_hook(void) {
 	scripted_input();
 	audio_render(audio_buf, 48000 / 50, 48000);
 	{ static int it = -1; if (it < 0) it = getenv("RECOMP_INPUT_TRACE") != NULL;
-	  if (it && frame_count % 50 == 0) fprintf(stderr, "input: frame %u t %.1fs mouse %u,%u left %u right %u joy %04X fire %u\n", frame_count, (double)clock() / CLOCKS_PER_SEC, mouse_x, mouse_y, mouse_left, mouse_right, joy1dat, joy_fire); }
+	  if (it && frame_count % 50 == 0) fprintf(stderr, "input: frame %u t %.1fs mouse %u,%u left %u right %u joy %04X fire %u\n", frame_count, (double)clock() / CLOCKS_PER_SEC, mouse_x, mouse_y, mouse_left, mouse_right, joy1dat, joy_fire);
+	  { static int ft = -1; const char *w = getenv("RECOMP_WORD_TRACE");   /* RECOMP_WORD_TRACE=hex: that word of memory, every frame */
+	    if (ft < 0) ft = w ? (int)strtoul(w, NULL, 16) : 0;
+	    if (ft) fprintf(stderr, "word: frame %u $%06X = %u\n", frame_count, ft, rd16((u32)ft)); } }
 	if (wavf) wav_frame();
 	if (pngs_dir) { char path[1024]; snprintf(path, sizeof path, "%s/f%05u.png", pngs_dir, frame_count); write_png(path); }
 #ifdef USE_SDL
-	if (win) { if (!inputf) sdl_input(); sdl_present(); }
+	if (win) {
+		if (!inputf) sdl_input();
+		else {                            /* scripted input: still pump events, or macOS never shows the window */
+			SDL_Event e;
+			while (SDL_PollEvent(&e)) {
+				if (e.type == SDL_QUIT || (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE)) { interp_report(); exit(0); }
+				if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F12) { fast = !fast; next_present = SDL_GetPerformanceCounter(); }
+			}
+		}
+		sdl_present();
+	}
 #endif
 	if (tracef) {
 		extern u32 stat_blits, stat_cop1lc;
