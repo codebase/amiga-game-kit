@@ -213,6 +213,7 @@ static u8 amiga_key(SDL_Scancode sc) {
 }
 
 static int mouse_grabbed;
+static int any_key_in;                    /* frames until a Return is tapped for a "press any key" after a disk swap */
 static int centre_x, centre_y;            /* where the warped pointer reads back, in SDL's mouse space */
 static int settle;                        /* frames after a grab during which the warp is still landing */
 
@@ -225,7 +226,7 @@ static void sdl_input(void) {
 		if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F11) { mouse_grabbed = 0; SDL_ShowCursor(SDL_ENABLE); SDL_SetWindowGrab(win, SDL_FALSE); }
 		if (e.type == SDL_KEYDOWN && (e.key.keysym.mod & (KMOD_GUI | KMOD_ALT)) && e.key.keysym.sym >= SDLK_1 && e.key.keysym.sym <= SDLK_9) {
 			int n = e.key.keysym.sym - SDLK_1;
-			if (n < nadfs) { disk_change(adfs[n]); fprintf(stderr, "recomp: disk %d (%s) in the drive\n", n + 1, adfs[n]); }
+			if (n < nadfs) { disk_change(adfs[n]); any_key_in = 25; fprintf(stderr, "recomp: disk %d (%s) in the drive\n", n + 1, adfs[n]); }
 			continue;
 		}
 		if ((e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) && !e.key.repeat) {
@@ -247,6 +248,7 @@ static void sdl_input(void) {
 			continue;
 		}
 	}
+	if (any_key_in && --any_key_in == 0) { kbd_push(0x44); kbd_push(0x44 | 0x80); }   /* "press any key to continue": Return */
 	if (mouse_grabbed) {                  /* the mouse: its motion since the last frame into Paula's 8-bit counters */
 		int w, h, x, y; SDL_GetWindowSize(win, &w, &h);
 		u32 b = SDL_GetMouseState(&x, &y);
