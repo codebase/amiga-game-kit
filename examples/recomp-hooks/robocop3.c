@@ -2,7 +2,7 @@
  * per rendered frame, so with a faster CPU (more frames a second) the car
  * felt more drag. These hooks scale those steps by the frame's share of the
  * A500's 13 VBLs per frame, so the car behaves as at 1x whatever the rate.
- *   agk recomp DIR --hook 205D4=robocop3.c:friction --hook 2071A=robocop3.c:drag --hook 20208=robocop3.c:steering --hook 1742A=robocop3.c:frame_begin --hook 259BE=robocop3.c:traffic */
+ *   agk recomp DIR --hook 205D4=robocop3.c:friction --hook 2071A=robocop3.c:drag --hook 20208=robocop3.c:steering --hook 1742A=robocop3.c:frame_begin --hook 259BE=robocop3.c:traffic --hook 7A868=robocop3.c:near_plane --hook 7A8CE=robocop3.c:project */
 #include "m68k.h"
 #include <stdlib.h>
 
@@ -90,5 +90,35 @@ int traffic(void) {
 	wr32(CAR_POS, (u32)((s32)rd32(CAR_POS) - (s32)s0));
 	wr32(CAR_POS + 8, (u32)((s32)rd32(CAR_POS + 8) + (s32)s2));
 	cpu.pc = 0x259E0u;                    /* the rts */
+	return 1;
+}
+
+/* $7A868: movea.w #16,a1 - the near plane of the vertex transform. A polygon
+ * with a vertex just in front of it projects to enormous coordinates and
+ * sweeps across the view for a frame (a mountain "flipping up"). Further out
+ * it takes the engine's partially-behind path instead. Only for the renderer
+ * (called from $7B06C): the collision test uses the same routine and must
+ * keep the original distance, or everything becomes an obstacle. */
+int near_plane(void) {
+	static int near = -1;
+	if (near < 0) { const char *e = getenv("RECOMP_NEAR"); near = e ? atoi(e) : 96; }
+	A[1] = (rd32(A[7]) == 0x7B070u) ? (u32)near : 16u;
+	cpu.pc = 0x7A86Cu;
+	return 1;
+}
+
+/* $7A8CE..$7A8D0: divs d3,d1 / divs d3,d2 - the perspective divide. When a
+ * vertex is very close, x/z no longer fits 16 bits; the 68000 leaves the
+ * register alone and sets V, which the engine never looks at, so the vertex
+ * lands anywhere (a mountain sweeping across the view for a frame). Divide in
+ * 64 bits and clamp well off-screen instead. */
+int project(void) {
+	s32 z = (s16)D[3];
+	if (z == 0) return 0;                 /* (the original would trap; leave it to the game) */
+	long long x = (s32)D[1] / z, y = (s32)D[2] / z;
+	if (x > 4000) x = 4000; if (x < -4000) x = -4000;
+	if (y > 4000) y = 4000; if (y < -4000) y = -4000;
+	setd(1, (u32)x, 16); setd(2, (u32)y, 16);
+	cpu.pc = 0x7A8D2u;
 	return 1;
 }

@@ -240,10 +240,15 @@ CPU waits for the vertical blank, so a game that never synced (it didn't
 have to at 4 fps) shows one whole frame per video frame instead of
 tearing. With them, `--speed 16` renders every frame at 50 fps and the car
 covers the same ground at the same speed as at 1x (frame 300: Z 23360 vs
-23298). (A fifth that moved the near plane out to tame screen-filling polygons had
-to go: the game's collision test shares that threshold, and everything
-became an obstacle. A hook is a hypothesis; the memory and picture checks
-are what confirm it.) Finding the three took the memory diffs and the write
+23298). Two more are for the renderer alone: the near plane further out, but only
+when the vertex transform is called by the renderer (`$7B06C`; the
+collision test uses the same routine and must keep the original distance,
+or everything becomes an obstacle, which is how the first version of that
+hook failed), and a 64-bit perspective divide with the result clamped
+where the engine's `divs` would overflow and leave a vertex anywhere (a
+mountain sweeping across the view for a frame). A hook is a hypothesis;
+the memory and picture checks are what confirm it. Finding the physics
+steps took the memory diffs and the write
 watch above: compare the variables at a fixed frame across `--speed`
 settings, and whatever drifts is per-frame logic.
 
@@ -253,6 +258,8 @@ agk recomp cov -o native --adf robocop3-disk2.adf \
     --hook 2071A=examples/recomp-hooks/robocop3.c:drag \
     --hook 20208=examples/recomp-hooks/robocop3.c:steering \\
     --hook 259BE=examples/recomp-hooks/robocop3.c:traffic \\
+    --hook 7A868=examples/recomp-hooks/robocop3.c:near_plane \\
+    --hook 7A8CE=examples/recomp-hooks/robocop3.c:project \\
     --hook 1742A=examples/recomp-hooks/robocop3.c:frame_begin
 native/game --play --speed 16 --adf disk1.adf --adf disk2.adf --adf disk3.adf --adf-in 2
 ```
