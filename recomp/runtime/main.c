@@ -87,6 +87,25 @@ void note_interpreted(u32 pc) {
 	if (f) { fprintf(f, "%06X\n", pc); fclose(f); }
 }
 
+/* the game rewrote a translated instruction (not just its immediate): its block
+ * runs interpreted from now on; remember it (patched.txt next to memory.bin) so
+ * the next agk recomp checks that instruction's opcode as it runs and keeps the
+ * block translated */
+static u32 patched_entries;
+void note_patched(u32 addr, u16 was, u16 now) {
+	static u32 seen[1024];
+	static int nseen;
+	for (int i = 0; i < nseen; i++) if (seen[i] == addr) return;
+	if (nseen < 1024) seen[nseen++] = addr;
+	patched_entries++;
+	if (patched_entries <= 8) fprintf(stderr, "recomp: the game rewrote the instruction at $%06X (translated as %04X, now %04X): its block runs interpreted; "
+	                                       "it's in patched.txt: agk recomp again to translate it with a check\n", addr, was, now);
+	char path[1024];
+	snprintf(path, sizeof path, "%s/patched.txt", image_dir);
+	FILE *f = fopen(path, "a");
+	if (f) { fprintf(f, "%06X\n", addr); fclose(f); }
+}
+
 static void interp_report(void) {
 	if (interp_count)
 		fprintf(stderr, "recomp: %llu instructions interpreted (code the translation didn't have, entered at %u addresses; "
@@ -149,7 +168,12 @@ static FILE *itrace_f;
 static long itrace_left;
 void itrace(u32 addr) {
 	if (!itrace_f) return;
+	{ static long from = -1; if (from < 0) { const char *e = getenv("RECOMP_ITRACE_FROM"); from = e ? atol(e) : 0; }   /* RECOMP_ITRACE_FROM=N: nothing before frame N */
+	  if ((long)frame_count < from) return; }
 	cpu.pc = addr;
+	{ static long peek_pc = -1; static u32 peek_addr, peek_n;   /* RECOMP_ITRACE_PEEK=PC:ADDR:N: N longs at ADDR whenever PC runs */
+	  if (peek_pc < 0) { const char *e = getenv("RECOMP_ITRACE_PEEK"); peek_pc = 0; if (e) { char *q; peek_pc = strtol(e, &q, 16); if (*q == ':') { peek_addr = (u32)strtoul(q + 1, &q, 16); if (*q == ':') peek_n = (u32)strtoul(q + 1, NULL, 10); } } }
+	  if (peek_pc && addr == (u32)peek_pc) { fprintf(itrace_f, "peek frame %u pc %06X a3 %08X:", frame_count, addr, cpu.a[3]); for (u32 i = 0; i < peek_n; i++) fprintf(itrace_f, " %08X", rd32(peek_addr + 4 * i)); fputc('\n', itrace_f); } }
 	fprintf(itrace_f, "%06X", addr);
 	for (int i = 0; i < 8; i++) fprintf(itrace_f, " %08X", cpu.d[i]);
 	for (int i = 0; i < 8; i++) fprintf(itrace_f, " %08X", cpu.a[i]);
@@ -382,6 +406,10 @@ static void scripted_input(void) {
 /* called by the runtime after every rendered frame */
 void frame_hook(void) {
 	scripted_input();
+	{ static long from = -1; if (from < 0) { const char *e = getenv("RECOMP_INTERP_FROM"); from = e ? atol(e) : 0; }   /* RECOMP_INTERP_FROM=N: the interpreter takes over at frame N (bisecting a translation bug) */
+	  if (from > 0 && (long)frame_count >= from) { setenv("RECOMP_INTERP", "1", 1); setenv("RECOMP_NO_HOOKS", "1", 1); } }
+	{ static long from = -1; if (from < 0) { const char *e = getenv("RECOMP_NO_HOOKS_FROM"); from = e ? atol(e) : 0; }   /* RECOMP_NO_HOOKS_FROM=N: hooks that honour RECOMP_NO_HOOKS stop at frame N */
+	  if (from > 0 && (long)frame_count >= from) setenv("RECOMP_NO_HOOKS_ACTIVE", "1", 1); }
 	audio_render(audio_buf, 48000 / 50, 48000);
 	{ static int it = -1; if (it < 0) it = getenv("RECOMP_INPUT_TRACE") != NULL;
 	  if (it && frame_count % 50 == 0) fprintf(stderr, "input: frame %u t %.1fs mouse %u,%u left %u right %u joy %04X fire %u\n", frame_count, (double)clock() / CLOCKS_PER_SEC, mouse_x, mouse_y, mouse_left, mouse_right, joy1dat, joy_fire);

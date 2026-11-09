@@ -597,6 +597,11 @@ def cmd_recomp(args):
         instrs = recomp.disassemble(images, ranges, image, src, covered)
     except recomp.RecompError as e:
         raise SystemExit(f"recomp: {e}")
+    guards = set()                        # instructions earlier native runs saw the game rewrite (patched.txt)
+    patched = os.path.join(out, "patched.txt")
+    if os.path.exists(patched):
+        guards = {int(line, 16) for line in open(patched) if line.strip()}
+        print(f"{len(guards)} instruction(s) the game rewrites (patched.txt): each checks its opcode as it runs")
     anchors = [int(a, 16) for a in (args.anchor or [])]
     needed = os.path.join(out, "needed.txt")
     if os.path.exists(needed):            # where earlier native runs jumped to and stopped
@@ -634,7 +639,7 @@ def cmd_recomp(args):
         hooks[int(m.group(1), 16)] = m.group(3)
         hook_files.append(os.path.abspath(m.group(2)))
     try:
-        unknown = recomp.write_project(out, instrs, covered, cpu_regs, mem_files, flat, runtime_dir, hooks)
+        unknown = recomp.write_project(out, instrs, covered, cpu_regs, mem_files, flat, runtime_dir, hooks, guards)
         for hf in set(hook_files):
             shutil.copy(hf, out)
     except recomp.RecompError as e:

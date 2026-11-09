@@ -251,15 +251,18 @@ static void cia_tick(cia_t *c, u32 ticks) {
 
 static u64 last_cia_cycles;
 int frame_done;                           /* for main.c: a frame was rendered since it last looked */
-static int display_synced;                /* frame_sync is in use: the picture is captured there, never mid-draw */
+static u32 last_sync_frame;              /* the frame a sync hook last ran in: while one is in use, the picture is captured only at its frame ends */
+static int sync_in_use, display_due;
 
-/* For a hook at the point where the game begins a new frame: capture the
- * picture it just finished and spend the rest of this video frame waiting, so
- * a game that never synced to the vertical blank (it didn't need to at 4 fps)
- * shows exactly one whole frame per video frame instead of tearing. */
+/* For a hook at the point where the game begins a new frame: the frame it
+ * just finished is complete, so spend the rest of this video frame waiting
+ * and capture the picture at the vertical blank, as the real display would.
+ * A game that never synced to the vertical blank (it didn't need to at 4 fps)
+ * then shows exactly one whole frame per video frame instead of tearing. If
+ * the hook stops being called (the game left that stage), the display goes
+ * back to capturing every vertical blank. */
 void frame_sync(void) {
-	display_render();
-	display_synced = 1;
+	sync_in_use = 1; display_due = 1; last_sync_frame = frame_count;
 	u64 target = frame_start + CYCLES_PER_FRAME;
 	if (cpu.cycles < target) cpu.cycles = target;
 	run_events();
@@ -268,7 +271,7 @@ void frame_sync(void) {
 /* as frame_sync, but keep showing the last captured picture (a hook holding a
  * one-frame effect for as long as the original machine showed it) */
 void frame_wait(void) {
-	display_synced = 1;
+	sync_in_use = 1; display_due = 0; last_sync_frame = frame_count;
 	u64 target = frame_start + CYCLES_PER_FRAME;
 	if (cpu.cycles < target) cpu.cycles = target;
 	run_events();
@@ -279,7 +282,8 @@ void run_events(void) {
 	if (ticks) { cia_tick(&ciaa, ticks); cia_tick(&ciab, ticks); last_cia_cycles += (u64)ticks * 10; }
 	while (cpu.cycles - frame_start >= CYCLES_PER_FRAME) {
 		frame_start += CYCLES_PER_FRAME;
-		if (!display_synced) display_render();   /* (a game with a frame_sync hook is shown only at its own frame ends) */
+		if (!sync_in_use || display_due || frame_count - last_sync_frame > 2) display_render();   /* (a game with a frame_sync hook is shown only at its own frame ends) */
+		display_due = 0;
 		frame_count++;
 		frame_done = 1;
 		{ extern void frame_hook(void); frame_hook(); }

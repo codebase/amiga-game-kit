@@ -71,8 +71,17 @@ What happens:
    had to step in (`needed.txt`) so the next `agk recomp` translates that
    too. Every dispatch also checks that the opcode word at the address is
    still the one that was translated; a game that loads new code over old
-   gets the interpreter for it. The native build therefore never stops at
-   untranslated code. `RECOMP_INTERP=1` interprets everything: the
+   gets the interpreter for it. Self-modifying code is caught as it
+   happens: a write that lands in translated code (`code_written`, through
+   a 16-byte bitmap in the memory helpers) compares each instruction word
+   it changes with the translation. A patched *immediate* is read live
+   anyway; a rewritten *opcode* marks the block it is in (from one branch
+   target to the next) dirty, the block's label bows out to dispatch, and
+   the interpreter runs the block as it now is until the words are restored.
+   The address goes to `patched.txt` next to `memory.bin`, and the next
+   `agk recomp` gives that instruction a guard (`if (rd16(addr) != opcode)
+   goto dispatch`) so the block stays translated. The native build therefore
+   never stops at untranslated code and never runs stale code. `RECOMP_INTERP=1` interprets everything: the
    interpreter and the translator are checked against each other that way
    (identical traces over 1.5 million instructions of RoboCop, interrupts
    included).
@@ -152,6 +161,14 @@ Determinism is the product here too. Three comparisons, cheapest first:
   counter is legitimately one tick apart. The native start state is taken
   from the snapshot itself (`end.vasnap`), so both sides of a diff begin
   identically; `--no-resnap` keeps the directory's dumps.
+- **Recordings.** `--record keys.txt` with `--play` writes what was played
+  as `--input` lines. A replay is the same run frame for frame, so a glitch
+  a player saw once can be reproduced headless, traced
+  (`RECOMP_WORD_TRACE`, the `--itrace` build with `RECOMP_ITRACE_FROM` and
+  `RECOMP_ITRACE_PEEK=PC:ADDR:N`) and bisected (`RECOMP_INTERP_FROM=N`
+  hands frame N on to the interpreter; `RECOMP_NO_HOOKS_FROM=N` with
+  `RECOMP_NO_HOOK=name` switches hooks off from there, for hooks that
+  honour them).
 - **Replays.** The same inputs in both: `--diff N --input keys.txt` plays
   the keys file in the emulator and natively (or, by hand, a scenario of
   `hold`/`release`/`wait` lines against `--input`, with `dump-chip` and
@@ -209,6 +226,16 @@ the view follows the car. Memory-vs-memory diffs, the emulator-side write
 watch and `--diff` found it in that order; the lesson for the tooling is
 that a divergence of *memory* with identical register streams means the
 code bytes themselves changed.
+
+The same engine had a second, rarer trick that took a recording of the
+player's own session to catch (`--record`, replayed headless frame for
+frame): when a matrix coefficient is 0, 1 or a power of two, its code
+generator (`$7AA6A`) replaces the whole `muls #coef,dN` with an `ext.l` /
+`asl.l` pair. A translation that only re-read the immediate multiplied by
+the second word of the new instruction, and for a few frames at a time one
+row of the matrix was garbage: the road flipped up into the sky. That is
+what the dirty-block detection above is for; with `patched.txt` fed back,
+the nine rewritten instructions carry their own opcode checks.
 
 Then the point of it: at the A500's speed the game renders a frame every
 13 video frames. `--speed N` makes the 68000 N times faster as the game

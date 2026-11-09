@@ -77,7 +77,21 @@ class TranslateTests(unittest.TestCase):
         text, _ = recomp.generate([(0x100, 1, "nop", ""), (0x102, 1, "rts", "")], {0x100, 0x102}, 0x100,
                                   hooks={0x100: "my_hook"})
         self.assertIn("int my_hook(void);", text)
-        self.assertIn("L_000100:\n\tif (my_hook()) goto dispatch;", text)
+        self.assertIn("L_000100:\n\tif (dirty[0]) { cpu.pc = 0x100u; goto dispatch; }\n\tif (my_hook()) goto dispatch;", text)
+
+    def test_rewritten_instructions_hand_their_block_to_the_interpreter(self):
+        # a loop: $100 is a branch target (a block start), $102 a muls the game may rewrite
+        instrs = [(0x100, 1, "nop", ""), (0x102, 2, "mulsw", "#4,d2"), (0x106, 2, "dbf", "d0,0x100"), (0x10a, 1, "rts", "")]
+        text, _ = recomp.generate(instrs, {a for a, *_ in instrs}, 0x100, memory=[(0x100, bytes.fromhex("4e71 c5fc 0004 51c8 fff8 4e75".replace(" ", "")))])
+        self.assertIn("L_000100:\n\tif (dirty[0]) { cpu.pc = 0x100u; goto dispatch; }", text)   # the block's first instruction asks
+        self.assertNotIn("L_000102:\n\tif (dirty", text)                                    # mid-block: no check
+        self.assertIn("dirty[blk[pc >> 1]] == 0", text)                                       # translated() says no for a dirty block
+        self.assertIn("code_bits[0x102u >> 4] = 1", text)
+        self.assertIn("void code_written(u32 a, int bits, u32 v)", text)
+        # once patched.txt names it, the instruction checks its own opcode instead
+        text, _ = recomp.generate(instrs, {a for a, *_ in instrs}, 0x100, memory=[(0x100, bytes.fromhex("4e71 c5fc 0004 51c8 fff8 4e75".replace(" ", "")))], guards={0x102})
+        self.assertIn("L_000102:\n\tif (rd16(0x102u) != 0xc5fcu) { cpu.pc = 0x102u; goto dispatch; }", text)
+        self.assertIn("guarded_at[] = { 0x102u }", text)
 
     def test_usp_moves_are_longs(self):
         L, _ = lines_of([(0x100, 1, "movel", "a3,%usp"), (0x102, 1, "movel", "%usp,sp")])

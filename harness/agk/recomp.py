@@ -448,11 +448,14 @@ def mnemonic_size(mn):
 
 
 class Translator:
-    def __init__(self, instrs, covered, memory=(), hooks=None):
+    def __init__(self, instrs, covered, memory=(), hooks=None, guards=None):
         self.instrs = instrs
         self.covered = covered
         self.memory = memory              # [(base, bytes)]: the dumps, for each instruction's first word
         self.hooks = hooks or {}          # address -> C function called before the instruction there
+        self.guards = set(guards or ())   # instructions the game rewrites (patched.txt): check the opcode each time
+        self.targets = set()              # branch targets: where a block begins
+        self.block_of = {}                # address -> block number, after translate()
         self.addrs = {a for a, *_ in instrs}
         self.lines = []
         self.pending_ticks = 0
@@ -476,6 +479,7 @@ class Translator:
     def goto(self, target, from_addr):
         """a jump to a constant address"""
         if target in self.addrs:
+            self.targets.add(target)
             return f"goto {self.label(target)};"
         self.unknown[target] = from_addr
         return f"{{ cpu.pc = {target:#x}u; goto dispatch; }}"
@@ -491,13 +495,17 @@ class Translator:
             nxt = addr + 2 * words
             label_at = len(L)
             L.append(f"{self.label(addr)}:")
+            L.append(f"\t@@BLOCK {addr:#x}@@")   # (a block's first instruction: the dirty check, filled in below)
             self.words[addr] = self.word_at(addr)
+            if addr in self.guards and addr in self.covered:   # the game rewrites this instruction: run what is there now
+                L.append(f"\tif (rd16({addr:#x}u) != {self.words[addr]:#x}u) {{ cpu.pc = {addr:#x}u; goto dispatch; }}")
             if addr in self.hooks:        # a hook: 1 = it did the work (continue at cpu.pc), 0 = run the original
                 L.append(f"\tif ({self.hooks[addr]}()) goto dispatch;")
             if addr not in self.covered and mn in ("illegal", ".short", ".long"):
                 self.not_code.add(addr)
                 L.append(f"\t{{ cpu.pc = {addr:#x}u; goto dispatch; }}   /* data, or code loaded later: the interpreter's */")
                 continue
+            cyc_at = len(L)
             L.append("\tCYC(8);")           # every instruction costs the same for now
             self.traced = False
             try:
@@ -505,11 +513,36 @@ class Translator:
             except RecompError as e:
                 raise RecompError(f"at ${addr:06X} '{mn} {ops}': {e}")
             if not self.traced:
-                L.insert(label_at + 2, f"\tITRACE({addr:#x}u);")
+                L.insert(cyc_at, f"\tITRACE({addr:#x}u);")   # (after the checks that may hand it to the interpreter)
             if nxt not in self.addrs and not re.fullmatch(r"(bra|jmp|rts|rte|rtr|illegal|reset|\.short|\.long)[swl]?", mn):
                 self.unknown[nxt] = addr
                 L.append(f"\t{{ cpu.pc = {nxt:#x}u; goto dispatch; }}   /* the next instruction was never seen */")
-        return L
+        # Blocks: from a branch target (or the first instruction) to the next one. A
+        # block whose words the game has overwritten (code_written counts them) is
+        # the interpreter's until they are restored: its label bows out to dispatch,
+        # and translated() says no for every address in it, so the interpreter runs
+        # the block through and comes back at the next clean one.
+        starts = sorted(self.targets & self.addrs)
+        first = min(self.addrs) if self.addrs else 0
+        if first not in starts:
+            starts.insert(0, first)
+        block = -1
+        for a in sorted(self.addrs):
+            while block + 1 < len(starts) and starts[block + 1] <= a:
+                block += 1
+            self.block_of[a] = max(block, 0)
+        self.nblocks = len(starts)
+        out = []
+        for line in L:
+            m = re.fullmatch(r"\t@@BLOCK (0x[0-9a-f]+)@@", line)
+            if not m:
+                out.append(line)
+                continue
+            a = int(m.group(1), 16)
+            if a in starts:
+                out.append(f"\tif (dirty[{self.block_of[a]}]) {{ cpu.pc = {a:#x}u; goto dispatch; }}")
+        self.lines = out
+        return out
 
     def instr(self, addr, nxt, mn, ops):
         L = self.lines
@@ -803,21 +836,59 @@ class Translator:
         raise RecompError(f"instruction not translated: {mn}")
 
 
-def generate(instrs, covered, entry_pc, memory=(), hooks=None):
-    t = Translator(instrs, covered, memory, hooks)
+def generate(instrs, covered, entry_pc, memory=(), hooks=None, guards=None):
+    t = Translator(instrs, covered, memory, hooks, guards)
     body = t.translate()
+    guarded = sorted(a for a in t.guards if a in t.addrs)
     out = ['#include "m68k.h"', "#include <stdlib.h>", "static int recomp_trace;",
            *[f"int {fn}(void);" for fn in sorted(set((hooks or {}).values()))],
            "static void *table[0x100000];       /* chip RAM, by address / 2: the label, or 0 */",
            "static void *slow[0x100000];        /* $C00000.. likewise */",
            "static u16 opword[0x100000], opword_slow[0x100000];   /* the first word of each, as translated */",
+           "static u32 blk[0x100000], blk_slow[0x100000];         /* the block each belongs to */",
+           f"static u32 dirty[{max(t.nblocks, 1)}];               /* per block: how many of its instruction words the game has overwritten */",
+           "u8 code_bits[0x20000], code_bits_slow[0x20000];        /* 16-byte granules holding translated code (m68k.h's write hook looks here first) */",
+           f"static const u32 guarded_at[] = {{ {', '.join(f'{a:#x}u' for a in guarded) or '0xFFFFFFFFu'} }};   /* checked by their own code: never dirty */",
            "void interp_run(void);",
-           "/* does the translation have this address, and is the code there still what was",
-           "   translated? (a game that loads code over it gets the interpreter instead) */",
+           "void note_patched(u32 addr, u16 was, u16 now);",
+           "/* does the translation have this address, is the code there still what was",
+           "   translated, and is its block clean? (a game that loads code over it, or",
+           "   rewrites an instruction, gets the interpreter there instead) */",
            "int translated(u32 pc) {",
-           "\tif (pc < 0x200000u) return table[pc >> 1] != 0 && opword[pc >> 1] == rd16(pc);",
-           "\tif (pc >= 0xC00000u && pc < 0xE00000u) return slow[(pc - 0xC00000u) >> 1] != 0 && opword_slow[(pc - 0xC00000u) >> 1] == rd16(pc);",
+           "\tif (pc < 0x200000u) return table[pc >> 1] != 0 && opword[pc >> 1] == rd16(pc) && dirty[blk[pc >> 1]] == 0;",
+           "\tif (pc >= 0xC00000u && pc < 0xE00000u) return slow[(pc - 0xC00000u) >> 1] != 0 && opword_slow[(pc - 0xC00000u) >> 1] == rd16(pc) && dirty[blk_slow[(pc - 0xC00000u) >> 1]] == 0;",
            "\treturn 0;",
+           "}",
+           "int translated_known(u32 pc) {   /* the translation has this address (whatever is there now) */",
+           "\tif (pc < 0x200000u) return table[pc >> 1] != 0;",
+           "\tif (pc >= 0xC00000u && pc < 0xE00000u) return slow[(pc - 0xC00000u) >> 1] != 0;",
+           "\treturn 0;",
+           "}",
+           "static int is_guarded(u32 a) {",
+           "\tint lo = 0, hi = (int)(sizeof guarded_at / sizeof guarded_at[0]) - 1;",
+           "\twhile (lo <= hi) { int m = (lo + hi) / 2; if (guarded_at[m] == a) return 1; if (guarded_at[m] < a) lo = m + 1; else hi = m - 1; }",
+           "\treturn 0;",
+           "}",
+           "/* the game is writing `bits` bits of v at a, inside translated code: for each",
+           "   instruction word that stops (or starts again) matching what was translated,",
+           "   count its block dirty (or clean); the first time, remember it for the next",
+           "   agk recomp (patched.txt), which then checks that instruction's opcode as it runs */",
+           "void code_written(u32 a, int bits, u32 v) {",
+           "\tu32 w0 = a & ~1u;",
+           "\tfor (u32 w = w0; w < a + (u32)bits / 8; w += 2) {",
+           "\t\tu32 old = rd16(w), new_ = old;",
+           "\t\tif (bits == 8) new_ = (a & 1) ? (old & 0xFF00) | (v & 0xFF) : (old & 0xFF) | ((v & 0xFF) << 8);",
+           "\t\telse if (bits == 16) new_ = v & 0xFFFF;",
+           "\t\telse new_ = (w == a) ? v >> 16 : v & 0xFFFF;",
+           "\t\tu16 op; u32 *d;",
+           "\t\tif (w < 0x200000u) { if (!table[w >> 1]) continue; op = opword[w >> 1]; d = &dirty[blk[w >> 1]]; }",
+           "\t\telse if (w >= 0xC00000u && w < 0xE00000u) { if (!slow[(w - 0xC00000u) >> 1]) continue; op = opword_slow[(w - 0xC00000u) >> 1]; d = &dirty[blk_slow[(w - 0xC00000u) >> 1]]; }",
+           "\t\telse continue;",
+           "\t\tint was = old != op, now = new_ != op;",
+           "\t\tif (was == now) continue;",
+           "\t\tif (!is_guarded(w)) *d += now ? 1u : (u32)-1;",
+           "\t\tif (now && !is_guarded(w)) note_patched(w, op, (u16)new_);   /* (a guarded one is already in patched.txt) */",
+           "\t}",
            "}", "",
            "/* Generated by agk recomp. Each label is an instruction's address. */",
            "void run_translated(void) {",
@@ -826,10 +897,11 @@ def generate(instrs, covered, entry_pc, memory=(), hooks=None):
     for a in sorted(t.addrs):
         if a in t.not_code:               # data or an illegal word: the interpreter's, if ever reached
             continue
+        b = t.block_of[a]
         if a < 0x200000:
-            out.append(f"\t\ttable[{a:#x}u >> 1] = &&{t.label(a)}; opword[{a:#x}u >> 1] = {t.words[a]:#x};")
+            out.append(f"\t\ttable[{a:#x}u >> 1] = &&{t.label(a)}; opword[{a:#x}u >> 1] = {t.words[a]:#x}; blk[{a:#x}u >> 1] = {b}; code_bits[{a:#x}u >> 4] = 1;")
         elif 0xC00000 <= a < 0xE00000:
-            out.append(f"\t\tslow[({a:#x}u - 0xC00000u) >> 1] = &&{t.label(a)}; opword_slow[({a:#x}u - 0xC00000u) >> 1] = {t.words[a]:#x};")
+            out.append(f"\t\tslow[({a:#x}u - 0xC00000u) >> 1] = &&{t.label(a)}; opword_slow[({a:#x}u - 0xC00000u) >> 1] = {t.words[a]:#x}; blk_slow[({a:#x}u - 0xC00000u) >> 1] = {b}; code_bits_slow[({a:#x}u - 0xC00000u) >> 4] = 1;")
     out += ["\t}", "\tgoto dispatch;", "dispatch:",
             "\tif (recomp_trace) fprintf(stderr, \"-> %06X  sr %04X a7 %06X\\n\", cpu.pc, get_sr(), A[7]);",
             "\tif (!getenv(\"RECOMP_INTERP\") && translated(cpu.pc)) {",
@@ -843,11 +915,11 @@ def generate(instrs, covered, entry_pc, memory=(), hooks=None):
     return "\n".join(out), t.unknown
 
 
-def write_project(outdir, instrs, covered, cpu_regs, mem_files, regs, runtime_dir, hooks=None):
+def write_project(outdir, instrs, covered, cpu_regs, mem_files, regs, runtime_dir, hooks=None, guards=None):
     import shutil
     os.makedirs(outdir, exist_ok=True)
     memory = [(base, open(path, "rb").read()) for path, base in mem_files]
-    text, unknown = generate(instrs, covered, cpu_regs["PC"], memory, hooks)
+    text, unknown = generate(instrs, covered, cpu_regs["PC"], memory, hooks, guards)
     with open(os.path.join(outdir, "game.c"), "w") as f:
         f.write(text)
     for name in os.listdir(runtime_dir):

@@ -473,9 +473,9 @@ static int irq_point(u32 at) {
 
 /* interpret from cpu.pc until the translation has the address (never, with RECOMP_INTERP) */
 void interp_run(void) {
-	if (interp_all < 0) interp_all = getenv("RECOMP_INTERP") != NULL;
+	interp_all = getenv("RECOMP_INTERP") != NULL;   /* (looked up every time: RECOMP_INTERP_FROM sets it mid-run) */
 	pc = cpu.pc;
-	if (!interp_all) note_interpreted(pc);
+	{ extern int translated_known(u32); if (!interp_all && !translated_known(pc)) note_interpreted(pc); }   /* (a rewritten block is translated, just not runnable as is) */
 	for (;;) {
 		if (!interp_all && translated(pc)) { cpu.pc = pc; return; }
 		if (cpu.stopped) { TICK(8); if (irq_pending > (int)cpu.ipl) pc = take_interrupt(irq_pending, pc); continue; }

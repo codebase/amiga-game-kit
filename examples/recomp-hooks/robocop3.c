@@ -5,6 +5,13 @@
  *   agk recomp DIR --hook 205D4=robocop3.c:friction --hook 2071A=robocop3.c:drag --hook 20208=robocop3.c:steering --hook 1742A=robocop3.c:frame_begin --hook 259BE=robocop3.c:traffic --hook 7A868=robocop3.c:near_plane --hook 7A8CE=robocop3.c:project */
 #include "m68k.h"
 #include <stdlib.h>
+#include <string.h>
+
+/* Bisecting: RECOMP_NO_HOOKS stands every hook down; main.c sets RECOMP_NO_HOOKS_ACTIVE at
+   RECOMP_NO_HOOKS_FROM=frame, and then RECOMP_NO_HOOK=name[,name] stands those down (the
+   run up to that frame is unchanged, so what differs after it is that hook's doing) */
+#define NO_HOOKS(name) do { if (getenv("RECOMP_NO_HOOKS")) return 0; \
+	if (getenv("RECOMP_NO_HOOKS_ACTIVE")) { const char *l_ = getenv("RECOMP_NO_HOOK"); if (!l_ || strstr(l_, name)) return 0; } } while (0)
 
 #define VBL_DELTA 0x18200u               /* VBLs since the last frame, as the game measured it (a word) */
 #define SPEED 0x20BFEu                   /* the car's speed (a word) */
@@ -14,6 +21,7 @@ static int frac;                          /* the unapplied remainder, in 1/13ths
 
 /* $205D4: subq.w #3,SPEED (coasting drag, once per rendered frame) */
 int friction(void) {
+	NO_HOOKS("friction");
 	int delta = (s16)rd16(VBL_DELTA);
 	if (delta <= 0) return 0;
 	frac += 3 * delta;
@@ -30,6 +38,7 @@ int friction(void) {
  * terminal speed at a high frame rate was exactly 64 */
 static int frac2;
 int drag(void) {
+	NO_HOOKS("drag");
 	int delta = (s16)rd16(VBL_DELTA);
 	if (delta <= 0) return 0;
 	frac2 += 2 * delta;
@@ -48,6 +57,7 @@ int drag(void) {
 #define HEADING 0x20C22u
 static int fine_heading, last_written = -1;
 int steering(void) {
+	NO_HOOKS("steering");
 	int delta = (s16)rd16(VBL_DELTA);
 	if (delta <= 0) return 0;
 	int cur = (s16)rd16(HEADING);
@@ -79,6 +89,7 @@ static unsigned long long view_sum(u32 base) {
 static unsigned long long shown_sum[2];
 static int stale_frames, frames_seen;
 int frame_begin(void) {
+	NO_HOOKS("frame_begin");
 	if (getenv("RECOMP_BLIT_TRACE")) fprintf(stderr, "blit: ---- frame_begin ----\n");
 	int which = rd16(VIEW_BPL1PTH) == 4;  /* which buffer the copper shows */
 	unsigned long long h = view_sum(which ? VIEW_B : VIEW_A);
@@ -101,6 +112,7 @@ int frame_begin(void) {
 static long long car_acc0, car_acc2;
 static long long floordiv(long long a, long long b) { long long q = a / b; if ((a % b) && ((a < 0) != (b < 0))) q--; return q; }
 int traffic(void) {
+	NO_HOOKS("traffic");
 	int delta = (s16)rd16(VBL_DELTA);
 	if (delta <= 0) return 0;
 	long long spd = (s16)rd16(CAR_SPEED);
@@ -123,6 +135,7 @@ int traffic(void) {
  * (called from $7B06C): the collision test uses the same routine and must
  * keep the original distance, or everything becomes an obstacle. */
 int near_plane(void) {
+	NO_HOOKS("near_plane");
 	static int near = -1;
 	if (near < 0) { const char *e = getenv("RECOMP_NEAR"); near = e ? atoi(e) : 96; }
 	A[1] = (rd32(A[7]) == 0x7B070u) ? (u32)near : 16u;
@@ -136,6 +149,7 @@ int near_plane(void) {
  * lands anywhere (a mountain sweeping across the view for a frame). Divide in
  * 64 bits and clamp well off-screen instead. */
 int project(void) {
+	NO_HOOKS("project");
 	s32 z = (s16)D[3];
 	if (z == 0) return 0;                 /* (the original would trap; leave it to the game) */
 	long long x = (s32)D[1] / z, y = (s32)D[2] / z;
