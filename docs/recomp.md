@@ -243,12 +243,10 @@ sees it, and because the game syncs to the vertical blank it renders more
 often: every frame at 16x. But only part of the game's simulation is
 time-based: it reads the VBLs elapsed since the last frame (`$29472`,
 counted by the VBL handler, consumed at `$1742A` into `$18200` and the
-movement step at `$20C00`) for movement, while acceleration and the
-traffic step once per rendered frame, so above about 4x the world runs
-away (the car covers two to three times the distance at 16x). 4x, about
-12 fps, is where it stays honest. A real 50 fps needs the per-frame parts
-scaled by that delta too: a hand edit of a few routines, which is what the
-tools are for next.
+movement step at `$20C00`) for movement, while some steering, drag and
+the other car's driving step once per rendered frame, so above about 4x
+the world runs away. A real 50 fps needs the per-frame parts scaled by
+that delta too, which is what hooks are for.
 
 ## Improving a game: hooks
 
@@ -261,43 +259,47 @@ execution continues. That's the whole mechanism: a port improves a game by
 replacing its routines one address at a time, and the differential tester
 checks the rest still matches.
 
-The worked example is `examples/recomp-hooks/robocop3.c`. RoboCop 3 steps
-some of its physics once per rendered frame (coasting friction at `$205D4`,
-air drag at `$2071A`, the steering at `$20208`), so a faster CPU made the
-car sluggish and twitchy. Three hooks scale those steps by the frame's share
-of the A500's 13 VBLs per frame, the game's own timer (`$18200`); the
-steering one keeps a full-precision heading because the game rounds it to
-64ths right after. A fourth hook, at the point where the game begins a frame, calls the
-runtime's `frame_sync()`: the picture just finished is captured and the
-CPU waits for the vertical blank, so a game that never synced (it didn't
-have to at 4 fps) shows one whole frame per video frame instead of
-tearing; with it in use the runtime never captures at a frame boundary,
-so a long frame is never shown half-drawn. The same hook checks the double
-buffering: the copper's view pointer alternates between two buffers every
-frame, and `RECOMP_STALE_TRACE` reports a frame that shows a buffer the game
-hasn't redrawn since it was last shown (none found so far). With them, `--speed 16` renders every frame at 50 fps and the car
-covers the same ground at the same speed as at 1x (frame 300: Z 23360 vs
-23298). Two more are for the renderer alone: the near plane further out, but only
-when the vertex transform is called by the renderer (`$7B06C`; the
-collision test uses the same routine and must keep the original distance,
-or everything becomes an obstacle, which is how the first version of that
-hook failed), and a 64-bit perspective divide with the result clamped
-where the engine's `divs` would overflow and leave a vertex anywhere (a
-mountain sweeping across the view for a frame). A hook is a hypothesis;
-the memory and picture checks are what confirm it. Finding the physics
-steps took the memory diffs and the write
-watch above: compare the variables at a fixed frame across `--speed`
-settings, and whatever drifts is per-frame logic.
+The worked example is `examples/recomp-hooks/robocop3.c`. RoboCop 3's
+control routine runs from the VBL interrupt, so the throttle (a countdown of
+6 blanks), braking and the drag at full steering lock are already paced by
+real time. But the main loop steps other things once per *rendered* frame:
+the off-road drag (`$2446C` calls `$2070E` three times), the steering
+(`$20208`, the wheel angle into the heading), the pursued car's movement
+(`$259BE`), and that car's driver (throttle `$25830`, a quarter-way speed
+convergence `$257FA`, a quarter-way turn `$25876`/`$25898`). At 50 fps
+those run twelve times too often: the player's car turned like a kart and
+the quarry sped off and cornered like a toy. The hooks scale each step by
+the frame's share of the A500's 12 VBLs per frame, the game's own timer
+(`$18200`), carrying the remainder; the heading ones keep a full-precision
+angle because the game rounds to 64ths right after. One more fixes a unit
+conversion: a collision with the car swaps speeds between the player's
+per-VBL units and the car's per-frame units using the measured VBLs per
+frame as the ratio, which the A500 kept near 12 and which is 1 at 50 fps
+(the formula even divides by it minus 2); the hook supplies 12. A hook that
+scales a step the game already paces by the blank makes things *worse*:
+the first version had a "coasting friction" hook on `$205D4`, which is the
+brake, and a `frame_sync()` hook at the start of each frame, which burned a
+blank the game then waited out again, halving the frame rate to 25. Whether
+a step is per frame or per blank is read off the call counts in an
+instruction trace (`--itrace` with `RECOMP_ITRACE_FROM`), not guessed.
+
+Finding the per-frame steps took the memory diffs and the write watch
+above: compare the variables at a fixed frame across `--speed` settings,
+and whatever drifts is per-frame logic. A hook is a hypothesis; the
+memory and picture checks, and a replay of a real session, are what
+confirm it.
 
 ```sh
 agk recomp cov -o native --adf robocop3-disk2.adf \
-    --hook 205D4=examples/recomp-hooks/robocop3.c:friction \
     --hook 2071A=examples/recomp-hooks/robocop3.c:drag \
-    --hook 20208=examples/recomp-hooks/robocop3.c:steering \\
-    --hook 259BE=examples/recomp-hooks/robocop3.c:traffic \\
-    --hook 7A868=examples/recomp-hooks/robocop3.c:near_plane \\
-    --hook 7A8CE=examples/recomp-hooks/robocop3.c:project \\
-    --hook 1742A=examples/recomp-hooks/robocop3.c:frame_begin
+    --hook 20208=examples/recomp-hooks/robocop3.c:steering \
+    --hook 259BE=examples/recomp-hooks/robocop3.c:traffic \
+    --hook 25830=examples/recomp-hooks/robocop3.c:car_accel \
+    --hook 257FA=examples/recomp-hooks/robocop3.c:car_converge \
+    --hook 25876=examples/recomp-hooks/robocop3.c:car_turn_r \
+    --hook 25898=examples/recomp-hooks/robocop3.c:car_turn_l \
+    --hook 22250=examples/recomp-hooks/robocop3.c:crash_units_a \
+    --hook 222A2=examples/recomp-hooks/robocop3.c:crash_units_b
 native/game --play --speed 16 --adf disk1.adf --adf disk2.adf --adf disk3.adf --adf-in 2
 ```
 
