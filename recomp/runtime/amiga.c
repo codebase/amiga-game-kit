@@ -265,6 +265,15 @@ void frame_sync(void) {
 	run_events();
 }
 
+/* as frame_sync, but keep showing the last captured picture (a hook holding a
+ * one-frame effect for as long as the original machine showed it) */
+void frame_wait(void) {
+	display_synced = 1;
+	u64 target = frame_start + CYCLES_PER_FRAME;
+	if (cpu.cycles < target) cpu.cycles = target;
+	run_events();
+}
+
 void run_events(void) {
 	u32 ticks = (u32)((cpu.cycles - last_cia_cycles) / 10);
 	if (ticks) { cia_tick(&ciaa, ticks); cia_tick(&ciab, ticks); last_cia_cycles += (u64)ticks * 10; }

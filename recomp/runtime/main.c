@@ -215,6 +215,7 @@ static u8 amiga_key(SDL_Scancode sc) {
 static int mouse_grabbed;
 static int any_key_in;                    /* frames until a Return is tapped for a "press any key" after a disk swap */
 static int centre_x, centre_y;            /* where the warped pointer reads back, in SDL's mouse space */
+static int mouse_acc_x, mouse_acc_y;      /* host motion not yet turned into counts */
 static int settle;                        /* frames after a grab during which the warp is still landing */
 
 static void sdl_input(void) {
@@ -256,7 +257,10 @@ static void sdl_input(void) {
 		if (settle) { settle--; centre_x = x; centre_y = y; dx = dy = 0; }
 		else if (dx || dy) { SDL_WarpMouseInWindow(win, w / 2, h / 2); SDL_PumpEvents(); SDL_GetMouseState(&centre_x, &centre_y); }
 		if (dx > 127) dx = 127; if (dx < -127) dx = -127; if (dy > 127) dy = 127; if (dy < -127) dy = -127;
-		mouse_x = (u8)(mouse_x + dx / 2); mouse_y = (u8)(mouse_y + dy / 2);
+		{ static int div = -1; if (div < 0) { const char *e = getenv("RECOMP_MOUSE_DIV"); div = e ? atoi(e) : 4; if (div < 1) div = 1; }
+		  mouse_acc_x += dx; mouse_acc_y += dy;   /* RECOMP_MOUSE_DIV: host pixels per Amiga mouse count (4: a trackpad at 50 fps) */
+		  mouse_x = (u8)(mouse_x + mouse_acc_x / div); mouse_acc_x %= div;
+		  mouse_y = (u8)(mouse_y + mouse_acc_y / div); mouse_acc_y %= div; }
 		const Uint8 *k = SDL_GetKeyboardState(NULL);
 		/* (with the mouse grabbed, space or up also press the left button, down the right: a trackpad is awkward to hold) */
 		mouse_left = (b & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0 || k[SDL_SCANCODE_SPACE] || k[SDL_SCANCODE_UP];

@@ -332,6 +332,7 @@ static inline u32 take_interrupt(int level, u32 pc) {
 }
 
 void frame_sync(void);                    /* for hooks: the game finished a frame; show it and wait for the vertical blank */
+void frame_wait(void);                    /* for hooks: wait for the vertical blank, keep showing the last picture */
 extern int cycle_shift;                   /* --speed: the CPU this much faster than an A500 (cycles >> shift) */
 /* the translated code charges each instruction as it executes (CYC) and looks
  * at the chips' events at control flow (EVENTS); the interpreter does the same.

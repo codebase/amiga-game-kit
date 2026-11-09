@@ -108,6 +108,7 @@ What happens:
 The native program:
 
 ```
+RECOMP_MOUSE_DIV=N                 host pixels per Amiga mouse count (default 4: a trackpad at 50 fps)
 game --play --adf GAME.adf         a window: arrows/WASD + space/ctrl are the joystick, every
                                    key reaches the Amiga keyboard, a click grabs the mouse and
                                    F11 lets it go, F12 toggles full speed, Esc quits
@@ -238,7 +239,10 @@ steering one keeps a full-precision heading because the game rounds it to
 runtime's `frame_sync()`: the picture just finished is captured and the
 CPU waits for the vertical blank, so a game that never synced (it didn't
 have to at 4 fps) shows one whole frame per video frame instead of
-tearing. With them, `--speed 16` renders every frame at 50 fps and the car
+tearing; with it in use the runtime never captures at a frame boundary,
+so a long frame is never shown half-drawn. The same hook holds a crash's
+one-frame jolt (drawn into the other view buffer) for several frames with
+`frame_wait()`, as long as the A500 showed it, instead of a 20 ms flicker. With them, `--speed 16` renders every frame at 50 fps and the car
 covers the same ground at the same speed as at 1x (frame 300: Z 23360 vs
 23298). Two more are for the renderer alone: the near plane further out, but only
 when the vertex transform is called by the renderer (`$7B06C`; the

@@ -64,7 +64,15 @@ int steering(void) {
  * frame it just drew is complete: show it, and wait for the vertical blank so
  * each video frame shows one whole picture (the game never synced: at 4 fps
  * it didn't have to, at 50 it tears). */
+/* A crash draws one jolted frame into the other view buffer (the copper list's
+ * BPL1PT high word at $19F84 reads 4 instead of 3) and the next frame is back
+ * to normal: a quarter of a second on the A500, 20 ms at 50 fps. Hold it. */
+#define VIEW_BPL1PTH 0x19F84u
+static int hold;
 int frame_begin(void) {
+	if (getenv("RECOMP_BLIT_TRACE")) fprintf(stderr, "blit: ---- frame_begin ----\n");
+	if (rd16(VIEW_BPL1PTH) == 4) { frame_sync(); hold = A500_FRAME - 1; return 0; }
+	if (hold) { hold--; frame_wait(); return 0; }
 	frame_sync();
 	return 0;                             /* then the original instruction */
 }
