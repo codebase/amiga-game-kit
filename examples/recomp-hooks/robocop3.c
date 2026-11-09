@@ -2,12 +2,13 @@
  * per rendered frame, so with a faster CPU (more frames a second) the car
  * felt more drag. These hooks scale those steps by the frame's share of the
  * A500's 13 VBLs per frame, so the car behaves as at 1x whatever the rate.
- *   agk recomp DIR --hook 205D4=robocop3.c:friction --hook 2071A=robocop3.c:drag --hook 20208=robocop3.c:steering --hook 1742A=robocop3.c:frame_begin --hook 259BE=robocop3.c:traffic */
+ *   agk recomp DIR --hook 205D4=robocop3.c:friction --hook 2071A=robocop3.c:drag --hook 20208=robocop3.c:steering --hook 1742A=robocop3.c:frame_begin --hook 259BE=robocop3.c:traffic --hook 7A868=robocop3.c:near_plane */
 #include "m68k.h"
+#include <stdlib.h>
 
 #define VBL_DELTA 0x18200u               /* VBLs since the last frame, as the game measured it (a word) */
 #define SPEED 0x20BFEu                   /* the car's speed (a word) */
-#define A500_FRAME 13                    /* VBLs per rendered frame on the A500, what the game was tuned for */
+#define A500_FRAME 12                    /* VBLs per rendered frame on the A500 as measured in the emulator (12.4) */
 
 static int frac;                          /* the unapplied remainder, in 1/13ths of a frame's drag */
 
@@ -89,5 +90,18 @@ int traffic(void) {
 	wr32(CAR_POS, (u32)((s32)rd32(CAR_POS) - (s32)s0));
 	wr32(CAR_POS + 8, (u32)((s32)rd32(CAR_POS + 8) + (s32)s2));
 	cpu.pc = 0x259E0u;                    /* the rts */
+	return 1;
+}
+
+/* $7A868: movea.w #16,a1 - the near plane. A vertex with z below it counts as
+ * behind the camera; one just above it projects to enormous coordinates and
+ * the polygon fills the screen (the original does this when the car is
+ * against geometry). Further out, such polygons take the engine's own
+ * partially-behind path instead. RECOMP_NEAR overrides the distance. */
+int near_plane(void) {
+	static int near = -1;
+	if (near < 0) { const char *e = getenv("RECOMP_NEAR"); near = e ? atoi(e) : 96; }
+	A[1] = (u32)near;
+	cpu.pc = 0x7A86Cu;
 	return 1;
 }
