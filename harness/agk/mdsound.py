@@ -49,13 +49,14 @@ class SoundError(Exception):
 
 
 class Note:
-    __slots__ = ("kind", "voice", "t0", "t1", "patch", "f", "a", "pan", "inst", "end", "peak", "vol")
+    __slots__ = ("kind", "voice", "t0", "t1", "patch", "f", "a", "pan", "inst", "end", "peak", "vol", "imp")
 
     def __init__(self, kind, voice, t0):
         self.kind, self.voice, self.t0, self.t1 = kind, voice, t0, None
         self.patch = None
         self.f, self.a = [], []           # (frame, Hz) and (frame, amplitude) where they change
         self.pan = 3
+        self.imp = None                   # how much it matters tick by tick, where that isn't its volume (a drum)
 
 
 # ------------------------------------------------------------------ the log
@@ -633,9 +634,14 @@ def shape(n, pool, total):
     """a note's volume at each tick it can be heard (n.vol, amplitude; n.end = the tick it is gone), its sample"""
     s = n.inst = pool.get(n)
     last = n.t1 if n.t1 is not None else total
-    if n.kind == "dac":
+    if n.kind == "dac":                   # as loud as the sample is, tick by tick: a drum's tail gives its channel up
         dur = max(1, last - n.t0)
-        n.vol = [n.a[0][1]] * dur
+        data = pool.dacs[n.patch]
+        step = max(1, int(n.f[0][1] / TICKS))
+        n.imp = [n.a[0][1] * max(abs(b - 128) for b in data[k * step:(k + 1) * step] or b"\x80") / 128 for k in range(dur)]
+        while len(n.imp) > 2 and n.imp[-1] < 0.03:
+            n.imp.pop()
+        n.vol = [n.a[0][1]] * len(n.imp)
     elif n.kind != "fm":
         n.vol = _track(n.a, n.t0, max(1, last - n.t0))
     else:
@@ -665,7 +671,7 @@ def shape(n, pool, total):
     while len(n.vol) > 1 and n.vol[-1] < 0.003:
         n.vol.pop()
     n.end = n.t0 + len(n.vol)
-    n.peak = max(n.vol[:8])
+    n.peak = max((n.imp or n.vol)[:8])
 
 
 WEIGHT = {"dac": 1.4, "fm": 1.0, "psg": 0.7, "noise": 0.5}
@@ -688,7 +694,8 @@ def arrange(notes, total, nch=4):
         else:
             def now(c):
                 m = cur[c]
-                return m.vol[min(len(m.vol) - 1, t - m.t0)] * WEIGHT[m.kind] * (0.6 if m.voice == n.voice else 1.0)
+                lvl = m.imp or m.vol
+                return lvl[min(len(lvl) - 1, t - m.t0)] * WEIGHT[m.kind] * (0.6 if m.voice == n.voice else 1.0)
             c = min(range(nch), key=now)
             if now(c) > imp:
                 continue                  # everything sounding matters more than this note
