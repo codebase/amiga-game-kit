@@ -161,6 +161,20 @@ How `layer.c` works, and what it has learned:
   setting a VRAM address and writing there (on the Mega Drive the loop was
   always done in time; here the layer takes time too): the VDP's address is
   put back after each handler.
+- **The game runs from fast RAM.** The layout puts the game's RAM and the
+  rewritten code after the ROM, which on an Amiga is chip RAM: half speed
+  with eight bitplanes on. So `agk port` does the port a second time for a
+  layout a megabyte on and lists every long that moved (in the code and in
+  the ROM image); the loader puts the RAM, the ROM's 32K copy and the code in
+  fast RAM at a multiple of 64K, adds the difference at each, and redoes the
+  header checksum. Only the ROM's data and the layer's page stay in chip RAM.
+- **The layer works to a deadline.** The game counts frames by its vertical
+  interrupt, so that must come every blank: the layer stops at a raster line
+  (with a minimum slice when the game's interrupt left it late), goes on with
+  the same picture after the next blank, and shows it when it is whole (or
+  after eight blanks, as far as it got). A slow machine gets fewer pictures,
+  not a slower game. Colours aren't regrouped while a fade is moving: every
+  step of it would be a screenful of cells.
 - **Bitplane pointers carry.** Skipping the high word of a pointer in the
   copper list is only right while the running pointer is in the same 64K.
 
@@ -201,9 +215,12 @@ and an FM sound that is a snapshot per octave rather than the chip. Tempo
 changes (speed shoes) and the driver's pause aren't followed yet.
 
 Not in it yet: the interlaced two-player mode (the attract mode's second
-demo), the window plane, water palettes, hardware sprites; and it
-still takes more than a frame on a stock A1200 (`a1200-accel` is the profile
-it is developed on).
+demo), the window plane, water palettes, hardware sprites. On a stock
+A1200 with fast RAM (`a1200-fast`) it boots and runs, slowly: the title at
+about sixteen pictures a second with the game's own logic behind too (the
+game's code and the VDP's DMA emulation take most of a frame before anything
+is drawn), and the mixer is more than that machine has. `a1200-accel` is the
+profile it is developed on.
 
 The plan it follows:
 

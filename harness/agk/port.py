@@ -1113,6 +1113,44 @@ def port(rom_path, analysis, outdir, image, log=print):
     for a in hints["reloc"]:
         v = struct.unpack(">I", img[a:a + 4])[0]
         img[a:a + 4] = struct.pack(">I", lay["ram"] + (v & 0xFFFF))
+    # Where the image holds an address of the game's RAM, of the ROM's copy above it or of the new code, so a
+    # loader may put those somewhere else, together (the Amiga's puts them in fast RAM: chip RAM is half the
+    # speed with eight bitplanes on). Found by doing the port once more for a layout a megabyte on and seeing
+    # which longs moved by that. The layer's page stays where it is.
+    shift = 0x100000
+    lay2 = dict(lay)
+    for key in ("ram", "D", "mirror", "code"):
+        lay2[key] += shift
+    rw2 = Rewriter(code, lay2, hw, hints)
+    rw2.reach = rw.reach
+    text2, errors2 = rw2.source()
+    os.makedirs(os.path.join(outdir, "alt"), exist_ok=True)
+    blob2, relocs2, syms2 = assemble(text2, os.path.join(outdir, "alt"), image)
+    for off in relocs2:
+        v = struct.unpack(">I", blob2[off:off + 4])[0] + lay2["code"]
+        blob2[off:off + 4] = struct.pack(">I", v)
+    img2 = patch_old(rom, code, rw2, entries, {a: lay2["code"] + syms2[rw2.label(a)] for a in code}, lay2, lambda *_: None)[0]
+    for a in hints["reloc"]:
+        v = struct.unpack(">I", img2[a:a + 4])[0]
+        img2[a:a + 4] = struct.pack(">I", lay2["ram"] + (v & 0xFFFF))
+    if errors2 or len(blob2) != len(blob) or len(img2) != len(img):
+        raise PortError("the port doesn't come out the same shape for another layout: it can't be told where its addresses are")
+
+    def moved(a, b, what):
+        out = []
+        i = 0
+        while i < len(a):
+            if a[i] != b[i]:
+                at = next((k for k in (i - 1, i) if k >= 0 and
+                           (struct.unpack(">I", b[k:k + 4])[0] - struct.unpack(">I", a[k:k + 4])[0]) & 0xFFFFFFFF == shift), None)
+                if at is None:
+                    raise PortError(f"{what} at ${i:06X} depends on the layout but isn't a whole address: the port can't be moved")
+                out.append(at)
+                i = at + 4
+            else:
+                i += 1
+        return out
+    lay["relocs"] = {"code": moved(blob, blob2, "the new code"), "rom": moved(img, img2, "the ROM image")}
     # the header's checksum (the words from $200 to the ROM's end, which games verify at startup) for the image as patched
     end = min(struct.unpack(">I", rom[0x1A4:0x1A8])[0] + 1, len(img)) & ~1
     if end > 0x200:
@@ -1217,7 +1255,10 @@ def build_amiga(outdir, kit_root, image, analysis=None, log=print):
             raise PortError(f"the sound: {e}")
     elif analysis:
         log("no sound rip in the analysis directory: the port will be silent (DIR/game --frames N --input keys.txt --sound-rip DIR makes one)")
-    payload = bytes(rom) + mem[lay["code"]:lay["top"]]
+    # after the ROM and the code, where addresses of the code are: counts, then offsets in the code and in the ROM
+    rl = lay.get("relocs", {"code": [], "rom": []})
+    table = struct.pack(f">II{len(rl['code'])}I{len(rl['rom'])}I", len(rl["code"]), len(rl["rom"]), *rl["code"], *rl["rom"])
+    payload = bytes(rom) + mem[lay["code"]:lay["top"]] + table
     c = zlib.compressobj(9, zlib.DEFLATED, -15)
     z = c.compress(payload) + c.flush()
     adir = os.path.join(outdir, "amiga")
@@ -1240,7 +1281,7 @@ def build_amiga(outdir, kit_root, image, analysis=None, log=print):
     defs = {"ROMSIZE": lay["romsize"], "RAM": lay["ram"], "D": lay["D"], "SHIM": lay["shim"], "CODE": lay["code"],
             "CODESIZE": lay["top"] - lay["code"], "TOP": lay["top"], "SP": info["sp"], "PC": info["pc"],
             "SCREEN0": screen, "COPPER": copper, "ZSIZE": len(z),   # (four bitmaps of 128K, then two copper lists)
-            "SNDDISK": snd_disk, "SNDZSIZE": len(sz), "SNDSIZE": len(sound or b"")}
+            "IMGSIZE": len(payload), "SNDDISK": snd_disk, "SNDZSIZE": len(sz), "SNDSIZE": len(sound or b"")}
     if defs["COPPER"] + 0x8000 > 0x200000:
         raise PortError("the port's image and its screen don't fit in 2 MB of chip RAM")
     with open(os.path.join(adir, "port_layout.h"), "w") as f:

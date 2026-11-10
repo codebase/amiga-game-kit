@@ -66,9 +66,10 @@ static int dbg_cells, dbg_tiles;         /* drawn this frame (LAYER_DEBUG shows 
 static int back;                          /* which of plane A's bitmaps (and which copper list) is being made */
 
 static u32 mem16(u32 a) { const u8 *p = (const u8 *)a; return (u32)p[0] << 8 | p[1]; }
+extern u32 port_ram;                      /* main.c: where the game's RAM went (fast RAM) */
 static u32 game_addr(u32 a) {
 	a &= 0xFFFFFF;
-	return a >= 0xE00000 ? PORT_RAM + (a & 0xFFFF) : a;
+	return a >= 0xE00000 ? port_ram + (a & 0xFFFF) : a;
 }
 
 /* ------------------------------------------- what changed, as it's written */
@@ -539,9 +540,18 @@ static void geometry(void) {
 }
 
 /* surface s brought up to plane p's shadow where it is on screen */
-static void present(int s, int p) {
+/* the frame's time for the layer is up: the game's main loop must have the rest of it, and the
+ * next vertical blank its interrupt on time (the game counts frames by it) */
+#define DEADLINE 170                      /* raster line, of 312 */
+#define SLICE 70                          /* ... but this many lines at least, however late the game's interrupt left it */
+static u32 deadline = DEADLINE;
+static u32 raster(void) { return ((u32)(CUSTOM(0x004) & 1) << 8) | (CUSTOM(0x006) >> 8); }
+static int late(void) { return raster() >= deadline || (CUSTOM(0x01E) & 0x0020); }
+/* -> 0 if time ran out before every visible cell was there (what is done stays done) */
+static int present(int s, int p) {
 	for (int r = 0; r < 32; r++) {
 		int c = wmin[p][r], c1 = wmax[p][r];
+		if (c <= c1 && late()) return 0;
 		u8 *v = &valid[s][r * 128];
 		u8 *ok = &sh_ok[p][r << 6];
 		while (c <= c1) {
@@ -569,6 +579,7 @@ static void present(int s, int p) {
 			}
 		}
 	}
+	return 1;
 }
 
 /* the copper list for the frame just drawn: the colours, the pointers and the fine scroll at the
@@ -710,11 +721,16 @@ static void sprites(void) {
 /* ------------------------------------------------------------ the frame */
 /* after the game's vertical interrupt, interrupts masked: the cells and the sprites, then the
  * display that shows them from the next vertical blank */
-static int rest;                          /* frames to sit out: the last one drawn took longer than a frame */
+static int rest;                          /* (debug: frames a picture took) */
+static u8 busy;                           /* a picture is being made in the bitmaps off screen, and isn't whole yet */
+static u32 fade_at;                       /* when most of the palette last moved */
 void layer_frame(void) {
 	int p, i;
 	layer_irq_leave();
-	if (rest) { rest--; return; }         /* (the game's main loop needs the time; the picture stays as it is) */
+	deadline = raster() + SLICE;          /* (without it a busy game would never be given a picture) */
+	if (deadline < DEADLINE) deadline = DEADLINE;
+	if (deadline > 300) deadline = 300;
+	if (late()) return;
 	geometry();
 	if (scene_new) {                      /* the planes were set up anew: the colours are found again as tiles are drawn */
 		scene_new = 0;
@@ -733,7 +749,7 @@ void layer_frame(void) {
 		/* a few colours changing by themselves, again and again: a cycle (a fade changes most of them) */
 		for (i = 0; i < 64; i++) n += cram_chg[i];
 		for (i = 0; i < 64; i++) {
-			if (n > 16) anim[i] = anim_n[i] = 0;
+			if (n > 16) { anim[i] = anim_n[i] = 0; fade_at = vbl_count; }
 			else if (cram_chg[i] && !anim[i] && ++anim_n[i] >= 3) {
 				anim[i] = 1;
 				for (p = 0; p < 2; p++) if (seen[p][i >> 4] >> (i & 15) & 1) want_group[p] = 1;
@@ -743,7 +759,8 @@ void layer_frame(void) {
 		load_palette(err);
 		for (p = 0; p < 2; p++) if (err[p] > 60) want_group[p] = 1;   /* (a fade came up: what was grouped in the dark) */
 	}
-	for (p = 0; p < 2; p++) if (want_group[p] && vbl_count - grouped_at[p] >= 25) {
+	/* (not while a fade is moving: every step of it would be a new grouping and a screenful of cells) */
+	for (p = 0; p < 2; p++) if (want_group[p] && vbl_count - grouped_at[p] >= 25 && vbl_count - fade_at >= 12) {
 		want_group[p] = 0;
 		if (group(p)) {
 			for (i = 0; i < 2048; i++) cache_ok[p][i] = 0;
@@ -766,17 +783,25 @@ void layer_frame(void) {
 	}
 	for (p = 0; p < 2; p++) if (cell_all[p]) { cell_all[p] = 0; all_dirty(p); }
 	int s = back * 2;                     /* plane A's bitmap that isn't on screen */
-	for (i = 0; i < got_n[back]; i++) { u32 c = got_list[back][i]; got_flag[back][c] = 0; valid[s][c] = 0; }   /* the sprites it had */
-	got_n[back] = 0;
-	for (i = 0; i < bob_n; i++) { bob_flag[bob_list[i]] = 0; sh_ok[0][bob_list[i]] = 0; }   /* and the shadow's */
-	bob_n = 0;
-	if (reg[1] & 0x40) sprites();
-	present(s, 0);
-	present(s + 1, 1);
+	if (!busy) {                          /* a new picture: the sprites as they are now */
+		for (i = 0; i < got_n[back]; i++) { u32 c = got_list[back][i]; got_flag[back][c] = 0; valid[s][c] = 0; }   /* the sprites it had */
+		got_n[back] = 0;
+		for (i = 0; i < bob_n; i++) { bob_flag[bob_list[i]] = 0; sh_ok[0][bob_list[i]] = 0; }   /* and the shadow's */
+		bob_n = 0;
+		if (reg[1] & 0x40) sprites();
+		busy = 1;
+		rest = 0;
+	}
+	rest++;
+	/* the cells in view, as far as the time goes; a picture not whole by then is gone on with after the
+	 * next blank (for the scroll as it is then), and what is on screen stays meanwhile */
+	if ((!present(s, 0) || !present(s + 1, 1)) && rest < 8) return;
+	/* (eight blanks and still not whole: the game changes more a frame than there is time for. It is shown
+	 * as far as it got: cells out of date here and there are better than no picture) */
 	if (pal_stale) { int err[2]; pal_stale = 0; load_palette(err); }   /* (colours that came with this frame's tiles) */
 	build_copper();
 	back ^= 1;
-	if (CUSTOM(0x01E) & 0x0020) rest = 1; /* the next vertical blank has come already */
+	busy = 0;
 #ifdef LAYER_DEBUG                        /* the layer's state where a memory dump finds it */
 	{ u8 *d = (u8 *)0x900000; for (i = 0; i < 24; i++) d[i] = reg[i];
 	  for (i = 0; i < 64; i++) { d[32 + i * 2] = (u8)(cram[i] >> 8); d[33 + i * 2] = (u8)cram[i]; }

@@ -51,8 +51,8 @@ _port_go:
 	lea	0xdff000,a6
 	move.w	#0x8380,0x96(a6)            | DMA: bitplanes and the copper
 	move.w	#0xc030,0x9a(a6)            | interrupts: the vertical blank and the copper's
-	move.l	#PORT_SP,sp
-	jmp	PORT_PC
+	move.l	_port_sp,sp
+	jmp	PORT_PC                     | (the ROM's reset vector: its old code is a jump to the new)
 
 | an exception nothing handles: the border shows which (the vector's offset), and it stops
 fault:
@@ -105,7 +105,7 @@ quiet:
 	bcc.s	2f
 1:	move.l	\reg,d0
 	and.l	#0x0000ffff,d0
-	add.l	#PORT_RAM,d0
+	add.l	_port_ram,d0
 	move.l	d0,\reg
 2:	move.l	(sp)+,d0
 	move.w	(sp)+,sr
