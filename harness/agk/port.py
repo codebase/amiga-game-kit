@@ -1154,44 +1154,113 @@ def port(rom_path, analysis, outdir, image, log=print):
 
 # ------------------------------------------------------------- the Amiga
 
-def build_amiga(outdir, kit_root, image, log=print):
-    """the port as an Amiga program: OUT/amiga/game (the loader and the hardware layer, recomp/mdamiga),
-    game.z (the image, deflated) and a bootable game.adf -> the ADF's path"""
+def sound_holes(analysis, romsize):
+    """the ROM's bytes only the sound driver read (z80rom.bin, from the sound rip) and the 68000 never did:
+    the music and the samples, which the Amiga plays from its own data -> [(start, length)], the runs of 2K and more"""
+    zpath, rpath = os.path.join(analysis, "z80rom.bin"), os.path.join(analysis, "romread.bin")
+    if not os.path.exists(zpath) or not os.path.exists(rpath):
+        return []
+    zbits = open(zpath, "rb").read()
+    tags = open(rpath, "rb").read()[:romsize]
+    count = collections.Counter(tags)
+    bulk = {t for t, n in count.items() if t not in (0, 255) and n > romsize // 4}
+    covered = read_bits(os.path.join(analysis, "coverage.bin"))
+    code = bytearray(romsize)
+    for a in covered:
+        if a < romsize - 10:
+            code[a:a + 10] = b"\1" * 10
+    runs = []
+    a = 0
+    n = min(romsize, len(tags), len(zbits) * 8)
+    while a < n:
+        if zbits[a >> 3] >> (a & 7) & 1 and (tags[a] == 0 or tags[a] in bulk) and not code[a]:
+            b = a
+            while b < n and zbits[b >> 3] >> (b & 7) & 1 and (tags[b] == 0 or tags[b] in bulk) and not code[b]:
+                b += 1
+            lo, hi = (a + 1) & ~1, b & ~1
+            if hi - lo >= 2048:
+                runs.append((lo, hi - lo))
+            a = b
+        else:
+            a += 1
+    return runs
+
+
+def build_amiga(outdir, kit_root, image, analysis=None, log=print):
+    """the port as an Amiga program: OUT/amiga/game (the loader, the hardware layer and the sound player,
+    recomp/mdamiga), game.z (the image, deflated) and a bootable game.adf -> the ADF's path. With a sound rip
+    in the analysis directory (game --sound-rip DIR), sound.z too (agk/mdsound.py): on the same disk if it
+    fits, else on game2.adf (volume PORT2: the second drive, or swapped in when asked for)."""
     import shutil
     import zlib
     info = json.load(open(os.path.join(outdir, "port.json")))
     lay = info["layout"]
     mem = open(os.path.join(outdir, "port.bin"), "rb").read()
-    payload = mem[:lay["romsize"]] + mem[lay["code"]:lay["top"]]
+    rom = bytearray(mem[:lay["romsize"]])
+    screen = (lay["top"] + 0xFFFF) & ~0xFFFF
+    copper = screen + 0x80000
+    sound = None
+    if analysis and os.path.exists(os.path.join(analysis, "sound.idx")):
+        from . import mdsound
+        try:
+            snd = mdsound.build(analysis, log)
+            holes = sound_holes(analysis, lay["romsize"])
+            for a, n in holes:
+                rom[a:a + n] = bytes(n)   # (nothing reads them now; they pack to nothing, and are room for samples)
+            end = min(struct.unpack(">I", rom[0x1A4:0x1A8])[0] + 1, len(rom)) & ~1
+            if holes and 0x200 < end:     # (the header's checksum again, for the ROM without them)
+                rom[0x18E:0x190] = struct.pack(">H", sum(struct.unpack(f">{(end - 0x200) // 2}H", rom[0x200:end])) & 0xFFFF)
+            top = (lay["top"] + 1) & ~1
+            regions = [(copper + 0x8000, 0x200000 - copper - 0x8000), (top, screen - top)] + holes
+            sound = mdsound.pack(snd, [r for r in regions if r[1] >= 2048], mdsound.aliases(analysis, snd["addrs"]), log)
+        except mdsound.SoundError as e:
+            raise PortError(f"the sound: {e}")
+    elif analysis:
+        log("no sound rip in the analysis directory: the port will be silent (DIR/game --frames N --input keys.txt --sound-rip DIR makes one)")
+    payload = bytes(rom) + mem[lay["code"]:lay["top"]]
     c = zlib.compressobj(9, zlib.DEFLATED, -15)
     z = c.compress(payload) + c.flush()
     adir = os.path.join(outdir, "amiga")
     os.makedirs(adir, exist_ok=True)
+    snd_disk, sz = 0, b""
+    for name in ("sound.z", "game2.adf"):
+        if os.path.exists(os.path.join(adir, name)):
+            os.remove(os.path.join(adir, name))
+    if sound:
+        c = zlib.compressobj(9, zlib.DEFLATED, -15)
+        sz = c.compress(sound) + c.flush()
+        with open(os.path.join(adir, "sound.z"), "wb") as f:
+            f.write(sz)
+        snd_disk = 1 if len(z) + len(sz) < 820000 else 2
     with open(os.path.join(adir, "game.z"), "wb") as f:
         f.write(z)
     src = os.path.join(kit_root, "recomp", "mdamiga")
     for name in os.listdir(src):
         shutil.copy(os.path.join(src, name), adir)
-    screen = (lay["top"] + 0xFFFF) & ~0xFFFF
     defs = {"ROMSIZE": lay["romsize"], "RAM": lay["ram"], "D": lay["D"], "SHIM": lay["shim"], "CODE": lay["code"],
             "CODESIZE": lay["top"] - lay["code"], "TOP": lay["top"], "SP": info["sp"], "PC": info["pc"],
-            "SCREEN0": screen, "COPPER": screen + 0x80000, "ZSIZE": len(z)}   # (four bitmaps of 128K, then two copper lists)
+            "SCREEN0": screen, "COPPER": copper, "ZSIZE": len(z),   # (four bitmaps of 128K, then two copper lists)
+            "SNDDISK": snd_disk, "SNDZSIZE": len(sz), "SNDSIZE": len(sound or b"")}
     if defs["COPPER"] + 0x8000 > 0x200000:
         raise PortError("the port's image and its screen don't fit in 2 MB of chip RAM")
     with open(os.path.join(adir, "port_layout.h"), "w") as f:
         f.write("/* where agk port put things (port.json) */\n")
         for k, v in defs.items():
             f.write(f"#define PORT_{k} {v:#x}\n")
-    script = ("m68k-amigaos-gcc -m68020 -O2 -fomit-frame-pointer -Wall -Wl,-Map,game.map -o game main.c layer.c inflate.c start.S > build.log 2>&1 "
+    script = ("m68k-amigaos-gcc -m68020 -O2 -fomit-frame-pointer -Wall -Wl,-Map,game.map -o game main.c layer.c sound.c inflate.c start.S > build.log 2>&1 "
               "|| { tail -30 build.log; exit 1; }; m68k-amigaos-nm -n game > game.nm; m68k-amigaos-strip game; "
               "printf 'game\\n' > startup-sequence; rm -f game.adf; "
               "xdftool game.adf format PORT ffs + boot install + write game game + write game.z game.z + makedir s "
-              "+ write startup-sequence s/startup-sequence 2>&1 | tail -5")
+              "+ write startup-sequence s/startup-sequence 2>&1 | tail -5"
+              + ("; xdftool game.adf write sound.z sound.z 2>&1 | tail -5" if snd_disk == 1 else
+                 "; rm -f game2.adf; xdftool game2.adf format PORT2 ffs + write sound.z sound.z 2>&1 | tail -5" if snd_disk == 2 else ""))
     r = subprocess.run(["docker", "run", "--rm", "-v", f"{adir}:/w", "-w", "/w", image, "sh", "-c", script],
                        capture_output=True, text=True)
     adf = os.path.join(adir, "game.adf")
     if r.returncode != 0 or not os.path.exists(adf):
         raise PortError("the Amiga build failed:\n" + (r.stdout + r.stderr)[-3000:])
     log(f"Amiga: {os.path.getsize(os.path.join(adir, 'game'))} bytes of program, {len(z)} of image (deflated); "
-        f"screen at ${screen:06X}. Needs a 68020, AGA, 2 MB chip and fast RAM")
+        f"screen at ${screen:06X}. Needs a 68020, AGA, 2 MB chip and fast RAM"
+        + (f"; {len(sz)} bytes of sound on a second disk, game2.adf (in DF1:, or swapped in when it asks for PORT2)" if snd_disk == 2 else
+           f"; {len(sz)} bytes of sound" if snd_disk else ""))
     return adf

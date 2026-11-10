@@ -6,6 +6,7 @@
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <exec/memory.h>
+#include <exec/execbase.h>
 #include "port_layout.h"
 
 typedef unsigned char u8;
@@ -16,6 +17,22 @@ void port_copy(const u8 *src, u8 *dst, u32 len);
 extern u32 stub_table[];
 
 static u8 *image;
+extern const u8 *port_sound;              /* sound.c: its data, in fast RAM */
+extern int port_hz;
+
+/* the music and the effects (sound.z, from agk port): on this disk, or on the second one */
+static void load_sound(void) {
+#if PORT_SNDDISK
+	BPTR f = Open(PORT_SNDDISK == 2 ? "PORT2:sound.z" : "sound.z", MODE_OLDFILE);
+	if (!f) { PutStr("no sound.z: silent\n"); return; }
+	u8 *z = AllocMem(PORT_SNDZSIZE, MEMF_FAST);
+	u8 *s = AllocMem(PORT_SNDSIZE, MEMF_FAST);
+	if (z && s && Read(f, z, PORT_SNDZSIZE) == PORT_SNDZSIZE && inflate_raw(z, s) == PORT_SNDSIZE) port_sound = s;
+	else PutStr("sound.z: not loaded (memory, or the file is damaged): silent\n");
+	if (z) FreeMem(z, PORT_SNDZSIZE);
+	Close(f);
+#endif
+}
 
 /* in supervisor mode with everything off: the image to its addresses */
 void port_place(void) {
@@ -42,6 +59,10 @@ int main(void) {
 	Close(f);
 	PutStr("unpacking...\n");
 	if (inflate_raw(z, image) != PORT_ROMSIZE + PORT_CODESIZE) { PutStr("game.z is damaged\n"); return 20; }
+	FreeMem(z, PORT_ZSIZE);
+	PutStr("sound...\n");
+	load_sound();
+	port_hz = SysBase->VBlankFrequency == 60 ? 60 : 50;
 	Disable();
 	Supervisor((void *)port_go);
 	return 0;

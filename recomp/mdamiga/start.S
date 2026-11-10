@@ -38,10 +38,13 @@ _port_go:
 	move.l	a1,0x68(a0)
 	move.l	a1,0x70(a0)
 	move.l	a1,0x74(a0)
+	lea	l6(pc),a1                   | CIA-B's timer: the sound's tick
 	move.l	a1,0x78(a0)
+	lea	_vectors,a0
 	movec	a0,vbr
 	jsr	_port_place
 	jsr	_layer_init
+	jsr	_sound_init
 	movec	cacr,d0
 	or.w	#0x0808,d0                  | clear the caches: code was just copied
 	movec	d0,cacr
@@ -120,6 +123,16 @@ _stub_table:                            | in agk port's SHIM_NAMES order
 	.long	stub_r8, stub_r16, stub_r32, stub_w8, stub_w16, stub_w32
 	.long	stub_fixa0, stub_fixa1, stub_fixa2, stub_fixa3, stub_fixa4, stub_fixa5, stub_fixa6
 	.long	0
+
+| ---- level 6: sixty times a second, whatever the game is doing: the sound (sound.c)
+l6:
+	movem.l	d0-d1/a0-a1,-(sp)
+	move.b	0xbfdd00,d0                 | (reading it lets go of the line)
+	move.w	#0x2000,0xdff09c
+	move.w	#0x2000,0xdff09c
+	jsr	_sound_tick
+	movem.l	(sp)+,d0-d1/a0-a1
+	rte
 
 | ---- level 3: the vertical blank. The layer's part, then the game's own handler (the vector the
 | ROM has for the Mega Drive's level 6), which returns through `post`: a frame is drawn there when

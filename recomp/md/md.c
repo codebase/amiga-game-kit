@@ -4,10 +4,14 @@
  * the Z80 bus latches, and the memory ports in between. Time is the 68000's
  * cycle count: a line every 488 cycles, 262 lines a frame (NTSC); each line
  * is rendered as it ends, so palette and scroll changes from the horizontal
- * interrupt land on the right lines. The Z80 and the sound chips are not
- * run yet (the bus handshake is honoured so the game's driver loads). */
+ * interrupt land on the right lines. The Z80 runs beside it (z80.c) with the
+ * game's sound driver; the YM2612 and the PSG are not heard here, but what is
+ * written to them can be recorded: --sound-rip DIR plays every sound request
+ * the game can make through the driver and writes down what the chips were
+ * told (agk port turns that into the Amiga's music). */
 #include "host.h"
 #include "start.h"
+#include "z80.h"
 #include <string.h>
 
 #ifndef DMA_RD16
@@ -40,12 +44,84 @@ static int vint_pending, hint_pending;
 static int dma_fill_pending;
 static u32 rgb[64];                       /* CRAM as RGB */
 static u8 z80ram[0x2000];
-static int z80_busreq, z80_reset = 1;
+static int z80_busreq, z80_held = 1;
 static u8 pad_th[2];                      /* the TH select line of each port */
 static u8 pad_ctrl[2];
 u16 pad_state[2];                         /* bits: 0 up 1 down 2 left 3 right 4 B 5 C 6 A 7 Start (1 = pressed) */
-static u16 psg_last;
 static u8 ym_reg[2][256], ym_addr[2];
+
+/* ------------------------------------------------------------ the Z80 */
+static z80_t z80;
+static u32 z80_bank;                      /* where its $8000..$FFFF window is in the 68000's memory */
+static u64 z80_time;                      /* T-states run */
+static int z80_int;                       /* the vertical interrupt's line is low */
+static u32 z80_steps;                     /* instructions since it was last let out of reset */
+static u8 comm_w[0x2000], comm_r[0x2000]; /* its RAM as the 68000 used it while the driver ran: the requests and the flags */
+static struct snap { z80_t z; u8 ram[0x2000]; u32 bank; } snap_now, snap_idle;
+static int have_idle;
+static FILE *ripf;                        /* --sound-rip: the log */
+static u8 z80_romread[REGION0_SIZE / 8];
+static int rip_mode;
+static u32 rip_cyc0;                      /* the frame's first T-state */
+static u8 *dac_buf; static u32 dac_n, dac_cap, dac_frame, dac_cyc, dac_first, dac_last;
+static u32 rip_frame;
+static int key_on[8], psg_att[4] = { 15, 15, 15, 15 }, psg_ch;
+
+static void dac_flush(void) {
+	if (dac_n && ripf && rip_mode == 1) {
+		u32 h[4] = { dac_frame, dac_cyc, dac_n, dac_last - dac_first };
+		fputc('D', ripf); fwrite(h, 4, 4, ripf); fwrite(dac_buf, 1, dac_n, ripf);
+	}
+	dac_n = 0;
+}
+static void ym_write(int part, int r, u8 v) {
+	ym_reg[part][r] = v;
+	if (!part && r == 0x28) key_on[v & 7] = v >> 4;
+	if (!ripf || !rip_mode) return;
+	u32 t = (u32)z80_time;
+	if (!part && r == 0x2A) {             /* a sample for the DAC: gathered into bursts */
+		if (dac_n && t - dac_last > 3000) dac_flush();
+		if (!dac_n) { dac_frame = rip_frame; dac_cyc = t - rip_cyc0; dac_first = t; }
+		if (dac_n == dac_cap) dac_buf = realloc(dac_buf, dac_cap = dac_cap ? dac_cap * 2 : 65536);
+		dac_buf[dac_n++] = v; dac_last = t;
+		return;
+	}
+	if (rip_mode == 2 && !(r == 0x28 || (r >= 0x40 && r < 0x50))) return;
+	u16 c = (u16)(t - rip_cyc0);
+	fputc('Y', ripf); fputc(part, ripf); fputc(r, ripf); fputc(v, ripf); fwrite(&c, 2, 1, ripf);
+}
+static void psg_write(u8 v) {
+	if (v & 0x80) { psg_ch = v >> 5 & 3; if (v & 0x10) psg_att[psg_ch] = v & 15; }
+	if (!ripf || rip_mode != 1) return;
+	u16 c = (u16)((u32)z80_time - rip_cyc0);
+	fputc('P', ripf); fputc(v, ripf); fwrite(&c, 2, 1, ripf);
+}
+u8 z80_rd(u16 a) {
+	if (a < 0x4000) return z80ram[a & 0x1FFF];
+	if (a >= 0x8000) {
+		u32 m = z80_bank | (a & 0x7FFF);
+		if (m >= REGION0_SIZE) return 0xFF;
+		z80_romread[m >> 3] |= (u8)(1 << (m & 7));
+		return mem[m];
+	}
+	if (a < 0x6000) return 0;             /* the YM2612's status: never busy, no timers */
+	return 0xFF;
+}
+void z80_wr(u16 a, u8 v) {
+	if (a < 0x4000) z80ram[a & 0x1FFF] = v;
+	else if (a < 0x6000) { int part = a >> 1 & 1; if (a & 1) ym_write(part, ym_addr[part], v); else ym_addr[part] = v; }
+	else if (a < 0x6100) z80_bank = (z80_bank >> 1 | (u32)(v & 1) << 23) & 0xFF8000;
+	else if (a == 0x7F11) psg_write(v);
+}
+static void z80_run_to(u64 t) {
+	if (z80_held || z80_busreq) { z80_time = t; return; }
+	while (z80_time < t) {
+		if (z80_int) { int c = z80_irq(&z80); if (c) { z80_time += (u64)c; z80_int = 0; } }
+		z80_time += (u64)z80_step(&z80);
+		z80_steps++;
+	}
+}
+static void z80_sync(void) { z80_run_to(cpu.cycles * 7 / 15); }
 
 static void cram_set(int i, u16 v) {
 	cram[i] = v & 0xEEE;
@@ -256,9 +332,10 @@ static u32 md_io_read_(u32 a, int bits) {
 		}
 		return bits == 8 ? v : v << 8 | v;  /* (the byte is at the odd address; a word read sees it in both) */
 	}
-	if (a >= 0xA11100 && a < 0xA11102) { u32 v = (z80_busreq && !z80_reset) || !z80_busreq ? (z80_busreq ? 0 : 0x100) : 0; return bits == 8 ? ((a & 1) ? v & 0xFF : v >> 8) : v; }
+	if (a >= 0xA11100 && a < 0xA11102) { u32 v = (z80_busreq && !z80_held) || !z80_busreq ? (z80_busreq ? 0 : 0x100) : 0; return bits == 8 ? ((a & 1) ? v & 0xFF : v >> 8) : v; }
 	if (a >= 0xA00000 && a < 0xA10000) {   /* the Z80's side, while the 68000 holds its bus */
-		if (a < 0xA04000) { u32 v = z80ram[a & 0x1FFF]; return bits == 8 ? v : v << 8 | v; }
+		z80_sync();
+		if (a < 0xA04000) { u32 v = z80ram[a & 0x1FFF]; if (z80_steps > 20000) comm_r[a & 0x1FFF] = 1; return bits == 8 ? v : v << 8 | v; }
 		if (a < 0xA04004) return 0;         /* YM2612 status: never busy */
 		return 0xFF;
 	}
@@ -274,7 +351,7 @@ static void md_io_write_(u32 a, u32 v, int bits) {
 		}
 		return;
 	}
-	if (a >= 0xC00010 && a < 0xC00018) { psg_last = (u16)v; return; }   /* the PSG */
+	if (a >= 0xC00010 && a < 0xC00018) { psg_write((u8)v); return; }   /* the PSG */
 	if (a >= 0xA10000 && a < 0xA10020) {
 		int p = -1;
 		switch (a & 0x1E) {
@@ -284,12 +361,23 @@ static void md_io_write_(u32 a, u32 v, int bits) {
 		if (p >= 0) pad_th[p] = (v >> 6) & 1;
 		return;
 	}
+	if (a >= 0xA11100 && a < 0xA11202) z80_sync();
 	if (a >= 0xA11100 && a < 0xA11102) { z80_busreq = (v >> 8) & 1 || (bits == 8 && !(a & 1) && (v & 1)); if (bits == 16) z80_busreq = (v >> 8) & 1; return; }
-	if (a >= 0xA11200 && a < 0xA11202) { int run = bits == 16 ? (v >> 8) & 1 : (!(a & 1) ? v & 1 : z80_reset ? 0 : 1); z80_reset = !run; return; }
+	if (a >= 0xA11200 && a < 0xA11202) { int run = bits == 16 ? (v >> 8) & 1 : (!(a & 1) ? v & 1 : z80_held ? 0 : 1); if (!run && !z80_held) { z80_reset(&z80); z80_steps = 0; } z80_held = !run; return; }
 	if (a >= 0xA00000 && a < 0xA10000) {
-		if (a < 0xA04000) { if (bits == 16) { z80ram[a & 0x1FFF] = (u8)(v >> 8); } else z80ram[a & 0x1FFF] = (u8)v; return; }
-		if (a < 0xA04004) { int port = (a >> 1) & 1; if (a & 1) ym_reg[port][ym_addr[port]] = (u8)v; else ym_addr[port] = (u8)v; return; }
-		return;                           /* the bank register, the Z80's VDP window: nothing yet */
+		z80_sync();
+		if (a < 0xA04000) {
+			u8 b = bits == 16 ? (u8)(v >> 8) : (u8)v;
+			if (z80_steps > 20000) {      /* the driver is up: this is the game talking to it */
+				if (b && !have_idle) { snap_idle = snap_now; have_idle = 1; }   /* (as it stood before the first request) */
+				comm_w[a & 0x1FFF] = 1;
+			}
+			z80ram[a & 0x1FFF] = b;
+			return;
+		}
+		if (a < 0xA04004) { int port = (a >> 1) & 1; if (a & 1) ym_write(port, ym_addr[port], (u8)v); else ym_addr[port] = (u8)v; return; }
+		if (a >= 0xA06000 && a < 0xA06100) z80_bank = (z80_bank >> 1 | (u32)(v & 1) << 23) & 0xFF8000;
+		return;
 	}
 	/* TMSS ($A14000, $A14101) and the rest: nothing */
 }
@@ -436,10 +524,13 @@ void run_events(void) {
 			if (hint_counter-- == 0) { hint_counter = reg[10]; hint_pending = 1; irq_update(); }   /* the horizontal interrupt */
 		} else hint_counter = reg[10];
 		line_start += CYCLES_PER_LINE;
+		z80_int = 0;
+		z80_run_to(line_start * 7 / 15);
 		line++;
-		if (line == ACTIVE_LINES) { vint_pending = 1; irq_update(); }   /* the vertical blank begins */
+		if (line == ACTIVE_LINES) { vint_pending = 1; z80_int = 1; irq_update(); }   /* the vertical blank begins */
 		if (line >= LINES) {
 			line = 0;
+			if (!have_idle) { snap_now.z = z80; memcpy(snap_now.ram, z80ram, sizeof z80ram); snap_now.bank = z80_bank; }
 			frame_count++;
 			frame_done = 1;
 			frame_hook();
@@ -474,3 +565,103 @@ void md_init(void) {
 /* silence until the Z80, the YM2612 and the PSG are run */
 void audio_render(s16 *out, int n, int rate) { (void)rate; memset(out, 0, (size_t)n * 4); }
 void machine_audio_tag(void) {}
+
+/* ------------------------------------------------------ --sound-rip DIR */
+/* After the run: the driver as it stood before the game's first request is given every request
+ * the game could make (each value, at each address of the Z80's RAM the game wrote to), alone,
+ * a frame's interrupt at a time, and what it tells the chips is written to DIR/sound.rip:
+ *   'R' addr.w val mode   a request begins (mode 1: from silence; 2: over the music, see below)
+ *   'Y' part reg val cyc.w   a YM2612 write (cyc: T-states into the frame)      'P' val cyc.w   the PSG
+ *   'D' frame.l cyc.l n.l span.l data   a run of n DAC samples over span T-states
+ *   'F' the frame ends
+ *   'E' the request is done (silent for two seconds, or four minutes: music that goes round, which
+ *       agk port finds the round of from the notes)
+ * Mode 2 repeats each request three seconds into the first music found, with only key-ons and
+ * levels logged: what a request does to music playing (stops it, fades it, plays over it) is read
+ * from that. sound.idx lists the requests (offset, address, value, mode, frames, 0);
+ * z80idle.bin is the idle driver's RAM, sound.txt the addresses, z80rom.bin the ROM bytes the
+ * driver read (music and samples: the port has no use for them once this is done). */
+static const char *rip_dir;
+void md_sound_rip_arg(const char *d) { rip_dir = d; }
+static void snap_restore(const struct snap *s) { z80 = s->z; memcpy(z80ram, s->ram, sizeof z80ram); z80_bank = s->bank; }
+static void rip_frame_run(void) {
+	rip_cyc0 = (u32)z80_time;
+	u64 end = z80_time + CYCLES_PER_FRAME * 7 / 15;
+	z80_int = 1; z80_run_to(z80_time + 228);
+	z80_int = 0; z80_run_to(end);
+	rip_frame++;
+	if (ripf && rip_mode) fputc('F', ripf);
+}
+#define RIP_MAX 14400
+static FILE *ripidx;
+static void rip_one(const struct snap *base, int addr, int val, int mode, int max) {
+	snap_restore(base);
+	for (int i = 0; i < 8; i++) key_on[i] = 0;
+	for (int i = 0; i < 4; i++) psg_att[i] = 15;
+	dac_n = 0; rip_frame = 0; rip_mode = mode;
+	u16 a16 = (u16)addr;
+	long at = ftell(ripf);
+	fputc('R', ripf); fwrite(&a16, 2, 1, ripf); fputc(val, ripf); fputc(mode, ripf);
+	if (val) z80ram[addr & 0x1FFF] = (u8)val;
+	int quiet = 0;
+	for (int f = 0; f < max; f++) {
+		rip_frame_run();
+		int on = dac_n && (u32)z80_time - dac_last < 3000;
+		for (int i = 0; i < 7; i++) if (i != 3 && key_on[i]) on = 1;
+		for (int i = 0; i < 4; i++) if (psg_att[i] < 15) on = 1;
+		if (on) quiet = 0; else if (++quiet >= 120 && mode == 1) break;
+	}
+	dac_flush();
+	fputc('E', ripf);
+	rip_mode = 0;
+	fprintf(ripidx, "%ld %04X %02X %d %u 0\n", at, addr, val, mode, rip_frame);
+}
+void md_sound_rip(void) {
+	char path[1024];
+	if (!rip_dir) return;
+	if (!have_idle) { fprintf(stderr, "sound-rip: the game made no request of its sound driver in this run (the Z80's RAM was never written with the driver up); run more frames\n"); return; }
+	snprintf(path, sizeof path, "%s/z80idle.bin", rip_dir);
+	FILE *f = fopen(path, "wb");
+	if (!f) { fprintf(stderr, "sound-rip: can't write %s\n", path); return; }
+	fwrite(snap_idle.ram, 1, sizeof snap_idle.ram, f); fclose(f);
+	snprintf(path, sizeof path, "%s/sound.txt", rip_dir);
+	f = fopen(path, "w");
+	for (int a = 0; a < 0x2000; a++) {
+		if (comm_w[a]) fprintf(f, "w %04X\n", a);
+		if (comm_r[a]) fprintf(f, "r %04X %02X\n", a, snap_idle.ram[a]);
+	}
+	fclose(f);
+	snprintf(path, sizeof path, "%s/sound.rip", rip_dir);
+	ripf = fopen(path, "wb");
+	snprintf(path, sizeof path, "%s/sound.idx", rip_dir);
+	ripidx = fopen(path, "w");
+	z80_held = 0; z80_busreq = 0;
+	int n = 0, loops = 0, ma = -1, mv = 0;
+	for (int a = 0; a < 0x2000; a++) {
+		if (!comm_w[a]) continue;
+		for (int v = 1; v < 256; v++) {
+			rip_one(&snap_idle, a, v, 1, RIP_MAX);
+			n++;
+			if (rip_frame >= RIP_MAX) { loops++; if (ma < 0) { ma = a; mv = v; } }   /* still playing: music that goes round */
+		}
+	}
+	if (ma >= 0) {                        /* each request again, with music going */
+		static struct snap play;
+		snap_restore(&snap_idle);
+		z80ram[ma] = (u8)mv;
+		for (int i = 0; i < 180; i++) rip_frame_run();
+		play.z = z80; memcpy(play.ram, z80ram, sizeof z80ram); play.bank = z80_bank;
+		u16 m16 = (u16)ma;
+		fputc('M', ripf); fwrite(&m16, 2, 1, ripf); fputc(mv, ripf);
+		rip_one(&play, 0, 0, 2, 480);
+		for (int a = 0; a < 0x2000; a++) {
+			if (!comm_w[a]) continue;
+			for (int v = 1; v < 256; v++) rip_one(&play, a, v, 2, 480);
+		}
+	}
+	fclose(ripf); ripf = NULL;
+	fclose(ripidx);
+	snprintf(path, sizeof path, "%s/z80rom.bin", rip_dir);   /* the ROM as the driver read it: a bit a byte */
+	f = fopen(path, "wb"); fwrite(z80_romread, 1, REGION0_SIZE / 8, f); fclose(f);
+	fprintf(stderr, "sound-rip: %d requests played (%d of them never ended: music that loops) -> %s\n", n, loops, path);
+}

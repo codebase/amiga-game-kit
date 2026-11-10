@@ -10,9 +10,10 @@ Status: stages 1 to 3 work (the game's code, rewritten for the Amiga's memory
 map, runs frame for frame against the original on the host), and stage 4 has
 a hardware layer: `agk port DIR --amiga` builds a bootable floppy, and Sonic 2
 boots on an A1200 with fast RAM and plays Emerald Hill with the planes as an
-AGA dual playfield the copper scrolls, 15 colours a playfield. It needs an
-accelerated A1200 to hold its speed; a stock one and sound are the work
-ahead, an A500 version a reduced art pass after that.
+AGA dual playfield the copper scrolls, 15 colours a playfield, and its music
+and effects on Paula's four channels. It needs an accelerated A1200 to hold
+its speed; a stock one is the work ahead, an A500 version a reduced art pass
+after that.
 
 ## The stages
 
@@ -31,8 +32,9 @@ s2/game --play --analysis s2                         # play it; every run adds t
 s2/game --frames 4000 --input keys.txt --analysis s2 # or scripted
 ```
 
-The runner is a Mega Drive for the host (VDP, pads, the Z80's bus; no sound
-yet), there to measure the game, not to be the product. `--analysis DIR` runs
+The runner is a Mega Drive for the host (VDP, pads, the Z80 with the game's
+sound driver; the sound chips are logged, not heard), there to measure the
+game, not to be the product. `--analysis DIR` runs
 everything through the interpreter, where the pc is exact, and records:
 
 | file | what |
@@ -44,6 +46,18 @@ everything through the interpreter, where the pc is exact, and records:
 
 The more of the game is played, the more of it the port has. Arrows/WASD are
 the d-pad, Z/X/C the A/B/C buttons, Return is Start.
+
+```sh
+s2/game --frames 4000 --input keys.txt --sound-rip s2   # the game's sound, for stage 4
+```
+
+`--sound-rip DIR` is the analysis of the sound. After the run, the Z80
+driver as it stood before the game's first request is given every request
+the game could make (each value 1..255 at each address of the Z80's RAM the
+game wrote requests to), alone, and what it tells the YM2612 and the PSG is
+logged (`sound.rip`), a second time over music that is playing (what a
+request does to the music says what it is). `z80rom.bin` records the ROM
+bytes the driver read. It takes a minute or two.
 
 ### 2. `agk port`: the code rewritten
 
@@ -124,8 +138,8 @@ fits one floppy) into fast RAM and takes the machine over; `start.S` has the
 entry points the rewritten code calls and the vertical blank, which hands the
 game its own interrupt; `layer.c` is the hardware layer (`layer_soft.c` is the
 first one, kept for reference: the VDP drawn by the CPU into six bitplanes,
-exact and slow). Cursor keys or the joystick, Z/X/C or fire, Return for Start.
-No sound yet.
+exact and slow); `sound.c` plays the sound. Cursor keys or the joystick,
+Z/X/C or fire, Return for Start.
 
 How `layer.c` works, and what it has learned:
 
@@ -150,8 +164,41 @@ How `layer.c` works, and what it has learned:
 - **Bitplane pointers carry.** Skipping the high word of a pointer in the
   copper list is only right while the running pointer is in the same 64K.
 
+**Sound** (`harness/agk/mdsound.py`, `sound.c`). An FM chip can't be emulated
+on an A1200 beside the game, so the driver is run on the host instead (the
+sound rip above) and its output is turned into what Paula plays:
+
+- every key-on in the log is a note, with its FM patch and its pitch and
+  level frame by frame (vibrato, slides and fades come along as they are);
+- each patch is rendered once per octave it is used in, by an FM synthesiser
+  in the build, to an 8-bit sample: the attack, then one period looped. The
+  slow part of the envelope is left out of the sample and played as volume.
+  PSG squares and noise are tiny loops; drum samples are the game's own,
+  cut out of the DAC writes;
+- at any moment the four most important notes have Paula's four channels
+  (decided in the build); music that goes round is found from the notes
+  repeating;
+- the Amiga gets a stream: per sixtieth of a second, per channel, "start
+  sample N, this period, this volume". The player runs on a CIA timer, so
+  the music keeps its beat when the game doesn't;
+- the game's requests (a byte written to the Z80's RAM) are answered from a
+  table: music, an effect over the music (channel 3, a second one on 2), a
+  jingle, stop, fade. What the game reads back is the idle driver's RAM.
+
+The ROM bytes only the driver read (the music data and samples) are blanked
+in the Amiga's image and used as chip RAM for samples. The sound data goes
+on the game's disk if it fits, else on a second one (`game2.adf`, volume
+`PORT2`: in DF1:, or swapped in when the loader asks). Samples live in fast
+RAM; the effects' are copied to chip RAM once, a piece of music's when it
+starts.
+
+What it costs: four voices where the Mega Drive had ten (notes are dropped
+when more sound at once), Paula's hard left and right, and an FM sound that
+is a snapshot per octave rather than the chip. Tempo changes (speed shoes)
+and the driver's pause aren't followed yet.
+
 Not in it yet: the interlaced two-player mode (the attract mode's second
-demo), the window plane, water palettes, hardware sprites, sound; and it
+demo), the window plane, water palettes, hardware sprites; and it
 still takes more than a frame on a stock A1200 (`a1200-accel` is the profile
 it is developed on).
 
@@ -169,7 +216,7 @@ what changes into Amiga work:
 | 80 sprites of up to 32x32, from tiles | hardware sprites for the player (AGA: 16 colours of their own); the rest as masked blits into the foreground playfield, with the tiles under them restored |
 | 61 colours on screen | 16 + 16 + the sprites': each zone's palettes quantised at build time; this is where the picture gives |
 | `VInt` / `HInt` at levels 6 and 4 | the vertical blank is level 3 on an Amiga, so the game's interrupt masks are rewritten with it |
-| YM2612 FM + PSG, driven by a Z80 | Paula: the driver's music and sound requests answered by a player whose instruments are rendered from the FM patches at build time |
+| YM2612 FM + PSG, driven by a Z80 | Paula: the driver is run on the host and its notes become a four-channel stream; instruments are rendered from the FM patches at build time |
 
 An A500 version follows the same layer with 3+3 bitplanes, a smaller window
 and fewer blits per frame; that one is an art pass as much as a port.

@@ -36,6 +36,7 @@ all tests pass. Check both.
 | `harness/agk/profile.py` | `agk profile`: places the emulator's per-line PC and bus samples in the game (linker map + disassembly) |
 | `harness/agk/lint.py` | `agk lint`: per-frame functions that call libgcc maths (from `objdump -dr` of the game's objects) |
 | `harness/agk/port.py` | `agk port`: a Mega Drive game's code rewritten for the Amiga's memory map (its docstring is the reference; `docs/genesis-port.md` the pipeline) |
+| `harness/agk/mdsound.py` | `agk port`'s sound: a sound rip's log (notes of the game's Z80 driver) → FM patches rendered to samples, a four-channel stream and request table for Paula (its docstring is the reference) |
 | `harness/agk/mcp.py` | MCP stdio server (stdlib only) |
 | `runtime/` | C library every game links: `agk/debug.h` (the serial channel), `perf.h` (frame meter, memory report), `blitq.h` (blit queue), `copw.h` (copper writer), `text.h` (text lines, the kit font: `tools/font8.py`), `stars.h` (sprite starfield), `pack.h` (packed disk files: load + unpack) |
 | `templates/game/` | what `agk new` copies; `{{name}}` / `{{kit}}` are substituted |

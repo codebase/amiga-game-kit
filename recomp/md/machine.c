@@ -19,11 +19,16 @@ void md_save_sites(void);
 void port_report(void);
 void machine_at_exit(void) { md_dump_vdp(); port_report(); }
 #else
-void machine_at_exit(void) { md_dump_vdp(); md_save_sites(); }
+void md_sound_rip(void);
+void machine_at_exit(void) { md_dump_vdp(); md_save_sites(); md_sound_rip(); }
 #endif
 
-int machine_arg(int argc, char **argv, int *i) { (void)argc; (void)argv; (void)i; return 0; }
-const char *machine_usage(void) { return ""; }
+void md_sound_rip_arg(const char *dir);
+int machine_arg(int argc, char **argv, int *i) {
+	if (!strcmp(argv[*i], "--sound-rip") && *i + 1 < argc) { md_sound_rip_arg(argv[++*i]); return 1; }
+	return 0;
+}
+const char *machine_usage(void) { return "[--sound-rip DIR] "; }
 
 void machine_start(void) {
 	cpu.d[0] = START_D0; cpu.d[1] = START_D1; cpu.d[2] = START_D2; cpu.d[3] = START_D3;

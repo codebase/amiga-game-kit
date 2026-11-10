@@ -639,7 +639,7 @@ def cmd_port(args):
         raise SystemExit("port: the checking build didn't compile")
     if args.amiga:
         try:
-            adf = port.build_amiga(out, ROOT, image)
+            adf = port.build_amiga(out, ROOT, image, src)
         except port.PortError as e:
             raise SystemExit(f"port: {e}")
         print(f"built {rel(adf)}: boots on an A1200 with fast RAM (arrows + Z/X/C or the joystick, Return = Start)")

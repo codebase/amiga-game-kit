@@ -251,6 +251,7 @@ static u8 pad_read(int p) {
 	return (u8)((~v & 0x7F) | (pad_th[p] ? 0x40 : 0));
 }
 
+u32 sound_z80_read(u32 a);
 static u32 io_read(u32 a, int bits) {
 	if (a >= 0xC00000 && a < 0xC00010) {
 		u32 v;
@@ -280,9 +281,12 @@ static u32 io_read(u32 a, int bits) {
 		}
 		return bits == 8 ? v : v << 8 | v;
 	}
+	if (a >= 0xA00000 && a < 0xA04000) { u32 v = sound_z80_read(a); return bits == 8 ? v : v << 8 | v; }   /* the sound driver's RAM */
 	return 0;
 }
 
+u32 sound_z80_read(u32 a);
+void sound_z80_write(u32 a, u32 v);
 static void io_write(u32 a, u32 v, int bits) {
 	if (a >= 0xC00000 && a < 0xC00010) {
 		if (bits == 8) v = (v & 0xFF) * 0x101;
@@ -299,7 +303,9 @@ static void io_write(u32 a, u32 v, int bits) {
 		case 0x08: pad_ctrl[0] = (u8)v; break;
 		case 0x0A: pad_ctrl[1] = (u8)v; break;
 		}
+		return;
 	}
+	if (a >= 0xA00000 && a < 0xA04000) sound_z80_write(a, bits == 16 ? v >> 8 : v);   /* a request of the sound driver (sound.c) */
 }
 
 void sh_r(u32 a, int bits) {
