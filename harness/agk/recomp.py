@@ -456,6 +456,7 @@ class Translator:
         self.guards = set(guards or ())   # instructions the game rewrites (patched.txt): check the opcode each time
         self.targets = set()              # branch targets: where a block begins
         self.block_of = {}                # address -> block number, after translate()
+        self.skipped_data = 0             # uncovered 'instructions' that didn't parse: left to the interpreter
         self.addrs = {a for a, *_ in instrs}
         self.lines = []
         self.pending_ticks = 0
@@ -517,6 +518,7 @@ class Translator:
                 # an operand that isn't one); the interpreter gets it if the game ever goes there
                 del L[cyc_at:]
                 self.not_code.add(addr)
+                self.skipped_data += 1
                 L.append(f"\t{{ cpu.pc = {addr:#x}u; goto dispatch; }}   /* not an instruction we know ({mn} {ops}): the interpreter's */")
                 continue
             if not self.traced:
@@ -630,7 +632,7 @@ class Translator:
                     for reg in regs:
                         L.append(f"\twr{bits}(ea, {reg}); ea += {bits // 8};")
             return
-        if base == "movep":               # bytes at every other address <-> a data register (8-bit ports)
+        if base == "movep":               # bytes at every other address <-> a data register (the Z80 side, 8-bit ports)
             mem_first = "@" in o[0]
             m = re.fullmatch(r"(a[0-7]|sp|fp)@\((-?\d+)\)", o[0] if mem_first else o[1])
             if not m:
@@ -647,20 +649,6 @@ class Translator:
                     L.append(f"\twr8(ea, D[{dn}] >> 24); wr8(ea + 2, D[{dn}] >> 16); wr8(ea + 4, D[{dn}] >> 8); wr8(ea + 6, D[{dn}]);")
                 else:
                     L.append(f"\twr8(ea, D[{dn}] >> 8); wr8(ea + 2, D[{dn}]);")
-            return
-        if base in ("abcd", "sbcd"):      # Dy,Dx or -(Ay),-(Ax): bytes
-            fn = "bcd_add" if base == "abcd" else "bcd_sub"
-            m1 = re.fullmatch(r"(a[0-7]|sp|fp)@-", o[0]); m2 = re.fullmatch(r"(a[0-7]|sp|fp)@-", o[1])
-            if m1 and m2:
-                ry, rx = reg_name(m1.group(1)), reg_name(m2.group(1))
-                L.append(f"\t{ry} -= {2 if ry == 'A[7]' else 1}; tmp = rd8({ry}); {rx} -= {2 if rx == 'A[7]' else 1}; wr8({rx}, {fn}(tmp, rd8({rx})));")
-            else:
-                dy, dx = int(o[0][1]), int(o[1][1])
-                L.append(f"\tsetd({dx}, {fn}(D[{dy}] & 0xFF, D[{dx}] & 0xFF), 8);")
-            return
-        if base == "nbcd":
-            dst = opnd(0, 8)
-            emit(dst, f"tmp = bcd_sub({dst.read()}, 0);", dst.write("tmp"))
             return
         if base == "lea":
             src, dst = opnd(0, 32), opnd(1, 32)
@@ -722,6 +710,20 @@ class Translator:
                   "addx": "op_addx", "subx": "op_subx"}[base]
             emit(src, f"tmp = {src.read()};")
             emit(dst, f"tmp = {fn}(tmp, {dst.read()}, {bits});", dst.write("tmp"))
+            return
+        if base in ("abcd", "sbcd"):      # Dy,Dx or -(Ay),-(Ax): bytes
+            fn = "bcd_add" if base == "abcd" else "bcd_sub"
+            m1 = re.fullmatch(r"(a[0-7]|sp|fp)@-", o[0]); m2 = re.fullmatch(r"(a[0-7]|sp|fp)@-", o[1])
+            if m1 and m2:
+                ry, rx = reg_name(m1.group(1)), reg_name(m2.group(1))
+                L.append(f"\t{ry} -= {2 if ry == 'A[7]' else 1}; tmp = rd8({ry}); {rx} -= {2 if rx == 'A[7]' else 1}; wr8({rx}, {fn}(tmp, rd8({rx})));")
+            else:
+                dy, dx = int(o[0][1]), int(o[1][1])
+                L.append(f"\tsetd({dx}, {fn}(D[{dy}] & 0xFF, D[{dx}] & 0xFF), 8);")
+            return
+        if base == "nbcd":
+            dst = opnd(0, 8)
+            emit(dst, f"tmp = bcd_sub({dst.read()}, 0);", dst.write("tmp"))
             return
         if base in ("cmp", "cmpi", "cmpa", "cmpm"):
             src, dst = opnd(0), opnd(1)
@@ -875,18 +877,26 @@ class Translator:
         raise RecompError(f"instruction not translated: {mn}")
 
 
-def generate(instrs, covered, entry_pc, memory=(), hooks=None, guards=None):
+AMIGA_REGIONS = ((0, 0x200000), (0xC00000, 0x200000))   # chip RAM, slow RAM: where translated code can live
+
+
+def generate(instrs, covered, entry_pc, memory=(), hooks=None, guards=None, regions=AMIGA_REGIONS):
+    """the C for the translation. `regions` are the machine's two address ranges that
+    hold code ((base, size) each; the runtime's bus.h defines the same as REGION0/1_*):
+    the dispatch tables cover them, and an address elsewhere is the interpreter's"""
     t = Translator(instrs, covered, memory, hooks, guards)
     body = t.translate()
     guarded = sorted(a for a in t.guards if a in t.addrs)
+    (r0b, r0s), (r1b, r1s) = regions
     out = ['#include "m68k.h"', "#include <stdlib.h>", "static int recomp_trace;",
            *[f"int {fn}(void);" for fn in sorted(set((hooks or {}).values()))],
-           "static void *table[0x100000];       /* chip RAM, by address / 2: the label, or 0 */",
-           "static void *slow[0x100000];        /* $C00000.. likewise */",
-           "static u16 opword[0x100000], opword_slow[0x100000];   /* the first word of each, as translated */",
-           "static u32 blk[0x100000], blk_slow[0x100000];         /* the block each belongs to */",
+           "/* the dispatch: by address / 2 within each of the machine's two code regions */",
+           "static void *table[REGION0_SIZE >> 1];       /* the label, or 0 */",
+           "static void *slow[REGION1_SIZE >> 1];",
+           "static u16 opword[REGION0_SIZE >> 1], opword_slow[REGION1_SIZE >> 1];   /* the first word of each, as translated */",
+           "static u32 blk[REGION0_SIZE >> 1], blk_slow[REGION1_SIZE >> 1];         /* the block each belongs to */",
            f"static u32 dirty[{max(t.nblocks, 1)}];               /* per block: how many of its instruction words the game has overwritten */",
-           "u8 code_bits[0x20000], code_bits_slow[0x20000];        /* 16-byte granules holding translated code (m68k.h's write hook looks here first) */",
+           "u8 code_bits[REGION0_SIZE >> 4], code_bits_slow[REGION1_SIZE >> 4];        /* 16-byte granules holding translated code (bus.h's write hook looks here first) */",
            f"static const u32 guarded_at[] = {{ {', '.join(f'{a:#x}u' for a in guarded) or '0xFFFFFFFFu'} }};   /* checked by their own code: never dirty */",
            "void interp_run(void);",
            "void note_patched(u32 addr, u16 was, u16 now);",
@@ -894,13 +904,13 @@ def generate(instrs, covered, entry_pc, memory=(), hooks=None, guards=None):
            "   translated, and is its block clean? (a game that loads code over it, or",
            "   rewrites an instruction, gets the interpreter there instead) */",
            "int translated(u32 pc) {",
-           "\tif (pc < 0x200000u) return table[pc >> 1] != 0 && opword[pc >> 1] == rd16(pc) && dirty[blk[pc >> 1]] == 0;",
-           "\tif (pc >= 0xC00000u && pc < 0xE00000u) return slow[(pc - 0xC00000u) >> 1] != 0 && opword_slow[(pc - 0xC00000u) >> 1] == rd16(pc) && dirty[blk_slow[(pc - 0xC00000u) >> 1]] == 0;",
+           "\tif (pc - REGION0_BASE < REGION0_SIZE) { u32 i = (pc - REGION0_BASE) >> 1; return table[i] != 0 && opword[i] == rd16(pc) && dirty[blk[i]] == 0; }",
+           "\tif (pc - REGION1_BASE < REGION1_SIZE) { u32 i = (pc - REGION1_BASE) >> 1; return slow[i] != 0 && opword_slow[i] == rd16(pc) && dirty[blk_slow[i]] == 0; }",
            "\treturn 0;",
            "}",
            "int translated_known(u32 pc) {   /* the translation has this address (whatever is there now) */",
-           "\tif (pc < 0x200000u) return table[pc >> 1] != 0;",
-           "\tif (pc >= 0xC00000u && pc < 0xE00000u) return slow[(pc - 0xC00000u) >> 1] != 0;",
+           "\tif (pc - REGION0_BASE < REGION0_SIZE) return table[(pc - REGION0_BASE) >> 1] != 0;",
+           "\tif (pc - REGION1_BASE < REGION1_SIZE) return slow[(pc - REGION1_BASE) >> 1] != 0;",
            "\treturn 0;",
            "}",
            "static int is_guarded(u32 a) {",
@@ -920,8 +930,8 @@ def generate(instrs, covered, entry_pc, memory=(), hooks=None, guards=None):
            "\t\telse if (bits == 16) new_ = v & 0xFFFF;",
            "\t\telse new_ = (w == a) ? v >> 16 : v & 0xFFFF;",
            "\t\tu16 op; u32 *d;",
-           "\t\tif (w < 0x200000u) { if (!table[w >> 1]) continue; op = opword[w >> 1]; d = &dirty[blk[w >> 1]]; }",
-           "\t\telse if (w >= 0xC00000u && w < 0xE00000u) { if (!slow[(w - 0xC00000u) >> 1]) continue; op = opword_slow[(w - 0xC00000u) >> 1]; d = &dirty[blk_slow[(w - 0xC00000u) >> 1]]; }",
+           "\t\tif (w - REGION0_BASE < REGION0_SIZE) { u32 i = (w - REGION0_BASE) >> 1; if (!table[i]) continue; op = opword[i]; d = &dirty[blk[i]]; }",
+           "\t\telse if (w - REGION1_BASE < REGION1_SIZE) { u32 i = (w - REGION1_BASE) >> 1; if (!slow[i]) continue; op = opword_slow[i]; d = &dirty[blk_slow[i]]; }",
            "\t\telse continue;",
            "\t\tint was = old != op, now = new_ != op;",
            "\t\tif (was == now) continue;",
@@ -937,42 +947,56 @@ def generate(instrs, covered, entry_pc, memory=(), hooks=None, guards=None):
         if a in t.not_code:               # data or an illegal word: the interpreter's, if ever reached
             continue
         b = t.block_of[a]
-        if a < 0x200000:
-            out.append(f"\t\ttable[{a:#x}u >> 1] = &&{t.label(a)}; opword[{a:#x}u >> 1] = {t.words[a]:#x}; blk[{a:#x}u >> 1] = {b}; code_bits[{a:#x}u >> 4] = 1;")
-        elif 0xC00000 <= a < 0xE00000:
-            out.append(f"\t\tslow[({a:#x}u - 0xC00000u) >> 1] = &&{t.label(a)}; opword_slow[({a:#x}u - 0xC00000u) >> 1] = {t.words[a]:#x}; blk_slow[({a:#x}u - 0xC00000u) >> 1] = {b}; code_bits_slow[({a:#x}u - 0xC00000u) >> 4] = 1;")
+        if r0b <= a < r0b + r0s:
+            i = a - r0b
+            out.append(f"\t\ttable[{i:#x}u >> 1] = &&{t.label(a)}; opword[{i:#x}u >> 1] = {t.words[a]:#x}; blk[{i:#x}u >> 1] = {b}; code_bits[{i:#x}u >> 4] = 1;")
+        elif r1b <= a < r1b + r1s:
+            i = a - r1b
+            out.append(f"\t\tslow[{i:#x}u >> 1] = &&{t.label(a)}; opword_slow[{i:#x}u >> 1] = {t.words[a]:#x}; blk_slow[{i:#x}u >> 1] = {b}; code_bits_slow[{i:#x}u >> 4] = 1;")
+    if not t.addrs:                       # nothing translated yet (a first ROM build): the computed goto still needs a label
+        out.append("\t\t{ void *none_ = &&L_none; (void)none_; }")
     out += ["\t}", "\tgoto dispatch;", "dispatch:",
             "\tif (recomp_trace) fprintf(stderr, \"-> %06X  sr %04X a7 %06X\\n\", cpu.pc, get_sr(), A[7]);",
             "\tif (!getenv(\"RECOMP_INTERP\") && translated(cpu.pc)) {",
-            "\t\tif (cpu.pc < 0x200000u) goto *table[cpu.pc >> 1];",
-            "\t\tgoto *slow[(cpu.pc - 0xC00000u) >> 1];",
+            "\t\tif (cpu.pc - REGION0_BASE < REGION0_SIZE) goto *table[(cpu.pc - REGION0_BASE) >> 1];",
+            "\t\tgoto *slow[(cpu.pc - REGION1_BASE) >> 1];",
             "\t}",
             "\tinterp_run();                       /* code the translation doesn't have: interpreted until it does */",
             "\tgoto dispatch;"]
     out += body
+    if not t.addrs:
+        out.append("L_none: goto dispatch;")
     out += ["}", ""]
     return "\n".join(out), t.unknown
 
 
-def write_project(outdir, instrs, covered, cpu_regs, mem_files, regs, runtime_dir, hooks=None, guards=None):
+def write_project(outdir, instrs, covered, cpu_regs, mem_files, regs, runtime_dirs, hooks=None, guards=None,
+                  regions=AMIGA_REGIONS, machine="amiga"):
     import shutil
     os.makedirs(outdir, exist_ok=True)
     memory = [(base, open(path, "rb").read()) for path, base in mem_files]
-    text, unknown = generate(instrs, covered, cpu_regs["PC"], memory, hooks, guards)
+    text, unknown = generate(instrs, covered, cpu_regs["PC"], memory, hooks, guards, regions)
     with open(os.path.join(outdir, "game.c"), "w") as f:
         f.write(text)
-    for name in os.listdir(runtime_dir):
-        if name.endswith((".c", ".h")):
-            shutil.copy(os.path.join(runtime_dir, name), outdir)
-    # the start state: registers, the custom registers, the memory image
+    if isinstance(runtime_dirs, str):
+        runtime_dirs = [runtime_dirs]
+    for runtime_dir in runtime_dirs:      # the shared 68000 + host, then the machine
+        for name in os.listdir(runtime_dir):
+            if name.endswith((".c", ".h")):
+                shutil.copy(os.path.join(runtime_dir, name), outdir)
+    # the start state: registers, the chips, the memory image
     with open(os.path.join(outdir, "start.h"), "w") as f:
-        f.write("/* the state the game starts from (agk cpu / agk regs) */\n")
+        f.write("/* the state the game starts from (agk cpu / agk regs, or the ROM's reset vector) */\n")
         for i in range(8):
-            f.write(f"#define START_D{i} {cpu_regs[f'D{i}']:#x}u\n")
+            f.write(f"#define START_D{i} {cpu_regs.get(f'D{i}', 0):#x}u\n")
         for i in range(8):
-            f.write(f"#define START_A{i} {cpu_regs[f'A{i}']:#x}u\n")
+            f.write(f"#define START_A{i} {cpu_regs.get(f'A{i}', 0):#x}u\n")
         f.write(f"#define START_PC {cpu_regs['PC']:#x}u\n#define START_SR {cpu_regs['SR']:#x}u\n")
-        f.write(f"#define START_USP {cpu_regs['USP']:#x}u\n#define START_SSP {cpu_regs['SSP']:#x}u\n")
+        f.write(f"#define START_USP {cpu_regs.get('USP', 0):#x}u\n#define START_SSP {cpu_regs['SSP']:#x}u\n")
+        if machine != "amiga":
+            f.write("#define START_HZ %d\n" % regs.get("HZ", 60))
+            _write_memory_image(outdir, memory)
+            return unknown
         for name in ("DF0_CYL", "DF0_SIDE", "DF0_MOTOR", "JOY0DAT", "JOY1DAT"):   # the drive's head, the mouse counters
             f.write(f"#define START_{name} {regs.get(name, 0)}\n")
         f.write("static const struct { unsigned off, val; } start_regs[] = {\n")
@@ -1007,11 +1031,15 @@ def write_project(outdir, instrs, covered, cpu_regs, mem_files, regs, runtime_di
             if m and m.group(2) in cia_regs:
                 f.write(f"\t{{{0 if m.group(1) == 'A' else 1}, {cia_regs[m.group(2)]}, {val & 0xFFFF:#x}}},\n")
         f.write("};\n")
-    with open(os.path.join(outdir, "memory.bin"), "wb") as f:
-        for path, base in mem_files:
-            data = open(path, "rb").read()
-            f.write(base.to_bytes(4, "little") + len(data).to_bytes(4, "little") + data)
+    _write_memory_image(outdir, memory)
     return unknown
+
+
+def _write_memory_image(outdir, memory):
+    """memory.bin: (base, length, bytes) records the runtime loads at the start"""
+    with open(os.path.join(outdir, "memory.bin"), "wb") as f:
+        for base, data in memory:
+            f.write(base.to_bytes(4, "little") + len(data).to_bytes(4, "little") + data)
 
 
 def read_cpu(path):

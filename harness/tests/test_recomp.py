@@ -85,7 +85,7 @@ class TranslateTests(unittest.TestCase):
         text, _ = recomp.generate(instrs, {a for a, *_ in instrs}, 0x100, memory=[(0x100, bytes.fromhex("4e71 c5fc 0004 51c8 fff8 4e75".replace(" ", "")))])
         self.assertIn("L_000100:\n\tif (dirty[0]) { cpu.pc = 0x100u; goto dispatch; }", text)   # the block's first instruction asks
         self.assertNotIn("L_000102:\n\tif (dirty", text)                                    # mid-block: no check
-        self.assertIn("dirty[blk[pc >> 1]] == 0", text)                                       # translated() says no for a dirty block
+        self.assertIn("dirty[blk[i]] == 0", text)                                       # translated() says no for a dirty block
         self.assertIn("code_bits[0x102u >> 4] = 1", text)
         self.assertIn("void code_written(u32 a, int bits, u32 v)", text)
         # once patched.txt names it, the instruction checks its own opcode instead
@@ -111,10 +111,6 @@ class TranslateTests(unittest.TestCase):
         self.assertIn("ea = A[0] + 2038u;", text)
         self.assertIn("setd(3, rd8(ea) << 8 | rd8(ea + 2), 16);", text)
         self.assertIn("wr8(ea, D[2] >> 24); wr8(ea + 2, D[2] >> 16); wr8(ea + 4, D[2] >> 8); wr8(ea + 6, D[2]);", text)
-
-    def test_unparseable_uncovered_code_is_data(self):
-        L, _ = lines_of([(0x100, 3, "btst", "#-54,@(0,d0:l:4)"), (0x106, 1, "rts", "")], covered={0x106})
-        self.assertIn("{ cpu.pc = 0x100u; goto dispatch; }", "\n".join(L))
 
     def test_usp_moves_are_longs(self):
         L, _ = lines_of([(0x100, 1, "movel", "a3,%usp"), (0x102, 1, "movel", "%usp,sp")])

@@ -573,28 +573,79 @@ def cmd_inspect(args):
     return 0 if res is None or res["ok"] else 1
 
 
+# The machines a game can be recompiled for: the runtime directories copied into the
+# build (the shared 68000 + host first, then the machine's chips and main) and the two
+# address regions that can hold code (the dispatch tables; bus.h's REGION0/1).
+MACHINES = {
+    "amiga": {"dirs": ["runtime", "amiga"], "regions": ((0, 0x200000), (0xC00000, 0x200000))},
+    "md": {"dirs": ["runtime", "md"], "regions": ((0, 0x400000), (0xFF0000, 0x10000))},
+}
+
+
+def _md_rom(path):
+    """a Mega Drive ROM's bytes (.md/.bin/.gen; .smd interleaved is undone), checked by its header"""
+    data = open(path, "rb").read()
+    if path.lower().endswith(".smd") and len(data) % 16384 == 512:
+        out = bytearray(len(data) - 512)
+        for b in range((len(data) - 512) // 16384):
+            blk = data[512 + b * 16384:512 + (b + 1) * 16384]
+            for i in range(8192):
+                out[b * 16384 + 2 * i + 1] = blk[i]
+                out[b * 16384 + 2 * i] = blk[8192 + i]
+        data = bytes(out)
+    if data[0x100:0x104] not in (b"SEGA", b" SEG"):
+        raise SystemExit(f"recomp: {rel(path)} doesn't look like a Mega Drive ROM (no SEGA header at $100)")
+    return data
+
+
 def cmd_recomp(args):
     from . import recomp
-    src = os.path.abspath(args.dir)
-    need = {n: os.path.join(src, n) for n in ("chip.bin", "coverage.bin", "cpu.txt", "chip.regs.txt")}
-    for n, p in need.items():
-        if not os.path.exists(p):
-            raise SystemExit(f"recomp: {rel(p)} missing: run agk inspect GAME.adf ... --coverage first")
-    out = os.path.abspath(args.out or os.path.join(src, "recomp"))
+    machine = MACHINES[args.machine]
     image = os.environ.get("AGK_TOOLCHAIN_IMAGE", "amigadev/crosstools:m68k-amigaos")
-    cov_files = sorted(os.path.join(src, f) for f in os.listdir(src) if f.startswith("coverage") and f.endswith(".bin"))
-    ranges, covered = recomp.coverage_ranges(cov_files)
-    print(f"coverage from {len(cov_files)} file(s): {', '.join(os.path.basename(f) for f in cov_files)}")
-    if not ranges:
+    if args.machine == "md":
+        # a cartridge: the ROM is the whole start state (its reset vector), the coverage
+        # comes from the native build's own interpreter (game --coverage FILE), so the
+        # first build runs everything interpreted and each later one translates what was played
+        if not args.rom:
+            raise SystemExit("recomp: --machine md needs --rom GAME.md")
+        out = os.path.abspath(args.out or os.path.splitext(os.path.basename(args.rom))[0] + "-native")
+        os.makedirs(out, exist_ok=True)
+        src = out
+        rom = _md_rom(args.rom)
+        rom_path = os.path.join(out, "rom.bin")
+        with open(rom_path, "wb") as f:
+            f.write(rom)
+        print(f"{rel(args.rom)}: {rom[0x120:0x150].decode('ascii', 'replace').strip() or rom[0x150:0x180].decode('ascii', 'replace').strip()}, "
+              f"{len(rom) // 1024}K, region {rom[0x1F0:0x1F3].decode('ascii', 'replace').strip()}")
+        images = [(0, rom_path, len(rom))]
+        cov_files = [p for p in [os.path.join(out, "coverage.bin")] if os.path.exists(p)]
+        cov_files += sorted(os.path.join(out, f) for f in os.listdir(out) if f.startswith("coverage_") and f.endswith(".bin"))
+        need = {}
+    else:
+        if not args.dir:
+            raise SystemExit("recomp: give the agk inspect output directory (chip.bin, coverage.bin, cpu.txt, chip.regs.txt)")
+        src = os.path.abspath(args.dir)
+        need = {n: os.path.join(src, n) for n in ("chip.bin", "coverage.bin", "cpu.txt", "chip.regs.txt")}
+        for n, p in need.items():
+            if not os.path.exists(p):
+                raise SystemExit(f"recomp: {rel(p)} missing: run agk inspect GAME.adf ... --coverage first")
+        out = os.path.abspath(args.out or os.path.join(src, "recomp"))
+        cov_files = sorted(os.path.join(src, f) for f in os.listdir(src) if f.startswith("coverage") and f.endswith(".bin"))
+        images = [(0, need["chip.bin"], os.path.getsize(need["chip.bin"]))]
+        slow = os.path.join(src, "slow.bin")
+        if os.path.exists(slow):
+            images.append((0xC00000, slow, os.path.getsize(slow)))
+    ranges, covered = recomp.coverage_ranges(cov_files) if cov_files else ([], set())
+    print(f"coverage from {len(cov_files)} file(s): {', '.join(os.path.basename(f) for f in cov_files) or 'none'}")
+    if not ranges and args.machine != "md":
         raise SystemExit("recomp: the coverage is empty")
-    print(f"{len(covered)} instructions executed in {len(ranges)} ranges, "
-          f"${ranges[0][0]:06X}..${ranges[-1][1]:06X}")
-    images = [(0, need["chip.bin"], os.path.getsize(need["chip.bin"]))]
-    slow = os.path.join(src, "slow.bin")
-    if os.path.exists(slow):
-        images.append((0xC00000, slow, os.path.getsize(slow)))
+    if ranges:
+        print(f"{len(covered)} instructions executed in {len(ranges)} ranges, "
+              f"${ranges[0][0]:06X}..${ranges[-1][1]:06X}")
+    else:
+        print("no coverage yet: this build interprets everything; play it with --coverage coverage.bin and agk recomp again")
     try:
-        instrs = recomp.disassemble(images, ranges, image, src, covered)
+        instrs = recomp.disassemble(images, ranges, image, src, covered) if ranges else []
     except recomp.RecompError as e:
         raise SystemExit(f"recomp: {e}")
     guards = set()                        # instructions earlier native runs saw the game rewrite (patched.txt)
@@ -607,27 +658,33 @@ def cmd_recomp(args):
     if os.path.exists(needed):            # where earlier native runs jumped to and stopped
         anchors += [int(line, 16) for line in open(needed) if line.strip()]
         print(f"{len(set(anchors))} address(es) earlier native runs needed (needed.txt): translating from them too")
-    if not args.no_follow:
+    if not args.no_follow and (instrs or anchors):
         try:
             instrs, added = recomp.follow_branches(images, instrs, image, src, anchors=anchors)
         except recomp.RecompError as e:
             raise SystemExit(f"recomp: {e}")
         print(f"{added} more instructions reached by following branches the emulator didn't take")
-    from . import rip
-    snap = args.snapshot or os.path.join(src, "end.vasnap")
-    if os.path.exists(snap) and not args.no_resnap:
-        # the memory, the CPU and the registers straight from the snapshot: the dumps a
-        # scenario wrote at its end can be a frame away from the snapshot it saved, and
-        # the native build must start exactly where --diff's emulator run starts
-        print(f"start state taken from {rel(snap)}")
-        _recomp_state(args, src, snap)
-    cpu_regs = recomp.read_cpu(need["cpu.txt"])
-    regs = rip.read_regs(need["chip.regs.txt"])
-    flat = {k.upper(): v for k, v in regs.items() if k != "colors"}
-    for i, c in enumerate(regs["colors"]):
-        flat[f"COLOR{i:02d}"] = c
+    if args.machine == "md":
+        rom = open(images[0][1], "rb").read()
+        cpu_regs = {"PC": int.from_bytes(rom[4:8], "big"), "SSP": int.from_bytes(rom[0:4], "big"), "SR": 0x2700,
+                    "A7": int.from_bytes(rom[0:4], "big")}
+        flat = {"HZ": 60 if b"U" in rom[0x1F0:0x1F3] or b"J" in rom[0x1F0:0x1F3] else 50}
+    else:
+        from . import rip
+        snap = args.snapshot or os.path.join(src, "end.vasnap")
+        if os.path.exists(snap) and not args.no_resnap:
+            # the memory, the CPU and the registers straight from the snapshot: the dumps a
+            # scenario wrote at its end can be a frame away from the snapshot it saved, and
+            # the native build must start exactly where --diff's emulator run starts
+            print(f"start state taken from {rel(snap)}")
+            _recomp_state(args, src, snap)
+        cpu_regs = recomp.read_cpu(need["cpu.txt"])
+        regs = rip.read_regs(need["chip.regs.txt"])
+        flat = {k.upper(): v for k, v in regs.items() if k != "colors"}
+        for i, c in enumerate(regs["colors"]):
+            flat[f"COLOR{i:02d}"] = c
     mem_files = [(path, base) for base, path, _ in images]
-    runtime_dir = os.path.join(ROOT, "recomp", "runtime")
+    runtime_dir = [os.path.join(ROOT, "recomp", d) for d in machine["dirs"]]
     # --hook ADDR=file.c:function: the function runs before the instruction at ADDR
     hooks, hook_files = {}, []
     for spec in args.hook or []:
@@ -639,7 +696,8 @@ def cmd_recomp(args):
         hooks[int(m.group(1), 16)] = m.group(3)
         hook_files.append(os.path.abspath(m.group(2)))
     try:
-        unknown = recomp.write_project(out, instrs, covered, cpu_regs, mem_files, flat, runtime_dir, hooks, guards)
+        unknown = recomp.write_project(out, instrs, covered, cpu_regs, mem_files, flat, runtime_dir, hooks, guards,
+                                       regions=machine["regions"], machine=args.machine)
         for hf in set(hook_files):
             shutil.copy(hf, out)
     except recomp.RecompError as e:
@@ -1227,8 +1285,10 @@ def main(argv=None):
                        description="Translates every instruction the game executed under the emulator into C "
                                    "(labels per address, the kit's 68000 helpers), bundles the chip runtime and "
                                    "the memory image, and compiles a native binary. See agk recomp's docs.")
-    p.add_argument("dir", help="the agk inspect output directory (chip.bin, coverage.bin, cpu.txt, chip.regs.txt)")
-    p.add_argument("-o", "--out", help="output directory (default DIR/recomp)")
+    p.add_argument("dir", nargs="?", help="the agk inspect output directory (chip.bin, coverage.bin, cpu.txt, chip.regs.txt); not for --machine md")
+    p.add_argument("-o", "--out", help="output directory (default DIR/recomp, or GAME-native for a ROM)")
+    p.add_argument("--machine", choices=sorted(MACHINES), default="amiga", help="the machine the game is for (default amiga)")
+    p.add_argument("--rom", help="--machine md: the cartridge ROM (.md/.bin/.gen/.smd); the build starts at its reset vector")
     p.add_argument("--diff", type=int, metavar="N", help="trace N instructions in the emulator and natively, show the first difference")
     p.add_argument("--snapshot", help="the .vasnap the data was taken at (default DIR/end.vasnap)")
     p.add_argument("--adf", help="the disk, for the native run")
