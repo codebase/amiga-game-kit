@@ -43,78 +43,19 @@ extern cpu_t cpu;
 extern u8 *mem;                           /* MEM_SIZE bytes; the chips are trapped by address */
 
 /* amiga.c: the chips behind the memory map */
-u32 chip_read(u32 addr, int bits);
-void chip_write(u32 addr, u32 value, int bits);
-void cia_write(u32 addr, u8 value);
-u8 cia_read(u32 addr);
 void run_events(void);                    /* called when cycles pass the next event */
 extern u64 next_event;
 extern int irq_pending;                   /* the highest pending interrupt level, or 0 */
 void trace_die(const char *why, u32 addr);
-
-/* ------------------------------------------------------------ memory */
-
-#define IS_CUSTOM(a) (((a) & 0xFFF000u) == CUSTOM_BASE)
-#define IS_CIA(a) (((a) & 0xFFF000u) == 0xBFE000u || ((a) & 0xFFF000u) == 0xBFD000u)
-
-static inline u32 rd8(u32 a) {
-	a &= 0xFFFFFF;
-	if (IS_CUSTOM(a)) return chip_read(a, 8);
-	if (IS_CIA(a)) return cia_read(a);
-	return mem[a];
-}
-static inline u32 rd16(u32 a) {
-	a &= 0xFFFFFF;
-	if (IS_CUSTOM(a)) return chip_read(a, 16);
-	if (IS_CIA(a)) return (u32)cia_read(a) << 8 | cia_read(a + 1);
-	return (u32)mem[a] << 8 | mem[a + 1];
-}
-static inline u32 rd32(u32 a) {
-	a &= 0xFFFFFF;
-	if (IS_CUSTOM(a)) return chip_read(a, 32);
-	if (IS_CIA(a)) return (u32)cia_read(a) << 24 | (u32)cia_read(a + 1) << 16 | (u32)cia_read(a + 2) << 8 | cia_read(a + 3);   /* (games read a long: the same register four times) */
-	return (u32)mem[a] << 24 | (u32)mem[a + 1] << 16 | (u32)mem[a + 2] << 8 | mem[a + 3];
-}
+extern u8 *coverage_bits;                 /* --coverage: a bit per address the interpreter executed (host.c) */
 #ifdef RECOMP_WATCH                       /* -DRECOMP_WATCH=0x1234: say who writes there (the pc is exact under RECOMP_INTERP) */
 #define WATCH(a, bits) do { if ((a) <= (RECOMP_WATCH) && (a) + (bits) / 8 > (RECOMP_WATCH)) fprintf(stderr, "watch: write %d bits at %06X from pc %06X\n", bits, (a), cpu.pc); } while (0)
 #else
 #define WATCH(a, bits) ((void)0)
 #endif
-/* self-modifying code: a write that lands in a 16-byte granule holding translated
- * code goes to the translation's code_written (game.c), which tells rewritten
- * instructions from patched immediates and hands the block to the interpreter */
-extern u8 code_bits[0x20000], code_bits_slow[0x20000];
-void code_written(u32 a, int bits, u32 v);
-#define CODE_WRITE(a, bits, v) do { if ((a) < 0x200000u ? code_bits[(a) >> 4] : ((a) >= 0xC00000u && (a) < 0xE00000u && code_bits_slow[((a) - 0xC00000u) >> 4])) code_written((a), (bits), (v)); } while (0)
-static inline void wr8(u32 a, u32 v) {
-	a &= 0xFFFFFF;
-	WATCH(a, 8);
-	if (IS_CUSTOM(a)) { chip_write(a, v, 8); return; }
-	if (IS_CIA(a)) { cia_write(a, (u8)v); return; }
-	if (a >= 0xF80000) return;             /* the ROM: writes vanish */
-	CODE_WRITE(a, 8, v);
-	mem[a] = (u8)v;
-}
-static inline void wr16(u32 a, u32 v) {
-	a &= 0xFFFFFF;
-	WATCH(a, 16);
-	if (IS_CUSTOM(a)) { chip_write(a, v, 16); return; }
-	if (IS_CIA(a)) { cia_write(a, (u8)(v >> 8)); cia_write(a + 1, (u8)v); return; }
-	if (a >= 0xF80000) return;
-	CODE_WRITE(a, 16, v);
-	mem[a] = (u8)(v >> 8); mem[a + 1] = (u8)v;
-}
-static inline void wr32(u32 a, u32 v) {
-	a &= 0xFFFFFF;
-	WATCH(a, 32);
-	if (IS_CUSTOM(a)) { chip_write(a, v, 32); return; }
-	if (IS_CIA(a)) { cia_write(a, (u8)(v >> 24)); cia_write(a + 1, (u8)(v >> 16)); cia_write(a + 2, (u8)(v >> 8)); cia_write(a + 3, (u8)v); return; }
-	if (a >= 0xF80000) return;
-	CODE_WRITE(a, 32, v);
-	mem[a] = (u8)(v >> 24); mem[a + 1] = (u8)(v >> 16); mem[a + 2] = (u8)(v >> 8); mem[a + 3] = (u8)v;
-}
-static inline u32 rd(u32 a, int bits) { return bits == 8 ? rd8(a) : bits == 16 ? rd16(a) : rd32(a); }
-static inline void wr(u32 a, u32 v, int bits) { if (bits == 8) wr8(a, v); else if (bits == 16) wr16(a, v); else wr32(a, v); }
+/* the machine's bus: rd8/16/32, wr8/16/32 (the chips trapped by address), rd/wr by
+   width, CODE_WRITE for writes into translated code, MACHINE_HZ, the dispatch regions */
+#include "bus.h"
 
 /* -------------------------------------------------------- registers */
 
@@ -337,6 +278,7 @@ static inline u32 take_interrupt(int level, u32 pc) {
 	u32 target = take_exception(24 + level, pc);
 	cpu.ipl = (u32)level;
 	cpu.stopped = 0;
+	irq_ack(level);                       /* (the machine: a VDP drops its pending flag, Paula keeps INTREQ) */
 	return target;
 }
 

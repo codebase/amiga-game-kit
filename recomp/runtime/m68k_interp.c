@@ -489,6 +489,7 @@ void interp_run(void) {
 		if (flow) EVENTS();
 		if (irq_pending > (int)cpu.ipl && irq_point(pc)) { pc = take_interrupt(irq_pending, pc); continue; }
 		ITRACE(pc);
+		if (coverage_bits) coverage_bits[pc >> 3] |= (u8)(1 << (pc & 7));
 		cpu.pc = pc;
 		step();
 		interp_count++;

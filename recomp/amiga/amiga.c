@@ -49,7 +49,7 @@ static u32 cop1lc, cop2lc, dskpt, bltpt[4], audlc[4], sprpt[8], bplpt[8];
 static u16 dsklen_last;
 static int copjmp;                        /* 1 or 2: a COPJMP happened this frame */
 
-u8 frame_rgb[320 * 256 * 3];
+extern u8 frame_rgb[320 * 256 * 3];      /* the host's picture buffer */
 static u16 colors[32];
 
 static void irq_update(void) {
