@@ -337,6 +337,260 @@ def find_code(rom_path, analysis, image, hints, log=print):
     return {a: by_addr[a] for a in code}, anchors & code, rom, covered
 
 
+# ------------------------------------------- hardware through a register
+
+MEMBASE = re.compile(r"(a[0-7]|sp|fp)@")
+REGNAME = {"fp": 6, "sp": 7, **{f"a{i}": i for i in range(8)}}
+POOL = False
+NOT, HW = 1, 2                            # an address register's value: not a hardware address / one (3: either)
+
+
+def _reglist(text):
+    """'d0-d7/a0-fp' -> the address registers in it (0..7)"""
+    out = set()
+    for part in text.split("/"):
+        ends = part.split("-")
+        if any(e not in REGNAME and not re.fullmatch(r"d[0-7]", e) for e in ends):
+            return None
+        if all(e in REGNAME for e in ends):
+            out |= set(range(REGNAME[ends[0]], REGNAME[ends[-1]] + 1))
+        elif len(ends) == 2 and ends[1] in REGNAME:       # d5-a3
+            out |= set(range(0, REGNAME[ends[1]] + 1))
+    return out
+
+
+def hw_reach(code, entries, traced, vectors=()):
+    """Which instructions may reach hardware through an address register, found without running
+    them: where a hardware address is loaded into a register (lea $C00000,a6) it is followed
+    through the branches, into the routines called with it and back out of them. The analysis run
+    only knows the instructions it executed; a path it never played (a counter that never changed)
+    would otherwise write to the Mega Drive's addresses on the Amiga, where nothing answers.
+
+    -> {addr: {operand index: HW or HW|NOT}}. An operand marked "either" is wrapped too: the layer's
+    entry points serve an ordinary address as well, only slower.
+
+    The state is, per address register, NOT / HW / both, and what was last pushed of it (so a
+    routine that saves a register, uses it for the VDP and restores it gives back what it got).
+    Pointers loaded from memory or computed in data registers count as NOT; a traced site says HW
+    for its register whatever the analysis thought. Routines reached only through computed jumps
+    start from what all the computed jumps and calls had, joined."""
+    order = sorted(code)
+    nxt = {a: a + code[a][0] for a in order}
+    info = {}                              # a -> (base, bits, ops normalised)
+    for a in order:
+        n, mn, ops = code[a]
+        base, bits = base_size(mn)
+        info[a] = (base, bits)
+    def kind(a):
+        """-> ('flow', [succ...]) | ('call', target, after) | ('icall', after) | ('ijmp',) | ('ret',)"""
+        n, mn, ops = code[a]
+        if BRANCH.match(mn):
+            t = int(ABS.match(ops[0]).group(1), 16)
+            cc = BRANCH.match(mn).group(1)
+            if cc == "sr":
+                return ("call", t, a + n)
+            return ("flow", [t] if cc == "ra" else [t, a + n])
+        if DBCC.match(mn):
+            return ("flow", [int(ABS.match(ops[1]).group(1), 16), a + n])
+        if mn in ("jmp", "jsr"):
+            t = direct_target(mn, ops)
+            if t is None:
+                return ("icall", a + n) if mn == "jsr" else ("ijmp",)
+            return ("call", t, a + n) if mn == "jsr" else ("flow", [t])
+        if mn in ("rts", "rte", "rtr"):
+            return ("ret",)
+        if not falls_through(mn):
+            return ("ijmp",)
+        return ("flow", [a + n])
+    kinds = {a: kind(a) for a in order}
+
+    def writes(a):
+        """the address registers whose kind of value the instruction at a sets (not through a pop)"""
+        n, mn, ops = code[a]
+        base, bits = info[a]
+        if base in ("lea", "movea", "link") and ops and ops[-1] in REGNAME:
+            if base == "movea" and ops[0] in ("sp@+",):
+                return set()
+            return {REGNAME[ops[-1] if base != "link" else ops[0]]} if base != "link" else {REGNAME[ops[0]]}
+        if base == "unlk":
+            return {REGNAME[ops[0]]}
+        if base == "exg":
+            return {REGNAME[o] for o in ops if o in REGNAME}
+        if base == "movem" and len(ops) == 2 and "@" in ops[0] and not ops[0].startswith("sp@"):
+            return _reglist(ops[1]) or set()
+        return set()
+
+    # the routines: what each call target reaches without calling, and the registers it sets
+    targets = {k[1] for k in kinds.values() if k[0] == "call" and k[1] in code}
+    body = {}
+    for f in targets:
+        seen, todo = set(), [f]
+        while todo:
+            a = todo.pop()
+            if a in seen or a not in code:
+                continue
+            seen.add(a)
+            k = kinds[a]
+            if k[0] == "flow":
+                todo += k[1]
+            elif k[0] in ("call", "icall"):
+                todo.append(k[-1])
+        body[f] = seen
+    popped = {f: set() for f in targets}
+    mod = {f: set() for f in targets}
+    for f in targets:
+        for a in body[f]:
+            n, mn, ops = code[a]
+            base, bits = info[a]
+            mod[f] |= writes(a)
+            if len(ops) == 2 and ops[0] == "sp@+":
+                if base == "movem":
+                    popped[f] |= _reglist(ops[1]) or set()
+                elif ops[1] in REGNAME:
+                    popped[f].add(REGNAME[ops[1]])
+    changed = True
+    while changed:                         # and what the routines it calls set
+        changed = False
+        for f in targets:
+            for a in body[f]:
+                k = kinds[a]
+                if k[0] == "call" and k[1] in mod and not mod[k[1]] - popped[k[1]] <= mod[f]:
+                    mod[f] |= mod[k[1]] - popped[k[1]]
+                    changed = True
+    net = {f: (mod[f] - popped[f]) - {7} for f in targets}
+    rets = collections.defaultdict(set)    # a return -> the routines it ends
+    for f in targets:
+        for a in body[f]:
+            if kinds[a][0] == "ret":
+                rets[a].add(f)
+    callers = collections.defaultdict(set)
+    for a, k in kinds.items():
+        if k[0] == "call":
+            callers[k[1]].add(a)
+
+    BOT = (0,) * 16                        # registers 0..7, then what was pushed of each
+    START = (NOT,) * 8 + (0,) * 8
+    join = lambda x, y: tuple(p | q for p, q in zip(x, y))
+    IN = collections.defaultdict(lambda: BOT)
+    EXIT = collections.defaultdict(lambda: BOT)
+    pool = BOT
+    work = []
+    def flow(a, st):
+        if a in code:
+            j = join(IN[a], st)
+            if j != IN[a]:
+                IN[a] = j
+                work.append(a)
+    def step(a, st):
+        """the state after the instruction at a (calls aside)"""
+        n, mn, ops = code[a]
+        base, bits = info[a]
+        r, saved = list(st[:8]), list(st[8:])
+        val = lambda o: (r[REGNAME[o]] if o in REGNAME else None)
+        if base == "lea" and ops[-1] in REGNAME:
+            m = ABS.match(ops[0])
+            mb = MEMBASE.match(ops[0])
+            r[REGNAME[ops[1]]] = (HW if is_hw(int(m.group(1), 16)) else NOT) if m else r[REGNAME[mb.group(1)]] if mb else NOT
+        elif base == "movea" and ops[-1] in REGNAME:
+            d = REGNAME[ops[1]]
+            m = IMM.match(ops[0])
+            if ops[0] == "sp@+":
+                r[d] = saved[d] or r[d]
+            elif bits == 32 and m:
+                r[d] = HW if is_hw(int(m.group(1))) else NOT
+            elif bits == 32 and ops[0] in REGNAME:
+                r[d] = r[REGNAME[ops[0]]]
+            else:
+                r[d] = NOT
+        elif base == "move" and len(ops) == 2 and ops[1] == "sp@-" and ops[0] in REGNAME:
+            saved[REGNAME[ops[0]]] = r[REGNAME[ops[0]]]
+        elif base == "pea" and MEMBASE.match(ops[0]) and ops[0].endswith("@"):
+            saved[REGNAME[MEMBASE.match(ops[0]).group(1)]] = r[REGNAME[MEMBASE.match(ops[0]).group(1)]]
+        elif base == "movem" and len(ops) == 2:
+            if ops[1] == "sp@-":
+                for x in _reglist(ops[0]) or ():
+                    saved[x] = r[x]
+            elif ops[0] == "sp@+":
+                for x in _reglist(ops[1]) or ():
+                    r[x] = saved[x] or r[x]
+            elif "@" in ops[0] or ABS.match(ops[0]):
+                for x in _reglist(ops[1]) or ():
+                    r[x] = NOT
+        elif base == "exg":
+            a0, a1 = (REGNAME.get(o) for o in ops)
+            v0, v1 = (r[a0] if a0 is not None else NOT), (r[a1] if a1 is not None else NOT)
+            if a0 is not None: r[a0] = v1
+            if a1 is not None: r[a1] = v0
+        elif base in ("link", "unlk"):
+            r[REGNAME[ops[0]]] = NOT
+        r[7] = NOT
+        return tuple(r) + tuple(saved)
+    def forced(a, st):
+        """a traced site: its register held a hardware address"""
+        if a in traced:
+            n, mn, ops = code[a]
+            cand = [MEMBASE.match(o).group(1) for o in ops if MEMBASE.match(o)]
+            if len(cand) == 1 and cand[0] != "sp":
+                r = list(st)
+                r[REGNAME[cand[0]]] |= HW
+                return tuple(r)
+        return st
+    def run():
+        nonlocal pool
+        while work:
+            a = work.pop()
+            st = forced(a, IN[a])
+            k = kinds[a]
+            if k[0] == "flow":
+                out = step(a, st)
+                for t in k[1]:
+                    flow(t, out)
+            elif k[0] == "call":
+                f = k[1]
+                if f not in code:
+                    flow(k[2], st)
+                    continue
+                flow(f, st[:8] + (0,) * 8)
+                ex = EXIT[f]
+                if any(ex[x] == 0 for x in net[f]):
+                    continue                # (it hasn't returned yet)
+                flow(k[2], tuple(ex[x] if x in net[f] else st[x] for x in range(8)) + st[8:])
+            elif k[0] in ("icall", "ijmp"):
+                if POOL:
+                    j = join(pool, st[:8] + (0,) * 8)
+                    if j != pool:
+                        pool = j
+                        for e in entries:
+                            flow(e, pool)
+                if k[0] == "icall":
+                    flow(k[1], st)
+            elif k[0] == "ret":
+                for f in rets[a]:
+                    j = join(EXIT[f], st)
+                    if j != EXIT[f]:
+                        EXIT[f] = j
+                        work.extend(c for c in callers[f] if IN[c] != BOT)
+    for v in sorted(vectors):
+        flow(v, START)
+    run()
+    for a in order:                        # what nothing known leads to: as if entered with nothing special
+        if IN[a] == BOT:
+            flow(a, START)
+            run()
+    out = {}
+    for a in order:
+        n, mn, ops = code[a]
+        base, bits = info[a]
+        if base in ("lea", "pea", "jmp", "jsr") or BRANCH.match(mn) or DBCC.match(mn):
+            continue
+        st = forced(a, IN[a])
+        for i, o in enumerate(ops):
+            m = MEMBASE.match(o)
+            if m and m.group(1) != "sp" and st[REGNAME[m.group(1)]] & HW:
+                out.setdefault(a, {})[i] = st[REGNAME[m.group(1)]]
+    return out
+
+
 # -------------------------------------------------------------- rewriting
 
 INVERT = {"hi": "ls", "ls": "hi", "cc": "cs", "cs": "cc", "ne": "eq", "eq": "ne", "vc": "vs", "vs": "vc",
@@ -350,6 +604,7 @@ class Rewriter:
         self.code = code
         self.lay = lay
         self.hw = hwsites
+        self.reach = {}                   # hw_reach's: {addr: {operand: HW or HW|NOT}}
         self.hints = hints
         self.unsafe = set()               # instructions that can't run from their old address
         self.old_targets = collections.defaultdict(set)   # addr -> old addresses it may transfer to if run in place
@@ -574,6 +829,26 @@ class Rewriter:
                 raise PortError("reads and writes hardware through two operands")
             how = self.access(mn, ops, hw_idx)
             self.notes["hardware through a register"] += 1
+        elif a in self.reach:
+            # not seen by the analysis run, but the register may hold a hardware address here
+            cand = sorted(self.reach[a])
+            sure = all(v == HW for v in self.reach[a].values())
+            try:
+                if len(cand) == 2 and base == "move":
+                    inner = lambda o: self.hw_wrap(a, mn, o, cand[1], "w", body)
+                    lines = self.hw_wrap(a, mn, new, cand[0], "r", inner)
+                elif len(cand) == 1:
+                    lines = self.hw_wrap(a, mn, new, cand[0], self.access(mn, ops, cand[0]), body)
+                else:
+                    raise PortError("two operands")
+            except PortError:
+                self.notes["possible hardware accesses left alone (movem, two operands)"] += 1
+                lines = None
+            if lines:
+                self.unsafe.add(a)
+                self.notes["hardware accesses found by following the registers" if sure else
+                           "accesses that may be hardware or memory, by following the registers"] += 1
+                return lines
         if how:
             self.unsafe.add(a)
             self.notes["hardware accesses"] += 1
@@ -821,6 +1096,10 @@ def port(rom_path, analysis, outdir, image, log=print):
     hw = read_hwsites(os.path.join(analysis, "hwsites.txt"))
     hw = {pc: v for pc, v in hw.items() if pc in code}
     rw = Rewriter(code, lay, hw, hints)
+    vectors = {struct.unpack(">I", rom[v:v + 4])[0] for v in range(4, 0x100, 4)}
+    # (an instruction the analysis run executed without it touching hardware, and that only may: left alone)
+    rw.reach = {a: v for a, v in hw_reach(code, entries, hw, vectors & set(code)).items()
+                if a not in hints["raw"] and not (a in covered and a not in hw and any(x != HW for x in v.values()))}
     text, errors = rw.source()
     if errors:
         raise PortError("instructions the rewriter can't do yet (a `replace ADDR asm; asm` line in "
@@ -896,7 +1175,7 @@ def build_amiga(outdir, kit_root, image, log=print):
     screen = (lay["top"] + 0xFFFF) & ~0xFFFF
     defs = {"ROMSIZE": lay["romsize"], "RAM": lay["ram"], "D": lay["D"], "SHIM": lay["shim"], "CODE": lay["code"],
             "CODESIZE": lay["top"] - lay["code"], "TOP": lay["top"], "SP": info["sp"], "PC": info["pc"],
-            "SCREEN0": screen, "COPPER": screen + 0x40000, "ZSIZE": len(z)}   # (two playfields of 128K, then two copper lists)
+            "SCREEN0": screen, "COPPER": screen + 0x80000, "ZSIZE": len(z)}   # (four bitmaps of 128K, then two copper lists)
     if defs["COPPER"] + 0x8000 > 0x200000:
         raise PortError("the port's image and its screen don't fit in 2 MB of chip RAM")
     with open(os.path.join(adir, "port_layout.h"), "w") as f:

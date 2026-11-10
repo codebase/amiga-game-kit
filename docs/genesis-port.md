@@ -8,12 +8,11 @@ the hard case. You bring the ROM; the kit holds only tools.
 
 Status: stages 1 to 3 work (the game's code, rewritten for the Amiga's memory
 map, runs frame for frame against the original on the host), and stage 4 has
-its first version: `agk port DIR --amiga` builds a bootable floppy, and Sonic 2
-boots on an A1200 with fast RAM, shows its title and plays, in the Mega
-Drive's own 64 colours. That first hardware layer draws every frame with the
-CPU: about one frame a second on a stock A1200, playable only on a fast
-accelerator. The layer that uses the Amiga's hardware (below) is what makes
-it a game on a real A1200; an A500 version follows as a reduced art pass.
+a hardware layer: `agk port DIR --amiga` builds a bootable floppy, and Sonic 2
+boots on an A1200 with fast RAM and plays Emerald Hill with the planes as an
+AGA dual playfield the copper scrolls, 15 colours a playfield. It needs an
+accelerated A1200 to hold its speed; a stock one and sound are the work
+ahead, an A500 version a reduced art pass after that.
 
 ## The stages
 
@@ -72,7 +71,12 @@ The rules, all plain 68000 and none disturbing the condition codes:
   call before it (a read) or after it (a write) that moves the cell from or to
   the hardware address: `move.w d0,(a6)` with a6 at the VDP's data port
   becomes `move.w d0,cell; pea (a6); jsr w16; addq.l #4,sp`. Which instructions
-  those are comes from `hwsites.txt` and from absolute operands.
+  those are comes from `hwsites.txt`, from absolute operands, and from
+  following the registers: where a hardware address is loaded into an address
+  register (`lea $C00000,a6`) it is traced through the branches, into the
+  routines called with it and back out, so code the analysis run never
+  executed (a counter that didn't change, a level it didn't reach) is
+  rewritten too. Sonic 2: 310 such instructions beyond the 373 the run saw.
 - **`x(pc)` data** becomes the absolute address (the data stayed put);
   **`x(pc,dn)`** goes through a scratch address register saved on the stack.
 - **`movea.w ea,An`** is followed by `adda.l #D,An`; `cmpa.w` is bracketed by it.
@@ -118,14 +122,40 @@ agk inspect s2/port/amiga/game.adf -p a1200-fast --boot 100 -s "wait 6000" -s "s
 `recomp/mdamiga` is the Amiga side: `main.c` loads the image (deflated, it
 fits one floppy) into fast RAM and takes the machine over; `start.S` has the
 entry points the rewritten code calls and the vertical blank, which hands the
-game its own interrupt; `layer.c` is the hardware layer. The first version of
-that layer is for correctness: it keeps the VDP's state as the game left it
-and draws each frame from it in software (the same drawing as the host
-runner) into six AGA bitplanes. The game's logic keeps its own time from the
-vertical blank; frames are drawn as fast as the CPU allows. Cursor keys or
-the joystick, Z/X/C or fire, Return for Start. No sound yet.
+game its own interrupt; `layer.c` is the hardware layer (`layer_soft.c` is the
+first one, kept for reference: the VDP drawn by the CPU into six bitplanes,
+exact and slow). Cursor keys or the joystick, Z/X/C or fire, Return for Start.
+No sound yet.
 
-What replaces it, the layer that uses the Amiga's hardware:
+How `layer.c` works, and what it has learned:
+
+- **Chip RAM is the budget, not the CPU.** The CPU gets a few thousand
+  accesses to chip RAM a frame whatever its speed (the eight bitplanes take
+  half the bus). So each plane is kept in fast RAM first (a shadow: the 64x32
+  cells, plane A's with the sprites drawn in), and a cell is copied to a
+  bitmap only if it is on screen and differs, a word or a long at a time.
+  Cells off screen cost nothing until they scroll in.
+- **Nothing is shown half done.** Each plane has two bitmaps; the frame is
+  made in the pair that isn't on screen, and one copper list switches the
+  bitmaps, their scroll and the 32 colours together at the next vertical
+  blank.
+- **Colours** are given out as tiles are drawn: a colour a playfield's tiles
+  use gets one of its 15 slots, the nearest slot when they have run out, and
+  the grouping is redone (colours as far apart as possible) when that fit is
+  poor. Colours the game cycles get slots of their own.
+- **The game's interrupt handlers may now catch the main loop** between
+  setting a VRAM address and writing there (on the Mega Drive the loop was
+  always done in time; here the layer takes time too): the VDP's address is
+  put back after each handler.
+- **Bitplane pointers carry.** Skipping the high word of a pointer in the
+  copper list is only right while the running pointer is in the same 64K.
+
+Not in it yet: the interlaced two-player mode (the attract mode's second
+demo), the window plane, water palettes, hardware sprites, sound; and it
+still takes more than a frame on a stock A1200 (`a1200-accel` is the profile
+it is developed on).
+
+The plan it follows:
 
 The same image, with the layer's entry points filled by Amiga code instead
 of the emulated chips. The game keeps talking to "a VDP"; the layer keeps a

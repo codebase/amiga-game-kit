@@ -42,6 +42,8 @@ PROFILES = {p.name: p for p in [
             "A1200_2MB", "kick31-40068-a1200", ["cpu set OVERCLOCKING 0"], aga=True),
     Profile("a1200-fast", "A1200, AGA, 2MB chip + 8MB fast, Kickstart 3.1 (experimental)",
             "A1200_2MB", "kick31-40068-a1200", ["cpu set OVERCLOCKING 0", "mem set FAST_RAM 8192"], aga=True),
+    Profile("a1200-accel", "A1200, AGA, 2MB chip + 8MB fast, the CPU eight times as fast (an accelerator card, roughly)",
+            "A1200_2MB", "kick31-40068-a1200", ["cpu set OVERCLOCKING 8", "mem set FAST_RAM 8192"], aga=True),
 ]}
 
 

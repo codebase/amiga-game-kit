@@ -136,6 +136,12 @@ static void vdp_ctrl_write(u16 v) {
 }
 
 /* the beam, as the Mega Drive's line: the Amiga's display starts at line $2C */
+/* (see layer.c: the VRAM address the interrupted code had set, kept across the game's handlers) */
+static u32 held_code, held_addr;
+static int held_pending;
+void layer_irq_enter(void) { held_code = vdp_code; held_addr = vdp_addr; held_pending = ctrl_pending; }
+void layer_irq_leave(void) { vdp_code = held_code; vdp_addr = held_addr; ctrl_pending = held_pending; }
+
 static int beam_line(void) {
 	u32 v = ((u32)(CUSTOM(0x004) & 1) << 8) | (CUSTOM(0x006) >> 8);
 	int l = (int)v - 0x2C;

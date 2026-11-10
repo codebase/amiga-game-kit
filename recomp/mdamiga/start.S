@@ -132,8 +132,9 @@ l3:
 	move.w	#0x0050,0xdff09c            | the copper's: the line the game asked its horizontal interrupt for
 	move.w	#0x0050,0xdff09c
 	btst	#4,d0
+	beq.s	3f
+	jsr	_layer_irq_enter
 	movem.l	(sp)+,d0-d1/a0-a1
-	beq.s	2f
 	move.l	PORT_SHIM,-(sp)
 	move.w	#0x006c,-(sp)
 	pea	hint_done(pc)
@@ -142,7 +143,10 @@ l3:
 	rts
 hint_done:
 	move.l	(sp)+,PORT_SHIM
-2:	rte
+	movem.l	d0-d1/a0-a1,-(sp)
+	jsr	_layer_irq_leave
+3:	movem.l	(sp)+,d0-d1/a0-a1
+	rte
 1:	move.w	#0x0020,0xdff09c
 	move.w	#0x0020,0xdff09c
 	jsr	_layer_vbl

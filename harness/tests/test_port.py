@@ -38,6 +38,33 @@ class RewriteTests(unittest.TestCase):
         self.assertEqual(out[0x200], ["pea a5@", f"jsr {r16:#x}", "addql #4,sp", f"movew {lay['cell']:#x},d0"])
         self.assertEqual(out[0x202][0], f"movel a0@+,{lay['cell']:#x}")   # the source still steps
 
+    def test_hardware_through_a_register_is_followed_without_running_it(self):
+        # lea VDP,a6 / bsr sub / rts ... sub: move.l d0,4(a6) / move.w (a0)+,(a6) / rts; another caller passes RAM
+        code = {0x200: (6, "lea", ["0xc00000", "fp"]), 0x206: (4, "bsrw", ["0x300"]), 0x20a: (2, "movew", ["d1", "fp@"]),
+                0x20c: (2, "rts", []),
+                0x300: (4, "movel", ["d0", "fp@(4)"]), 0x304: (2, "movew", ["a0@+", "fp@"]), 0x306: (2, "rts", []),
+                0x400: (6, "lea", ["0xffff8000", "a5"]), 0x406: (2, "movew", ["d0", "a5@"]), 0x408: (2, "rts", [])}
+        reach = port.hw_reach(code, set(), {}, {0x200, 0x400})
+        self.assertEqual(reach[0x300], {1: port.HW})         # in the routine it was called with
+        self.assertEqual(reach[0x304], {1: port.HW})         # (a0 isn't hardware)
+        self.assertEqual(reach[0x20a], {1: port.HW})         # and back in the caller
+        self.assertNotIn(0x406, reach)
+        lay = port.layout(0x100000)
+        rw = port.Rewriter(code, lay, {}, port.read_hints("/nonexistent"))
+        rw.reach = reach
+        w32 = lay["shim"] + port.SHIM_ENTRIES + 8 * port.SHIM_NAMES.index("w32")
+        self.assertEqual([l.strip() for l in rw.instr(0x300)],
+                         [f"movel d0,{lay['cell']:#x}", "pea fp@(4)", f"jsr {w32:#x}", "addql #4,sp"])
+
+    def test_a_saved_register_comes_back_as_it_was(self):
+        # sub saves a6, points it at the VDP, restores it: the caller's a6 is still not hardware
+        code = {0x200: (4, "bsrw", ["0x300"]), 0x204: (2, "movew", ["d1", "fp@"]), 0x206: (2, "rts", []),
+                0x300: (2, "movel", ["fp", "sp@-"]), 0x302: (6, "lea", ["0xc00000", "fp"]), 0x308: (2, "movew", ["d0", "fp@"]),
+                0x30a: (2, "moveal", ["sp@+", "fp"]), 0x30c: (2, "rts", [])}
+        reach = port.hw_reach(code, set(), {}, {0x200})
+        self.assertIn(0x308, reach)
+        self.assertNotIn(0x204, reach)
+
     def test_pc_relative_data_stays_where_it_was(self):
         out, rw, lay = rewrite({0x200: (4, "lea", ["%pc@(0x294)", "a5"]), 0x204: (4, "movew", ["%pc@(0x45c,d0:w)", "d0"])})
         self.assertEqual(out[0x200], ["lea 0x294,a5"])
