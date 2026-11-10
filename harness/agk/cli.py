@@ -579,6 +579,7 @@ def cmd_inspect(args):
 MACHINES = {
     "amiga": {"dirs": ["runtime", "amiga"], "regions": ((0, 0x200000), (0xC00000, 0x200000))},
     "md": {"dirs": ["runtime", "md"], "regions": ((0, 0x400000), (0xFF0000, 0x10000))},
+    "mdport": {"dirs": ["runtime", "md", "mdport"], "regions": ((0, 0x400000), (0xFF0000, 0x10000))},
 }
 
 
@@ -596,6 +597,51 @@ def _md_rom(path):
     if data[0x100:0x104] not in (b"SEGA", b" SEG"):
         raise SystemExit(f"recomp: {rel(path)} doesn't look like a Mega Drive ROM (no SEGA header at $100)")
     return data
+
+
+def cmd_port(args):
+    """a Mega Drive game's code rewritten for the Amiga's memory map, and a host build that checks it"""
+    from . import port, recomp
+    src = os.path.abspath(args.dir)
+    rom = os.path.join(src, "rom.bin")
+    if not os.path.exists(rom):
+        raise SystemExit(f"port: {rel(rom)} missing: agk recomp --machine md --rom GAME.md -o {rel(src)} first, "
+                         f"then play it there with --analysis {rel(src)}")
+    out = os.path.abspath(args.out or os.path.join(src, "port"))
+    image = os.environ.get("AGK_TOOLCHAIN_IMAGE", "amigadev/crosstools:m68k-amigaos")
+    try:
+        if args.learn:
+            if not os.path.exists(os.path.join(out, "faults.txt")):
+                raise SystemExit(f"port: no {rel(os.path.join(out, 'faults.txt'))}: run the checking build first with "
+                                 f"RECOMP_PORT_FAULTS={rel(os.path.join(out, 'faults.txt'))}")
+            port.learn(src, out)
+            os.remove(os.path.join(out, "faults.txt"))
+        path, info = port.port(rom, src, out, image)
+    except (port.PortError, recomp.RecompError) as e:
+        raise SystemExit(f"port: {e}")
+    lay = info["layout"]
+    data = open(rom, "rb").read()
+    regs = {"HZ": 60 if b"U" in data[0x1F0:0x1F3] or b"J" in data[0x1F0:0x1F3] else 50, "RAM": lay["ram"],
+            "SHIM": lay["shim"], "TOP": lay["top"], "ROMSIZE": lay["romsize"]}
+    cpu_regs = {"PC": info["pc"], "SSP": info["sp"], "A7": info["sp"], "SR": 0x2700}
+    runtime = [os.path.join(ROOT, "recomp", d) for d in MACHINES["mdport"]["dirs"]]
+    recomp.write_project(out, [], set(), cpu_regs, [(path, 0), (os.path.join(out, "port.starts"), 0xE00000)], regs, runtime, regions=MACHINES["mdport"]["regions"], machine="mdport")
+    cc = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc")
+    srcs = [os.path.join(out, f) for f in os.listdir(out) if f.endswith(".c")]
+    cmd = [cc, "-std=gnu11", "-O1", "-Wall", "-Wno-unused-label", "-Wno-unused-variable", "-Wno-unused-but-set-variable",
+           "-Wno-unused-function", "-I", out, *srcs, "-o", os.path.join(out, "game")]
+    sdl = _sdl_flags()
+    if sdl:
+        cmd = cmd[:1] + ["-DUSE_SDL"] + sdl + cmd[1:]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        print(r.stderr[-3000:])
+        raise SystemExit("port: the checking build didn't compile")
+    game = rel(os.path.join(out, "game"))
+    print(f"built {game}: the port run on the host with the Mega Drive's chips behind the hardware layer. The same input "
+          f"as the original ({game} --input keys.txt --frames N --pngs DIR) must give the same frames, and it reports "
+          f"anything that still reaches for the Mega Drive's addresses")
+    return 0
 
 
 def cmd_recomp(args):
@@ -620,6 +666,8 @@ def cmd_recomp(args):
         images = [(0, rom_path, len(rom))]
         cov_files = [p for p in [os.path.join(out, "coverage.bin")] if os.path.exists(p)]
         cov_files += sorted(os.path.join(out, f) for f in os.listdir(out) if f.startswith("coverage_") and f.endswith(".bin"))
+        if args.no_translate:             # an analysis runner: the interpreter is all it needs, and it builds in seconds
+            cov_files = []
         need = {}
     else:
         if not args.dir:
@@ -1281,6 +1329,15 @@ def main(argv=None):
     p.add_argument("--disasm", metavar="ADDR[:LEN]", help="disassemble the chip-RAM dump at ADDR (hex ok)")
     p.add_argument("-o", "--out", help="output directory (default agk-inspect/<disk name>)")
 
+    p = sub.add_parser("port", help="rewrite a Mega Drive game's code for the Amiga's memory map (from an analysis run)",
+                       description="Takes the directory agk recomp --machine md built and the game was played in with "
+                                   "--analysis, and rewrites the game's code: RAM moved, hardware accesses turned into calls, "
+                                   "the ROM's data left where it is. Writes port.bin and a host build that checks it. "
+                                   "See harness/agk/port.py.")
+    p.add_argument("dir", help="the analysis directory (rom.bin, coverage.bin, entries.bin, hwsites.txt, optional port.txt hints)")
+    p.add_argument("-o", "--out", help="output directory (default DIR/port)")
+    p.add_argument("--learn", action="store_true", help="first take the last checking run's report (OUT/faults.txt) into port.txt: "
+                                                         "pointers into the Mega Drive's RAM get brought over where they were loaded")
     p = sub.add_parser("recomp", help="recompile a game (from agk inspect --coverage) to a native program",
                        description="Translates every instruction the game executed under the emulator into C "
                                    "(labels per address, the kit's 68000 helpers), bundles the chip runtime and "
@@ -1288,6 +1345,7 @@ def main(argv=None):
     p.add_argument("dir", nargs="?", help="the agk inspect output directory (chip.bin, coverage.bin, cpu.txt, chip.regs.txt); not for --machine md")
     p.add_argument("-o", "--out", help="output directory (default DIR/recomp, or GAME-native for a ROM)")
     p.add_argument("--machine", choices=sorted(MACHINES), default="amiga", help="the machine the game is for (default amiga)")
+    p.add_argument("--no-translate", action="store_true", help="--machine md: build the interpreter only (for --analysis runs; seconds instead of minutes)")
     p.add_argument("--rom", help="--machine md: the cartridge ROM (.md/.bin/.gen/.smd); the build starts at its reset vector")
     p.add_argument("--diff", type=int, metavar="N", help="trace N instructions in the emulator and natively, show the first difference")
     p.add_argument("--snapshot", help="the .vasnap the data was taken at (default DIR/end.vasnap)")
@@ -1505,7 +1563,7 @@ def main(argv=None):
                 "art-export": cmd_art_export, "art-animate": cmd_art_animate,
                 "play": cmd_play, "art-clean": cmd_art_clean, "sound": cmd_sound,
                 "record": cmd_record, "lint": cmd_lint,
-                "profile": cmd_profile, "release": cmd_release, "map": cmd_map, "inspect": cmd_inspect, "rip": cmd_rip, "recomp": cmd_recomp}[args.cmd](args)
+                "profile": cmd_profile, "release": cmd_release, "map": cmd_map, "inspect": cmd_inspect, "rip": cmd_rip, "recomp": cmd_recomp, "port": cmd_port}[args.cmd](args)
     except runner.RunError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

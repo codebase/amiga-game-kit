@@ -47,6 +47,7 @@ void run_events(void);                    /* called when cycles pass the next ev
 extern u64 next_event;
 extern int irq_pending;                   /* the highest pending interrupt level, or 0 */
 void trace_die(const char *why, u32 addr);
+extern u8 *entry_bits;                    /* --analysis: a bit per address a computed jmp/jsr went to */
 extern u8 *coverage_bits;                 /* --coverage: a bit per address the interpreter executed (host.c) */
 #ifdef RECOMP_WATCH                       /* -DRECOMP_WATCH=0x1234: say who writes there (the pc is exact under RECOMP_INTERP) */
 #define WATCH(a, bits) do { if ((a) <= (RECOMP_WATCH) && (a) + (bits) / 8 > (RECOMP_WATCH)) fprintf(stderr, "watch: write %d bits at %06X from pc %06X\n", bits, (a), cpu.pc); } while (0)

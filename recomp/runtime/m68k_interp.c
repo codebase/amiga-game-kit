@@ -89,7 +89,11 @@ static int cond(int cc) {
 static const int size_of[4] = { 8, 16, 32, 0 };
 
 static void exception(int vector) { pc = take_exception(vector, pc); }
+#ifdef MACHINE_ILLEGAL
+static void illegal(u32 at) { pc = at; MACHINE_ILLEGAL(at); exception(4); }
+#else
 static void illegal(u32 at) { pc = at; exception(4); }
+#endif
 
 /* a shift or rotate: type 0 as, 1 ls, 2 rox, 3 ro; left if dir */
 static u32 shift(int type, int dir, u32 v, u32 n, int bits) {
@@ -195,9 +199,14 @@ static void step(void) {
 			ea_calc(&ea, mode, reg, 32);
 			push32(pc);
 			pc = ea.addr;
+			if (entry_bits && !(mode == 7 && reg <= 2)) entry_bits[(pc & 0xFFFFFF) >> 3] |= (u8)(1 << (pc & 7));   /* a computed call: where it went */
 			return;
 		}
-		if ((op & 0xFFC0) == 0x4EC0) { ea_calc(&ea, mode, reg, 32); pc = ea.addr; return; }   /* jmp */
+		if ((op & 0xFFC0) == 0x4EC0) {    /* jmp */
+			ea_calc(&ea, mode, reg, 32); pc = ea.addr;
+			if (entry_bits && !(mode == 7 && reg <= 2)) entry_bits[(pc & 0xFFFFFF) >> 3] |= (u8)(1 << (pc & 7));
+			return;
+		}
 		if ((op & 0xFFF0) == 0x4E40) { exception(32 + (op & 15)); return; }                    /* trap */
 		if ((op & 0xFFF8) == 0x4E50) {    /* link */
 			u32 disp = sext(fetch16(), 16);
@@ -464,13 +473,23 @@ void interp_run(void) {
 		u32 op = rd16(pc);
 		int flow = (op >> 12) == 6 || (op & 0xFF80) == 0x4E80 || (op & 0xF0F8) == 0x50C8 || (op & 0xFFF0) == 0x4E40
 		        || op == 0x4E71 || op == 0x4E72 || op == 0x4E73 || op == 0x4E75 || op == 0x4E77;
+#ifdef MACHINE_CYC
+		MACHINE_CYC(pc);                  /* (a port under test: only the game's own instructions take time) */
+#else
 		CYC(8);
+#endif
 		if (flow) EVENTS();
 		if (irq_pending > (int)cpu.ipl && irq_point(pc)) { pc = take_interrupt(irq_pending, pc); continue; }
+#ifdef MACHINE_TRAP
+		if (MACHINE_TRAP(pc)) { pc = pop32(); continue; }   /* an address the machine implements itself (a port's shim), as a subroutine */
+#endif
 		ITRACE(pc);
-		if (coverage_bits) coverage_bits[pc >> 3] |= (u8)(1 << (pc & 7));
+		if (coverage_bits) coverage_bits[(pc & 0xFFFFFF) >> 3] |= (u8)(1 << (pc & 7));
 		cpu.pc = pc;
 		step();
+#ifdef MACHINE_STEPPED
+		MACHINE_STEPPED();                /* (cpu.pc is still the instruction that just ran) */
+#endif
 		interp_count++;
 	}
 }

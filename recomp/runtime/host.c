@@ -35,6 +35,21 @@ static int audio_frames = 48000 / 60;     /* per video frame: set from the machi
 static int refresh_hz = 50;
 static const char *coverage_path;         /* --coverage FILE: every pc the interpreter executed, vAmiga's coverage.bin format */
 u8 *coverage_bits;
+u8 *entry_bits;
+static const char *analysis_dir;          /* --analysis DIR: coverage.bin, entries.bin and the machine's own findings, accumulated over runs */
+const char *host_analysis_dir(void) { return analysis_dir; }
+static u8 *bits_load(const char *dir, const char *name) {   /* a 2 MB bitmap, starting from the file if it's there (runs add up) */
+	u8 *b = calloc(1u << 21, 1);
+	char path[1024]; snprintf(path, sizeof path, "%s/%s", dir, name);
+	FILE *f = fopen(path, "rb");
+	if (f) { size_t n = fread(b, 1, 1u << 21, f); (void)n; fclose(f); }
+	return b;
+}
+static void bits_save(const char *dir, const char *name, const u8 *b) {
+	char path[1024]; snprintf(path, sizeof path, "%s/%s", dir, name);
+	FILE *f = fopen(path, "wb");
+	if (f) { fwrite(b, 1, 1u << 21, f); fclose(f); }
+}
 
 static void wav_frame(void) {
 	fwrite(audio_buf, 1, (size_t)audio_frames * 4, wavf);
@@ -100,6 +115,12 @@ static void interp_report(void) {
 }
 
 static void coverage_save(void) {
+	if (analysis_dir) {
+		bits_save(analysis_dir, "coverage.bin", coverage_bits); bits_save(analysis_dir, "entries.bin", entry_bits);
+		machine_at_exit();
+		fprintf(stderr, "recomp: analysis written to %s (coverage.bin, entries.bin, the machine's notes)\n", analysis_dir);
+		return;
+	}
 	if (!coverage_path || !coverage_bits) return;
 	FILE *f = fopen(coverage_path, "wb");
 	if (!f) { fprintf(stderr, "recomp: can't write %s\n", coverage_path); return; }
@@ -120,6 +141,7 @@ void trace_die(const char *why, u32 addr) {
 	fprintf(stderr, "\n  A0-7:"); for (int i = 0; i < 8; i++) fprintf(stderr, " %08X", cpu.a[i]);
 	fprintf(stderr, "\n");
 	coverage_save();
+	if (!analysis_dir) machine_at_exit();
 	exit(3);
 }
 
@@ -324,7 +346,7 @@ void frame_hook(void) {
 		if (dump_path) { FILE *f = fopen(dump_path, "wb"); if (f) { fwrite(mem, 1, 0x80000, f); fclose(f); } }
 		coverage_save();
 		interp_report();
-		machine_at_exit();
+		if (!analysis_dir) machine_at_exit();
 		printf("recomp: %u frames run, pc $%06X\n", frame_count, cpu.pc);
 		exit(0);
 	}
@@ -363,6 +385,10 @@ int host_main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "--wav") && i + 1 < argc) { wavf = fopen(argv[++i], "wb"); if (wavf) { u8 z[44] = { 0 }; fwrite(z, 1, 44, wavf); } }
 		else if (!strcmp(argv[i], "--memory") && i + 1 < argc) image = argv[++i];
 		else if (!strcmp(argv[i], "--trace") && i + 1 < argc) trace_path = argv[++i];
+		else if (!strcmp(argv[i], "--analysis") && i + 1 < argc) {   /* everything a port needs to know, from the interpreter (exact pcs) */
+			analysis_dir = argv[++i]; setenv("RECOMP_INTERP", "1", 1);
+			coverage_bits = bits_load(analysis_dir, "coverage.bin"); entry_bits = bits_load(analysis_dir, "entries.bin");
+		}
 		else if (!strcmp(argv[i], "--coverage") && i + 1 < argc) { coverage_path = argv[++i]; coverage_bits = calloc(1u << 21, 1); }
 		else if (!strcmp(argv[i], "--play")) play = 1;
 		else if (!strcmp(argv[i], "--fast")) host_fast = 1;
@@ -374,7 +400,7 @@ int host_main(int argc, char **argv) {
 #endif
 		else if (machine_arg(argc, argv, &i)) {}
 		else { fprintf(stderr, "usage: game [--memory memory.bin] %s[--frames N] [--png out.png] [--dump mem.bin] [--wav out.wav] [--pngs DIR] [--speed 1|2|4|8|16|32] "
-		                       "[--trace file] [--input keys.txt] [--record keys.txt] [--coverage FILE] [--timeout SEC] [--play [--fast]]\n", machine_usage()); return 2; }
+		                       "[--trace file] [--input keys.txt] [--record keys.txt] [--coverage FILE] [--analysis DIR] [--timeout SEC] [--play [--fast]]\n", machine_usage()); return 2; }
 	}
 	machine_init();
 	load_memory(image);

@@ -994,7 +994,8 @@ def write_project(outdir, instrs, covered, cpu_regs, mem_files, regs, runtime_di
         f.write(f"#define START_PC {cpu_regs['PC']:#x}u\n#define START_SR {cpu_regs['SR']:#x}u\n")
         f.write(f"#define START_USP {cpu_regs.get('USP', 0):#x}u\n#define START_SSP {cpu_regs['SSP']:#x}u\n")
         if machine != "amiga":
-            f.write("#define START_HZ %d\n" % regs.get("HZ", 60))
+            for k, v in sorted(regs.items()):
+                f.write(f"#define START_{k} {v:#x}\n")
             _write_memory_image(outdir, memory)
             return unknown
         for name in ("DF0_CYL", "DF0_SIDE", "DF0_MOTOR", "JOY0DAT", "JOY1DAT"):   # the drive's head, the mouse counters

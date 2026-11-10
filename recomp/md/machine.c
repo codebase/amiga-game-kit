@@ -14,7 +14,13 @@ void md_dump_vdp(void);
 extern u16 pad_state[2];
 
 void machine_init(void) { md_init(); frame_w = 320; frame_h = 224; }
-void machine_at_exit(void) { md_dump_vdp(); }
+void md_save_sites(void);
+#ifdef PORT_RAM
+void port_report(void);
+void machine_at_exit(void) { md_dump_vdp(); port_report(); }
+#else
+void machine_at_exit(void) { md_dump_vdp(); md_save_sites(); }
+#endif
 
 int machine_arg(int argc, char **argv, int *i) { (void)argc; (void)argv; (void)i; return 0; }
 const char *machine_usage(void) { return ""; }

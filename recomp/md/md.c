@@ -10,6 +10,9 @@
 #include "start.h"
 #include <string.h>
 
+#ifndef DMA_RD16
+#define DMA_RD16(a) rd16(a)                /* (a port's bus maps the game's old RAM addresses) */
+#endif
 #define CYCLES_PER_LINE 488               /* 7.67 MHz / 15.7 kHz */
 #define LINES (START_HZ == 60 ? 262 : 313)
 #define ACTIVE_LINES 224
@@ -17,6 +20,7 @@
 
 u8 *mem;
 cpu_t cpu;
+u8 *romread_bits;                         /* (--analysis: see bus.h) */
 int irq_pending;
 u64 next_event;
 u32 frame_count;
@@ -106,7 +110,7 @@ static void dma_run(void) {
 	if (mode < 2) {
 		u32 src = ((u32)(reg[23] & 0x7F) << 17 | (u32)reg[22] << 9 | (u32)reg[21] << 1);
 		for (u32 i = 0; i < len; i++) {
-			u16 v = (u16)rd16(src);
+			u16 v = (u16)DMA_RD16(src);
 			src += 2;
 			if ((src & 0x1FFFF) == 0) src -= 0x20000;   /* the source stays in its 128K bank */
 			int save = dma_fill_pending; dma_fill_pending = 0;
@@ -167,7 +171,41 @@ static u8 pad_read(int p) {
 	return (u8)(~v & 0x7F) | (pad_th[p] ? 0x40 : 0);
 }
 
-u32 md_io_read(u32 a, int bits) {
+/* --analysis: which instructions touch the hardware, and what (pc, address, r/w, width): a port
+ * replaces exactly these. Kept as a small open-addressed set; written as hwsites.txt, adding to what's there. */
+#define NSITES 16384
+static struct { u32 pc, addr; u8 rw, bits, used; } sites[NSITES];
+static void site(u32 a, int rw, int bits) {
+	if (!host_analysis_dir()) return;
+	u32 h = (cpu.pc * 2654435761u ^ a * 40503u ^ (u32)rw << 7 ^ (u32)bits) % NSITES;
+	for (int n = 0; n < NSITES; n++, h = (h + 1) % NSITES) {
+		if (!sites[h].used) { sites[h].used = 1; sites[h].pc = cpu.pc; sites[h].addr = a; sites[h].rw = (u8)rw; sites[h].bits = (u8)bits; return; }
+		if (sites[h].pc == cpu.pc && sites[h].addr == a && sites[h].rw == rw && sites[h].bits == bits) return;
+	}
+}
+void md_save_sites(void) {
+	const char *dir = host_analysis_dir();
+	if (!dir) return;
+	if (romread_bits) {                   /* what was read of the ROM, added to earlier runs' */
+		char rp[1024]; snprintf(rp, sizeof rp, "%s/romread.bin", dir);
+		FILE *rf = fopen(rp, "rb");
+		if (rf) { for (u32 i = 0; i < REGION0_SIZE; i++) { int c = fgetc(rf); if (c == EOF) break; if (c && c != romread_bits[i]) romread_bits[i] = romread_bits[i] ? 255 : (u8)c; } fclose(rf); }
+		rf = fopen(rp, "wb");
+		if (rf) { fwrite(romread_bits, 1, REGION0_SIZE, rf); fclose(rf); }
+	}
+	char path[1024]; snprintf(path, sizeof path, "%s/hwsites.txt", dir);
+	FILE *f = fopen(path, "a");
+	if (!f) return;
+	for (int i = 0; i < NSITES; i++) if (sites[i].used) fprintf(f, "%06X %c %06X %d\n", sites[i].pc, sites[i].rw, sites[i].addr, sites[i].bits);
+	fclose(f);
+}
+
+static u32 md_io_read_(u32 a, int bits);
+static void md_io_write_(u32 a, u32 v, int bits);
+u32 md_io_read(u32 a, int bits) { site(a, 'r', bits); return md_io_read_(a, bits); }
+void md_io_write(u32 a, u32 v, int bits) { site(a, 'w', bits); md_io_write_(a, v, bits); }
+
+static u32 md_io_read_(u32 a, int bits) {
 	if (a >= 0xC00000 && a < 0xC00010) {
 		u32 v;
 		switch (a & 0xE) {
@@ -206,7 +244,7 @@ u32 md_io_read(u32 a, int bits) {
 	return 0;
 }
 
-void md_io_write(u32 a, u32 v, int bits) {
+static void md_io_write_(u32 a, u32 v, int bits) {
 	if (a >= 0xC00000 && a < 0xC00010) {
 		if (bits == 8) v = (v & 0xFF) * 0x101;
 		switch (a & 0xE) {
@@ -403,7 +441,8 @@ void frame_sync(void) { run_events(); }   /* (the VDP already paces the game by 
 void frame_wait(void) { run_events(); }
 
 void md_init(void) {
-	mem = calloc(MEM_SIZE + 16, 1);
+	mem = calloc(MEM_SIZE + 0x10000, 1);
+	if (host_analysis_dir()) romread_bits = calloc(REGION0_SIZE, 1);
 	line_start = 0;
 	next_event = CYCLES_PER_LINE;
 	reg[10] = 0xFF;

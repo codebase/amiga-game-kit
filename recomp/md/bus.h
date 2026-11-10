@@ -20,21 +20,25 @@ extern u8 code_bits[REGION0_SIZE >> 4], code_bits_slow[REGION1_SIZE >> 4];
 void code_written(u32 a, int bits, u32 v);
 #define CODE_WRITE(a, bits, v) do { if (code_bits_slow[((a) - RAM_BASE) >> 4]) code_written((a), (bits), (v)); } while (0)
 
+extern u8 *romread_bits;                  /* --analysis: per ROM byte, who read it: 0 nobody, 1..254 a hash of the reading pc, 255 several
+                                             (agk port tells data from code with it, and discounts a checksum loop that reads everything) */
+#define ROMREAD(a) do { u8 t_ = (u8)(1 + (cpu.pc * 2654435761u >> 16) % 254), *b_ = &romread_bits[a]; *b_ = *b_ == 0 || *b_ == t_ ? t_ : 255; } while (0)
 static inline u32 rd8(u32 a) {
 	a &= 0xFFFFFF;
-	if (a < REGION0_SIZE) return mem[a];
+	if (a < REGION0_SIZE) { if (romread_bits) ROMREAD(a); return mem[a]; }
 	if (a >= 0xE00000) return mem[RAM_BASE | (a & 0xFFFF)];
 	return md_io_read(a, 8);
 }
 static inline u32 rd16(u32 a) {
 	a &= 0xFFFFFE;
-	if (a < REGION0_SIZE) return (u32)mem[a] << 8 | mem[a + 1];
+	if (a < REGION0_SIZE) { if (romread_bits) { ROMREAD(a); ROMREAD(a + 1); } return (u32)mem[a] << 8 | mem[a + 1]; }
 	if (a >= 0xE00000) { a = RAM_BASE | (a & 0xFFFF); return (u32)mem[a] << 8 | mem[a + 1]; }
 	return md_io_read(a, 16);
 }
 static inline u32 rd32(u32 a) {
 	a &= 0xFFFFFE;
-	if (a < REGION0_SIZE - 2) return (u32)mem[a] << 24 | (u32)mem[a + 1] << 16 | (u32)mem[a + 2] << 8 | mem[a + 3];
+	if (a < REGION0_SIZE - 2) { if (romread_bits) { ROMREAD(a); ROMREAD(a + 1); ROMREAD(a + 2); ROMREAD(a + 3); }
+	                            return (u32)mem[a] << 24 | (u32)mem[a + 1] << 16 | (u32)mem[a + 2] << 8 | mem[a + 3]; }
 	if (a >= 0xE00000) { u32 b = RAM_BASE | (a & 0xFFFF), c = RAM_BASE | ((a + 2) & 0xFFFF); return (u32)mem[b] << 24 | (u32)mem[b + 1] << 16 | (u32)mem[c] << 8 | mem[c + 1]; }
 	return md_io_read(a, 16) << 16 | md_io_read(a + 2, 16);
 }

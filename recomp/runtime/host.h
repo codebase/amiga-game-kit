@@ -27,6 +27,7 @@ void trace_die(const char *why, u32 addr);
 void itrace(u32 addr);
 int host_main(int argc, char **argv);     /* parses the common flags, machine_arg() the rest, then runs */
 void host_exit(void);                     /* report and leave (Esc, the window closed) */
+const char *host_analysis_dir(void);      /* --analysis DIR, or NULL: where the machine adds its own notes at exit */
 int host_window_open(void);               /* --play and SDL2: a window exists */
 u64 host_perf_counter(void);
 
