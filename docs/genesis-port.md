@@ -7,9 +7,13 @@ kit's pipeline for bringing a game across, built on Sonic the Hedgehog 2 as
 the hard case. You bring the ROM; the kit holds only tools.
 
 Status: stages 1 to 3 work (the game's code, rewritten for the Amiga's memory
-map, runs frame for frame against the original on the host). Stage 4, the
-Amiga's own hardware layer, is next. Target order: A1200 (AGA) first, an A500
-version afterwards as a reduced art pass.
+map, runs frame for frame against the original on the host), and stage 4 has
+its first version: `agk port DIR --amiga` builds a bootable floppy, and Sonic 2
+boots on an A1200 with fast RAM, shows its title and plays, in the Mega
+Drive's own 64 colours. That first hardware layer draws every frame with the
+CPU: about one frame a second on a stock A1200, playable only on a fast
+accelerator. The layer that uses the Amiga's hardware (below) is what makes
+it a game on a real A1200; an A500 version follows as a reduced art pass.
 
 ## The stages
 
@@ -104,7 +108,24 @@ Only the game's own instructions cost time in this build (the glue the port
 adds is free), so it stays in step with the original and the frames can be
 compared one to one.
 
-### 4. The Amiga's hardware layer (next)
+### 4. The Amiga's hardware layer
+
+```sh
+agk port s2 -o s2/port --amiga          # s2/port/amiga/game.adf
+agk inspect s2/port/amiga/game.adf -p a1200-fast --boot 100 -s "wait 6000" -s "screenshot title"
+```
+
+`recomp/mdamiga` is the Amiga side: `main.c` loads the image (deflated, it
+fits one floppy) into fast RAM and takes the machine over; `start.S` has the
+entry points the rewritten code calls and the vertical blank, which hands the
+game its own interrupt; `layer.c` is the hardware layer. The first version of
+that layer is for correctness: it keeps the VDP's state as the game left it
+and draws each frame from it in software (the same drawing as the host
+runner) into six AGA bitplanes. The game's logic keeps its own time from the
+vertical blank; frames are drawn as fast as the CPU allows. Cursor keys or
+the joystick, Z/X/C or fire, Return for Start. No sound yet.
+
+What replaces it, the layer that uses the Amiga's hardware:
 
 The same image, with the layer's entry points filled by Amiga code instead
 of the emulated chips. The game keeps talking to "a VDP"; the layer keeps a
