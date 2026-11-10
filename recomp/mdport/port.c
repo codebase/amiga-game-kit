@@ -3,6 +3,7 @@
  * that still reaches for the Mega Drive's own addresses. */
 #include "host.h"
 #include "start.h"
+#include <string.h>
 
 #define ENTRIES (PORT_SHIM + 0x100)       /* r8 r16 r32 w8 w16 w32, 8 bytes apart (agk port's SHIM_NAMES) */
 #define CELL PORT_SHIM
@@ -16,7 +17,16 @@ static u64 shim_calls;
  * instruction is where the port has to bring it over (agk port --learn does, from the report). */
 static u32 a_seen[8], a_writer[8];
 static u32 recent[8192], recent_sp[8192]; static unsigned nrecent;
+/* an interrupt can arrive between a rewritten instruction and its call into the layer, with the
+ * value in the cell; the handler uses the cell too. The Amiga's interrupt entry saves and restores
+ * it around the game's handler (start.S); so does this, at the interrupt and at its rte. */
+static u32 cell_saved[16]; static int cell_depth;
+void port_irq_taken(void) { if (cell_depth < 16) memcpy(&cell_saved[cell_depth], &mem[CELL], 4); cell_depth++; }
 void port_stepped(void) {
+	if (cell_depth && (((u32)mem[cpu.pc] << 8 | mem[cpu.pc + 1]) == 0x4E73) && cpu.pc < PORT_TOP) {
+		cell_depth--;
+		if (cell_depth < 16) memcpy(&mem[CELL], &cell_saved[cell_depth], 4);
+	}
 	recent_sp[nrecent & 8191] = A[7]; recent[nrecent++ & 8191] = cpu.pc;
 	for (int i = 0; i < 8; i++) if (A[i] != a_seen[i]) {
 		u32 d = A[i] - a_seen[i];

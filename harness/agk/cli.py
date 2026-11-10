@@ -637,6 +637,12 @@ def cmd_port(args):
     if r.returncode != 0:
         print(r.stderr[-3000:])
         raise SystemExit("port: the checking build didn't compile")
+    if args.amiga:
+        try:
+            adf = port.build_amiga(out, ROOT, image)
+        except port.PortError as e:
+            raise SystemExit(f"port: {e}")
+        print(f"built {rel(adf)}: boots on an A1200 with fast RAM (arrows + Z/X/C or the joystick, Return = Start)")
     game = rel(os.path.join(out, "game"))
     print(f"built {game}: the port run on the host with the Mega Drive's chips behind the hardware layer. The same input "
           f"as the original ({game} --input keys.txt --frames N --pngs DIR) must give the same frames, and it reports "
@@ -1336,6 +1342,7 @@ def main(argv=None):
                                    "See harness/agk/port.py.")
     p.add_argument("dir", help="the analysis directory (rom.bin, coverage.bin, entries.bin, hwsites.txt, optional port.txt hints)")
     p.add_argument("-o", "--out", help="output directory (default DIR/port)")
+    p.add_argument("--amiga", action="store_true", help="also build the Amiga program and a bootable ADF (OUT/amiga/game.adf)")
     p.add_argument("--learn", action="store_true", help="first take the last checking run's report (OUT/faults.txt) into port.txt: "
                                                          "pointers into the Mega Drive's RAM get brought over where they were loaded")
     p = sub.add_parser("recomp", help="recompile a game (from agk inspect --coverage) to a native program",

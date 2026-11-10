@@ -54,6 +54,26 @@ static void cram_set(int i, u16 v) {
 	rgb[i] = (u32)lev[r] << 16 | (u32)lev[g] << 8 | lev[b];
 }
 
+#ifdef PORT_RAM
+/* a port under test: as on the Amiga, both interrupts arrive at level 3 (its vertical blank), the
+ * vertical one first; the level 3 vector is pointed at the game's handler for whichever it is */
+static int irq_which;
+static void irq_update(void) {
+	int lvl = 0;
+	u32 from = 0;
+	if (vint_pending && (reg[1] & 0x20)) { lvl = 3; from = 0x78; irq_which = 6; }
+	else if (hint_pending && (reg[0] & 0x10)) { lvl = 3; from = 0x70; irq_which = 4; }
+	if (lvl) for (int i = 0; i < 4; i++) mem[0x6C + i] = mem[from + i];
+	irq_pending = lvl;
+}
+void port_irq_taken(void);
+void irq_ack(int level) {
+	(void)level;
+	port_irq_taken();
+	if (irq_which == 6) vint_pending = 0; else hint_pending = 0;
+	irq_update();
+}
+#else
 static void irq_update(void) {
 	int lvl = 0;
 	if (vint_pending && (reg[1] & 0x20)) lvl = 6;
@@ -65,6 +85,7 @@ void irq_ack(int level) {
 	else if (level == 4) hint_pending = 0;
 	irq_update();
 }
+#endif
 
 static void vdp_data_write(u16 v) {
 	switch (vdp_code & 0xF) {

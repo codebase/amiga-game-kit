@@ -487,6 +487,17 @@ class Rewriter:
                 self.notes["table jumps"] += 1
                 return seq
             return text()
+        # ---- the interrupt mask: the Mega Drive's vertical interrupt is level 6 and its horizontal one 4;
+        # the port delivers both at level 3 (the Amiga's vertical blank), so "allow them" is mask 2
+        if len(ops) == 2 and ops[1] == "%sr" and base == "move" and IMM.match(ops[0]):
+            v = int(IMM.match(ops[0]).group(1)) & 0xFFFF
+            ipl = v >> 8 & 7
+            if 3 <= ipl <= 5:
+                self.unsafe.add(a)
+                self.notes["interrupt masks lowered to the Amiga's"] += 1
+                return [f"\tmovew #{(v & ~0x700) | 0x200},%sr"]
+            if ipl == 6:
+                raise PortError("an interrupt mask of 6 (the horizontal interrupt alone): not mapped yet")
         # ---- operands
         new = list(ops)
         pre, post = [], []
@@ -860,3 +871,48 @@ def port(rom_path, analysis, outdir, image, log=print):
         log(f"  {len(failed)} entries too cramped for a jump and with no room nearby (they're poisoned; a `replace` or more coverage): "
             + " ".join(f"${t:06X}" for t in failed[:12]))
     return path, info
+
+
+# ------------------------------------------------------------- the Amiga
+
+def build_amiga(outdir, kit_root, image, log=print):
+    """the port as an Amiga program: OUT/amiga/game (the loader and the hardware layer, recomp/mdamiga),
+    game.z (the image, deflated) and a bootable game.adf -> the ADF's path"""
+    import shutil
+    import zlib
+    info = json.load(open(os.path.join(outdir, "port.json")))
+    lay = info["layout"]
+    mem = open(os.path.join(outdir, "port.bin"), "rb").read()
+    payload = mem[:lay["romsize"]] + mem[lay["code"]:lay["top"]]
+    c = zlib.compressobj(9, zlib.DEFLATED, -15)
+    z = c.compress(payload) + c.flush()
+    adir = os.path.join(outdir, "amiga")
+    os.makedirs(adir, exist_ok=True)
+    with open(os.path.join(adir, "game.z"), "wb") as f:
+        f.write(z)
+    src = os.path.join(kit_root, "recomp", "mdamiga")
+    for name in os.listdir(src):
+        shutil.copy(os.path.join(src, name), adir)
+    screen = (lay["top"] + 0xFFFF) & ~0xFFFF
+    defs = {"ROMSIZE": lay["romsize"], "RAM": lay["ram"], "D": lay["D"], "SHIM": lay["shim"], "CODE": lay["code"],
+            "CODESIZE": lay["top"] - lay["code"], "TOP": lay["top"], "SP": info["sp"], "PC": info["pc"],
+            "SCREEN0": screen, "SCREEN1": screen + 6 * 40 * 224, "COPPER": screen + 0x1C000, "ZSIZE": len(z)}
+    if defs["COPPER"] + 0x100 > 0x200000:
+        raise PortError("the port's image and its screen don't fit in 2 MB of chip RAM")
+    with open(os.path.join(adir, "port_layout.h"), "w") as f:
+        f.write("/* where agk port put things (port.json) */\n")
+        for k, v in defs.items():
+            f.write(f"#define PORT_{k} {v:#x}\n")
+    script = ("m68k-amigaos-gcc -m68020 -O2 -fomit-frame-pointer -Wall -o game main.c layer.c inflate.c start.S > build.log 2>&1 "
+              "|| { tail -30 build.log; exit 1; }; m68k-amigaos-strip game; "
+              "printf 'game\\n' > startup-sequence; rm -f game.adf; "
+              "xdftool game.adf format PORT ffs + boot install + write game game + write game.z game.z + makedir s "
+              "+ write startup-sequence s/startup-sequence 2>&1 | tail -5")
+    r = subprocess.run(["docker", "run", "--rm", "-v", f"{adir}:/w", "-w", "/w", image, "sh", "-c", script],
+                       capture_output=True, text=True)
+    adf = os.path.join(adir, "game.adf")
+    if r.returncode != 0 or not os.path.exists(adf):
+        raise PortError("the Amiga build failed:\n" + (r.stdout + r.stderr)[-3000:])
+    log(f"Amiga: {os.path.getsize(os.path.join(adir, 'game'))} bytes of program, {len(z)} of image (deflated); "
+        f"screen at ${screen:06X}. Needs a 68020, AGA, 2 MB chip and fast RAM")
+    return adf
