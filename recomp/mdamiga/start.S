@@ -142,11 +142,6 @@ l3:
 	rts
 hint_done:
 	move.l	(sp)+,PORT_SHIM
-	movem.l	d0-d1/a0-a1,-(sp)
-	pea	1.w
-	jsr	_layer_snap                 | the display as the game set it from this line down
-	addq.l	#4,sp
-	movem.l	(sp)+,d0-d1/a0-a1
 2:	rte
 1:	move.w	#0x0020,0xdff09c
 	move.w	#0x0020,0xdff09c
@@ -164,20 +159,11 @@ post_cell:
 	move.l	(sp)+,PORT_SHIM
 post:
 	movem.l	d0-d1/a0-a1,-(sp)
-	clr.l	-(sp)
-	jsr	_layer_snap                 | the display as the game's vertical interrupt left it
-	addq.l	#4,sp
-	jsr	_layer_want_render
-	tst.l	d0
-	beq.s	1f
 	move.l	sp,_irq_saved_sp
 	lea	_istack_top,sp
-	move.w	#0x2200,sr
-	jsr	_layer_render
-	move.w	#0x2300,sr
+	jsr	_layer_frame                | the display for this frame, the cells and the sprites
 	move.l	_irq_saved_sp,sp
-	jsr	_layer_render_done
-1:	movem.l	(sp)+,d0-d1/a0-a1
+	movem.l	(sp)+,d0-d1/a0-a1
 	rte
 
 	.bss

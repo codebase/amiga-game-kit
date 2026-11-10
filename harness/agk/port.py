@@ -896,15 +896,15 @@ def build_amiga(outdir, kit_root, image, log=print):
     screen = (lay["top"] + 0xFFFF) & ~0xFFFF
     defs = {"ROMSIZE": lay["romsize"], "RAM": lay["ram"], "D": lay["D"], "SHIM": lay["shim"], "CODE": lay["code"],
             "CODESIZE": lay["top"] - lay["code"], "TOP": lay["top"], "SP": info["sp"], "PC": info["pc"],
-            "SCREEN0": screen, "SCREEN1": screen + 6 * 40 * 224, "COPPER": screen + 0x1C000, "ZSIZE": len(z)}
-    if defs["COPPER"] + 0x100 > 0x200000:
+            "SCREEN0": screen, "COPPER": screen + 0x40000, "ZSIZE": len(z)}   # (two playfields of 128K, then two copper lists)
+    if defs["COPPER"] + 0x8000 > 0x200000:
         raise PortError("the port's image and its screen don't fit in 2 MB of chip RAM")
     with open(os.path.join(adir, "port_layout.h"), "w") as f:
         f.write("/* where agk port put things (port.json) */\n")
         for k, v in defs.items():
             f.write(f"#define PORT_{k} {v:#x}\n")
-    script = ("m68k-amigaos-gcc -m68020 -O2 -fomit-frame-pointer -Wall -o game main.c layer.c inflate.c start.S > build.log 2>&1 "
-              "|| { tail -30 build.log; exit 1; }; m68k-amigaos-strip game; "
+    script = ("m68k-amigaos-gcc -m68020 -O2 -fomit-frame-pointer -Wall -Wl,-Map,game.map -o game main.c layer.c inflate.c start.S > build.log 2>&1 "
+              "|| { tail -30 build.log; exit 1; }; m68k-amigaos-nm -n game > game.nm; m68k-amigaos-strip game; "
               "printf 'game\\n' > startup-sequence; rm -f game.adf; "
               "xdftool game.adf format PORT ffs + boot install + write game game + write game.z game.z + makedir s "
               "+ write startup-sequence s/startup-sequence 2>&1 | tail -5")
