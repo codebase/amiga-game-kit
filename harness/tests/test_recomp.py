@@ -93,6 +93,25 @@ class TranslateTests(unittest.TestCase):
         self.assertIn("L_000102:\n\tif (rd16(0x102u) != 0xc5fcu) { cpu.pc = 0x102u; goto dispatch; }", text)
         self.assertIn("guarded_at[] = { 0x102u }", text)
 
+    def test_index_scale_bits_are_ignored_on_a_68000(self):
+        a = recomp.Operand("a4@(30,a0:w:2)", 8, 0x1000)
+        b = recomp.Operand("a4@(30,a0:w)", 8, 0x1000)
+        self.assertEqual(a.setup, b.setup)
+
+    def test_bcd(self):
+        L, _ = lines_of([(0x100, 1, "sbcd", "d0,d3"), (0x102, 1, "abcd", "a1@-,a2@-"), (0x104, 1, "nbcd", "d1")])
+        text = "\n".join(L)
+        self.assertIn("setd(3, bcd_sub(D[0] & 0xFF, D[3] & 0xFF), 8);", text)
+        self.assertIn("A[1] -= 1; tmp = rd8(A[1]); A[2] -= 1; wr8(A[2], bcd_add(tmp, rd8(A[2])));", text)
+        self.assertIn("bcd_sub((D[1] & MASK(8)), 0)", text)
+
+    def test_movep(self):
+        L, _ = lines_of([(0x100, 2, "movepw", "a0@(2038),d3"), (0x104, 2, "movepl", "d2,a1@(0)")])
+        text = "\n".join(L)
+        self.assertIn("ea = A[0] + 2038u;", text)
+        self.assertIn("setd(3, rd8(ea) << 8 | rd8(ea + 2), 16);", text)
+        self.assertIn("wr8(ea, D[2] >> 24); wr8(ea + 2, D[2] >> 16); wr8(ea + 4, D[2] >> 8); wr8(ea + 6, D[2]);", text)
+
     def test_usp_moves_are_longs(self):
         L, _ = lines_of([(0x100, 1, "movel", "a3,%usp"), (0x102, 1, "movel", "%usp,sp")])
         text = "\n".join(L)

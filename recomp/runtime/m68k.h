@@ -263,6 +263,29 @@ static inline u32 op_bchg(u32 v, u32 bit) { cpu.z = !(v >> bit & 1); return v ^ 
 static inline u32 op_bclr(u32 v, u32 bit) { cpu.z = !(v >> bit & 1); return v & ~(1u << bit); }
 static inline u32 op_bset(u32 v, u32 bit) { cpu.z = !(v >> bit & 1); return v | (1u << bit); }
 
+/* BCD arithmetic (abcd/sbcd/nbcd): the X flag in, X/Z/C out, N/V as the 68000 leaves them */
+static inline u32 bcd_add(u32 s, u32 d) {
+	u32 lo = (s & 15) + (d & 15) + cpu.x, hi = (s & 0xF0) + (d & 0xF0);
+	if (lo > 9) { lo += 6; }
+	u32 r = hi + lo;
+	if (r > 0x99) { r += 0x60; cpu.c = cpu.x = 1; } else cpu.c = cpu.x = 0;
+	r &= 0xFF;
+	if (r) cpu.z = 0;
+	cpu.n = r >> 7 & 1;
+	return r;
+}
+
+static inline u32 bcd_sub(u32 s, u32 d) {
+	s32 lo = (s32)(d & 15) - (s32)(s & 15) - (s32)cpu.x, hi = (s32)(d & 0xF0) - (s32)(s & 0xF0);
+	if (lo < 0) { lo -= 6; }
+	s32 r = hi + lo;
+	if (r < 0) { r -= 0x60; cpu.c = cpu.x = 1; } else cpu.c = cpu.x = 0;
+	r &= 0xFF;
+	if (r) cpu.z = 0;
+	cpu.n = r >> 7 & 1;
+	return (u32)r;
+}
+
 /* ---------------------------------------------------------- control */
 
 /* An exception: push PC and SR on the supervisor stack, go to the vector */

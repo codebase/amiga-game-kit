@@ -41,4 +41,5 @@ void machine_sdl_input(void);             /* SDL events and keyboard state -> th
 void machine_sdl_key(int sym, int mod, int down);  /* a key the host didn't take (Esc, F11, F12 are the host's) */
 void audio_render(s16 *out, int n, int rate);     /* n stereo frames of this video frame's sound at `rate` */
 void machine_audio_tag(void);             /* called once per frame before audio_render (nothing for most) */
+void machine_at_exit(void);               /* --frames ran out: dumps the machine may offer */
 #endif

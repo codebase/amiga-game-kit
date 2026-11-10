@@ -324,6 +324,7 @@ void frame_hook(void) {
 		if (dump_path) { FILE *f = fopen(dump_path, "wb"); if (f) { fwrite(mem, 1, 0x80000, f); fclose(f); } }
 		coverage_save();
 		interp_report();
+		machine_at_exit();
 		printf("recomp: %u frames run, pc $%06X\n", frame_count, cpu.pc);
 		exit(0);
 	}

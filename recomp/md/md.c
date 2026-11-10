@@ -93,11 +93,16 @@ static u16 vdp_data_read(void) {
 	return v;
 }
 
+static int vdp_trace = -1;
+#define VTRACE(...) do { if (vdp_trace < 0) vdp_trace = getenv("RECOMP_VDP_TRACE") != NULL; if (vdp_trace) { fprintf(stderr, "vdp: frame %u line %d ", frame_count, line); fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } } while (0)
+
 static void dma_run(void) {
 	/* a 68000-to-VDP transfer (reg 23 bit 7 clear), a fill (bits 7,6 = 1,0: waits for the data write) or a copy (1,1) */
 	u32 len = reg[19] | (u32)reg[20] << 8;
 	if (!len) len = 0x10000;
 	int mode = reg[23] >> 6;
+	VTRACE("DMA %s code %X dest %04X len %X src %06X inc %d", mode < 2 ? "68k" : mode == 2 ? "fill" : "copy", vdp_code & 0xF, vdp_addr, len,
+	       (u32)(reg[23] & 0x7F) << 17 | (u32)reg[22] << 9 | (u32)reg[21] << 1, reg[15]);
 	if (mode < 2) {
 		u32 src = ((u32)(reg[23] & 0x7F) << 17 | (u32)reg[22] << 9 | (u32)reg[21] << 1);
 		for (u32 i = 0; i < len; i++) {
@@ -124,6 +129,7 @@ static void vdp_ctrl_write(u16 v) {
 	if (!ctrl_pending && (v & 0xC000) == 0x8000) {   /* a register */
 		int r = (v >> 8) & 0x1F;
 		if (r < 24) {
+			if (reg[r] != (u8)v && r != 10) VTRACE("reg %d = %02X", r, (u8)v);
 			reg[r] = (u8)v;
 			if (r == 0 || r == 1) irq_update();
 		}
@@ -138,6 +144,7 @@ static void vdp_ctrl_write(u16 v) {
 		vdp_code = (vdp_code & 3) | ((v >> 2) & 0x3C);
 		vdp_addr = (vdp_addr & 0x3FFF) | ((v & 3) << 14);
 		ctrl_pending = 0;
+		if (!(vdp_code & 0x20)) VTRACE("set code %X addr %04X", vdp_code & 0xF, vdp_addr);
 		if ((vdp_code & 0x20) && (reg[1] & 0x10)) dma_run();   /* CD5 with DMA enabled */
 	}
 }
@@ -230,6 +237,9 @@ void md_io_write(u32 a, u32 v, int bits) {
 
 /* ------------------------------------------------------------- render */
 static int h40(void) { return reg[12] & 1; }
+/* interlace mode 2 (the two-player split screen): 8x16 cells of 64 bytes, 448 lines
+ * of picture; the even field is shown, so output line y is picture line 2y */
+static int ilace2(void) { return (reg[12] & 6) == 6; }
 
 /* a line of a plane into `out` (palette index 0..63 | 0x40 for priority; 0 = transparent) */
 static void plane_line(int y, int plane, u8 *out, int width) {
@@ -241,17 +251,19 @@ static void plane_line(int y, int plane, u8 *out, int width) {
 	/* horizontal scroll for this line: full screen, per 8-line cell, or per line */
 	u32 hs_off = hs_mode == 0 ? 0 : hs_mode == 2 ? (u32)(y & ~7) * 4 : hs_mode == 3 ? (u32)y * 4 : (u32)(y & 7) * 4;
 	if (hs_mode == 1) hs_off = (u32)(y & ~7) * 4;   /* (invalid mode 1 behaves like per-cell on a real VDP, near enough) */
+	int il = ilace2(), th = il ? 16 : 8, yy = il ? y * 2 : y;   /* cell height; the picture line */
+	if (il) hs_off = hs_mode == 0 ? 0 : hs_mode == 3 ? (u32)yy * 4 : (u32)(yy & ~15) * 4;
 	int hscroll = (int)((vram[(hs_table + hs_off + plane * 2) & 0xFFFE] << 8 | vram[(hs_table + hs_off + plane * 2 + 1) & 0xFFFF]) & 0x3FF);
 	int vs_2cell = reg[11] & 4;
 	for (int x = 0; x < width; x++) {
-		int vscroll = vsram[vs_2cell ? (((x >> 4) * 2 + plane) % 40) : plane] & 0x3FF;
+		int vscroll = vsram[vs_2cell ? (((x >> 4) * 2 + plane) % 40) : plane] & (il ? 0x7FF : 0x3FF);
 		int px = (x - hscroll) & (pw * 8 - 1);
-		int py = (y + vscroll) & (ph * 8 - 1);
-		u32 e = nt + (u32)((py >> 3) * pw + (px >> 3)) * 2;
+		int py = (yy + vscroll) & (ph * th - 1);
+		u32 e = nt + (u32)((py / th) * pw + (px >> 3)) * 2;
 		u16 entry = (u16)(vram[e & 0xFFFF] << 8 | vram[(e + 1) & 0xFFFF]);
 		int tile = entry & 0x7FF, hf = entry & 0x800, vf = entry & 0x1000, pal = (entry >> 13) & 3, pri = entry & 0x8000;
-		int ty = vf ? 7 - (py & 7) : py & 7, tx = hf ? 7 - (px & 7) : px & 7;
-		u8 b = vram[(tile * 32 + ty * 4 + (tx >> 1)) & 0xFFFF];
+		int ty = vf ? th - 1 - (py & (th - 1)) : py & (th - 1), tx = hf ? 7 - (px & 7) : px & 7;
+		u8 b = vram[(tile * 4 * th + ty * 4 + (tx >> 1)) & 0xFFFF];
 		int c = (tx & 1) ? b & 0xF : b >> 4;
 		out[x] = c ? (u8)((pal << 4) | c | (pri ? 0x40 : 0)) : 0;
 	}
@@ -268,13 +280,14 @@ static void window_line(int y, u8 *a, int width) {
 	else { x0 = 0; x1 = wx; }
 	if (x0 >= x1) return;
 	int ww = h40() ? 64 : 32;
+	int il = ilace2(), th = il ? 16 : 8, yy = il ? y * 2 : y;
 	u32 nt = h40() ? (u32)(reg[3] & 0x3C) << 10 : (u32)(reg[3] & 0x3E) << 10;
 	for (int x = x0; x < x1 && x < width; x++) {
-		u32 e = nt + (u32)((y >> 3) * ww + (x >> 3)) * 2;
+		u32 e = nt + (u32)((yy / th) * ww + (x >> 3)) * 2;
 		u16 entry = (u16)(vram[e & 0xFFFF] << 8 | vram[(e + 1) & 0xFFFF]);
 		int tile = entry & 0x7FF, hf = entry & 0x800, vf = entry & 0x1000, pal = (entry >> 13) & 3, pri = entry & 0x8000;
-		int ty = vf ? 7 - (y & 7) : y & 7, tx = hf ? 7 - (x & 7) : x & 7;
-		u8 b = vram[(tile * 32 + ty * 4 + (tx >> 1)) & 0xFFFF];
+		int ty = vf ? th - 1 - (yy & (th - 1)) : yy & (th - 1), tx = hf ? 7 - (x & 7) : x & 7;
+		u8 b = vram[(tile * 4 * th + ty * 4 + (tx >> 1)) & 0xFFFF];
 		int c = (tx & 1) ? b & 0xF : b >> 4;
 		a[x] = c ? (u8)((pal << 4) | c | (pri ? 0x40 : 0)) : 0;
 	}
@@ -286,26 +299,27 @@ static void sprite_line(int y, u8 *lo, u8 *hi, int width) {
 	int max = h40() ? 80 : 64, per_line = h40() ? 20 : 16, pixels = h40() ? 320 : 256;
 	int n = 0, drawn = 0, px_budget = pixels;
 	int masked = 0;
+	int il = ilace2(), th = il ? 16 : 8, yy = il ? y * 2 : y;
 	for (int link = 0, count = 0; count < max; count++) {
 		u32 s = table + (u32)link * 8;
-		int sy = ((vram[s & 0xFFFF] << 8 | vram[(s + 1) & 0xFFFF]) & 0x3FF) - 128;
+		int sy = ((vram[s & 0xFFFF] << 8 | vram[(s + 1) & 0xFFFF]) & 0x3FF) - (il ? 256 : 128);
 		int size = vram[(s + 2) & 0xFFFF];
 		int w = ((size >> 2) & 3) + 1, h = (size & 3) + 1;   /* in cells */
 		u16 attr = (u16)(vram[(s + 4) & 0xFFFF] << 8 | vram[(s + 5) & 0xFFFF]);
 		int sx = ((vram[(s + 6) & 0xFFFF] << 8 | vram[(s + 7) & 0xFFFF]) & 0x1FF) - 128;
 		link = vram[(s + 3) & 0xFFFF] & 0x7F;
-		if (y >= sy && y < sy + h * 8) {
+		if (yy >= sy && yy < sy + h * th) {
 			if (sx == -128 && drawn) { masked = 1; }   /* x = 0: masks the rest of the line's sprites */
 			else if (!masked) {
-				int row = y - sy;
+				int row = yy - sy;
 				int tile = attr & 0x7FF, hf = attr & 0x800, vf = attr & 0x1000, pal = (attr >> 13) & 3, pri = attr & 0x8000;
-				if (vf) row = h * 8 - 1 - row;
+				if (vf) row = h * th - 1 - row;
 				for (int cx = 0; cx < w * 8; cx++) {
 					int x = sx + cx;
 					if (x < 0 || x >= width) continue;
 					int col = hf ? w * 8 - 1 - cx : cx;
-					int t = tile + (col >> 3) * h + (row >> 3);
-					u8 b = vram[(t * 32 + (row & 7) * 4 + ((col & 7) >> 1)) & 0xFFFF];
+					int t = tile + (col >> 3) * h + row / th;
+					u8 b = vram[(t * 4 * th + (row & (th - 1)) * 4 + ((col & 7) >> 1)) & 0xFFFF];
 					int c = (col & 1) ? b & 0xF : b >> 4;
 					if (!c) continue;
 					u8 *dst = pri ? hi : lo;
@@ -373,6 +387,16 @@ void run_events(void) {
 		}
 	}
 	next_event = line_start + CYCLES_PER_LINE;
+}
+
+/* RECOMP_VDP_DUMP=FILE: the VDP's state when the run ends (regs, VRAM, CRAM, VSRAM), for looking at offline */
+void md_dump_vdp(void) {
+	const char *path = getenv("RECOMP_VDP_DUMP");
+	if (!path) return;
+	FILE *f = fopen(path, "wb");
+	if (!f) return;
+	fwrite(reg, 1, 24, f); fwrite(vram, 1, sizeof vram, f); fwrite(cram, 2, 64, f); fwrite(vsram, 2, 40, f);
+	fclose(f);
 }
 
 void frame_sync(void) { run_events(); }   /* (the VDP already paces the game by the blank) */

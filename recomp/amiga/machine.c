@@ -30,6 +30,7 @@ static int adf_in = 1;                    /* --adf-in N: the Nth --adf is in the
 
 void machine_init(void) { amiga_init(); frame_w = 320; frame_h = 256; }
 void machine_audio_tag(void) {}
+void machine_at_exit(void) {}
 
 int machine_arg(int argc, char **argv, int *i) {
 	if (!strcmp(argv[*i], "--adf") && *i + 1 < argc) { if (nadfs < 9) adfs[nadfs++] = argv[++*i]; return 1; }

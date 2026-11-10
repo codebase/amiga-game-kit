@@ -327,7 +327,7 @@ class Operand:
             self.setup.append(f"ea = {reg_name(m.group(1))} + ({parse_disp(m.group(2))});")
             self.kind, self.addr = "mem", "ea"
             return
-        m = re.fullmatch(r"(d[0-7]|a[0-7]|sp|fp)@\(([^,()]*),(d[0-7]|a[0-7]|sp|fp):([wl])\)", t)
+        m = re.fullmatch(r"(d[0-7]|a[0-7]|sp|fp)@\(([^,()]*),(d[0-7]|a[0-7]|sp|fp):([wl])(?::[1248])?\)", t)   # (a 68000 ignores the scale bits objdump prints as :2)
         if m:
             idx = reg_name(m.group(3))
             idx = f"(u32)(s32)(s16){idx}" if m.group(4) == "w" else idx
@@ -340,7 +340,7 @@ class Operand:
             self.setup.append(f"ea = {int(m.group(1), 16):#x}u;")
             self.kind, self.addr = "mem", "ea"
             return
-        m = re.fullmatch(r"%pc@\(([0-9a-fx]+)(?:\s*<[^>]*>)?,(d[0-7]|a[0-7]|sp|fp):([wl])\)", t)
+        m = re.fullmatch(r"%pc@\(([0-9a-fx]+)(?:\s*<[^>]*>)?,(d[0-7]|a[0-7]|sp|fp):([wl])(?::[1248])?\)", t)
         if m:
             idx = reg_name(m.group(2))
             idx = f"(u32)(s32)(s16){idx}" if m.group(3) == "w" else idx
@@ -456,6 +456,7 @@ class Translator:
         self.guards = set(guards or ())   # instructions the game rewrites (patched.txt): check the opcode each time
         self.targets = set()              # branch targets: where a block begins
         self.block_of = {}                # address -> block number, after translate()
+        self.skipped_data = 0             # uncovered 'instructions' that didn't parse: left to the interpreter
         self.addrs = {a for a, *_ in instrs}
         self.lines = []
         self.pending_ticks = 0
@@ -511,7 +512,15 @@ class Translator:
             try:
                 self.instr(addr, nxt, mn, ops)
             except RecompError as e:
-                raise RecompError(f"at ${addr:06X} '{mn} {ops}': {e}")
+                if addr in self.covered:
+                    raise RecompError(f"at ${addr:06X} '{mn} {ops}': {e}")
+                # never executed: objdump read data as an instruction (a 68020 addressing mode,
+                # an operand that isn't one); the interpreter gets it if the game ever goes there
+                del L[cyc_at:]
+                self.not_code.add(addr)
+                self.skipped_data += 1
+                L.append(f"\t{{ cpu.pc = {addr:#x}u; goto dispatch; }}   /* not an instruction we know ({mn} {ops}): the interpreter's */")
+                continue
             if not self.traced:
                 L.insert(cyc_at, f"\tITRACE({addr:#x}u);")   # (after the checks that may hand it to the interpreter)
             if nxt not in self.addrs and not re.fullmatch(r"(bra|jmp|rts|rte|rtr|illegal|reset|\.short|\.long)[swl]?", mn):
@@ -623,6 +632,24 @@ class Translator:
                     for reg in regs:
                         L.append(f"\twr{bits}(ea, {reg}); ea += {bits // 8};")
             return
+        if base == "movep":               # bytes at every other address <-> a data register (the Z80 side, 8-bit ports)
+            mem_first = "@" in o[0]
+            m = re.fullmatch(r"(a[0-7]|sp|fp)@\((-?\d+)\)", o[0] if mem_first else o[1])
+            if not m:
+                raise RecompError(f"movep operand {o[0] if mem_first else o[1]}")
+            dn = int((o[1] if mem_first else o[0])[1])
+            L.append(f"\tea = {reg_name(m.group(1))} + {int(m.group(2))}u;")
+            if mem_first:
+                if bits == 32:
+                    L.append(f"\tD[{dn}] = rd8(ea) << 24 | rd8(ea + 2) << 16 | rd8(ea + 4) << 8 | rd8(ea + 6);")
+                else:
+                    L.append(f"\tsetd({dn}, rd8(ea) << 8 | rd8(ea + 2), 16);")
+            else:
+                if bits == 32:
+                    L.append(f"\twr8(ea, D[{dn}] >> 24); wr8(ea + 2, D[{dn}] >> 16); wr8(ea + 4, D[{dn}] >> 8); wr8(ea + 6, D[{dn}]);")
+                else:
+                    L.append(f"\twr8(ea, D[{dn}] >> 8); wr8(ea + 2, D[{dn}]);")
+            return
         if base == "lea":
             src, dst = opnd(0, 32), opnd(1, 32)
             emit(src); emit(dst, dst.write("ea"))
@@ -683,6 +710,20 @@ class Translator:
                   "addx": "op_addx", "subx": "op_subx"}[base]
             emit(src, f"tmp = {src.read()};")
             emit(dst, f"tmp = {fn}(tmp, {dst.read()}, {bits});", dst.write("tmp"))
+            return
+        if base in ("abcd", "sbcd"):      # Dy,Dx or -(Ay),-(Ax): bytes
+            fn = "bcd_add" if base == "abcd" else "bcd_sub"
+            m1 = re.fullmatch(r"(a[0-7]|sp|fp)@-", o[0]); m2 = re.fullmatch(r"(a[0-7]|sp|fp)@-", o[1])
+            if m1 and m2:
+                ry, rx = reg_name(m1.group(1)), reg_name(m2.group(1))
+                L.append(f"\t{ry} -= {2 if ry == 'A[7]' else 1}; tmp = rd8({ry}); {rx} -= {2 if rx == 'A[7]' else 1}; wr8({rx}, {fn}(tmp, rd8({rx})));")
+            else:
+                dy, dx = int(o[0][1]), int(o[1][1])
+                L.append(f"\tsetd({dx}, {fn}(D[{dy}] & 0xFF, D[{dx}] & 0xFF), 8);")
+            return
+        if base == "nbcd":
+            dst = opnd(0, 8)
+            emit(dst, f"tmp = bcd_sub({dst.read()}, 0);", dst.write("tmp"))
             return
         if base in ("cmp", "cmpi", "cmpa", "cmpm"):
             src, dst = opnd(0), opnd(1)
