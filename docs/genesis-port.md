@@ -175,27 +175,30 @@ sound rip above) and its output is turned into what Paula plays:
   slow part of the envelope is left out of the sample and played as volume.
   PSG squares and noise are tiny loops; drum samples are the game's own,
   cut out of the DAC writes;
-- at any moment the four most important notes have Paula's four channels
-  (decided in the build); music that goes round is found from the notes
-  repeating;
-- the Amiga gets a stream: per sixtieth of a second, per channel, "start
-  sample N, this period, this volume". The player runs on a CIA timer, so
-  the music keeps its beat when the game doesn't;
+- music has eight voices of the Amiga's mixer (the Mega Drive has ten or
+  eleven, rarely all sounding): when more notes sound at once the least
+  important gives way, decided in the build. Music that goes round is found
+  from the notes repeating;
+- the Amiga gets a stream: per sixtieth of a second, per voice, "start
+  sample N, here (left, right, both), this period, this volume";
+- `sound.c` mixes twelve voices (eight for music, two effects of two) into
+  Paula's four channels as two fourteen-bit sides, 232 samples a tick at
+  13.9 kHz. Paula's own interrupt at the end of each buffer is the tick, so
+  the music keeps its beat when the game doesn't. Samples stay in fast RAM;
 - the game's requests (a byte written to the Z80's RAM) are answered from a
-  table: music, an effect over the music (channel 3, a second one on 2), a
-  jingle, stop, fade. What the game reads back is the idle driver's RAM.
+  table: music, an effect, a jingle (the music waits), stop, fade. What the
+  game reads back is the idle driver's RAM.
 
 The ROM bytes only the driver read (the music data and samples) are blanked
-in the Amiga's image and used as chip RAM for samples. The sound data goes
-on the game's disk if it fits, else on a second one (`game2.adf`, volume
-`PORT2`: in DF1:, or swapped in when the loader asks). Samples live in fast
-RAM; the effects' are copied to chip RAM once, a piece of music's when it
-starts.
+in the Amiga's image. The sound data goes on the game's disk if it fits,
+else on a second one (`game2.adf`, volume `PORT2`: in DF1:, or swapped in
+when the loader asks).
 
-What it costs: four voices where the Mega Drive had ten (notes are dropped
-when more sound at once), Paula's hard left and right, and an FM sound that
-is a snapshot per octave rather than the chip. Tempo changes (speed shoes)
-and the driver's pause aren't followed yet.
+What it costs: the mixing takes processor time a stock A1200 doesn't have
+beside the game (a four-channel player straight on Paula's hardware, with no
+mixing, is the route there: the first version of `sound.c`, in the history),
+and an FM sound that is a snapshot per octave rather than the chip. Tempo
+changes (speed shoes) and the driver's pause aren't followed yet.
 
 Not in it yet: the interlaced two-player mode (the attract mode's second
 demo), the window plane, water palettes, hardware sprites; and it

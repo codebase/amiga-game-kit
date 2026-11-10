@@ -109,8 +109,8 @@ class Notes(unittest.TestCase):
 
 class Stream(unittest.TestCase):
     def play(self, data):
-        """the player's side: -> per tick, per channel [sample, period, volume]"""
-        st = [[None, 0, 0] for _ in range(4)]
+        """the player's side: -> per tick, per channel [sample, period, volume, pan]"""
+        st = [[None, 0, 0, 0] for _ in range(6)]
         out = []
         p = 0
         while p < len(data):
@@ -119,12 +119,19 @@ class Stream(unittest.TestCase):
             if b < 0x80:
                 out += [[list(c) for c in st] for _ in range(b + 1)]
                 continue
-            for c in range(4):
-                if b & (1 << c):
+            mask = b & 15
+            if b & 0x40:
+                mask |= data[p] << 4
+                p += 1
+            for c in range(len(st)):
+                if mask & (1 << c):
                     fl = data[p]
                     p += 1
                     if fl & 1:
                         st[c][0] = data[p]
+                        p += 1
+                    if fl & 16:
+                        st[c][3] = data[p]
                         p += 1
                     if fl & 2:
                         st[c][1] = data[p] << 8 | data[p + 1]
@@ -139,25 +146,25 @@ class Stream(unittest.TestCase):
         return out
 
     def test_the_bytes_say_what_the_rows_do(self):
-        rows = [[None] * 12 for _ in range(4)]
-        rows[0][2] = (5, 400, 40)
-        rows[0][3] = (-1, 402, 40)
-        rows[0][4] = (-1, 402, 30)
-        rows[2][4] = (9, 1000, 64)
-        rows[2][5] = (-1, 700, 64)
+        rows = [[None] * 12 for _ in range(6)]
+        rows[0][2] = (5, 400, 40, 3)
+        rows[0][3] = (-1, 402, 40, 3)
+        rows[0][4] = (-1, 402, 30, 3)
+        rows[5][4] = (9, 1000, 64, 2)
+        rows[5][5] = (-1, 700, 64, 2)
         local = []
         data, _ = m.encode(rows, 0, 12, local)
         self.assertEqual(local, [5, 9])
         got = self.play(data)
         self.assertEqual(len(got), 12)
-        self.assertEqual(got[2][0], [0, 400, 40])
-        self.assertEqual(got[3][0], [0, 402, 40])
-        self.assertEqual(got[4][0], [0, 402, 30])
+        self.assertEqual(got[2][0], [0, 400, 40, 3])
+        self.assertEqual(got[3][0], [0, 402, 40, 3])
+        self.assertEqual(got[4][0], [0, 402, 30, 3])
         self.assertEqual(got[5][0][2], 0)                      # the note ended: silence
-        self.assertEqual(got[5][2], [1, 700, 64])
-        self.assertEqual(got[11][2][2], 0)
+        self.assertEqual(got[5][5], [1, 700, 64, 2])           # (a channel past the fourth: the second mask byte)
+        self.assertEqual(got[11][5][2], 0)
 
-    def test_four_channels_go_to_the_loudest(self):
+    def test_the_voices_go_to_the_loudest(self):
         notes = []
         for v, amp in enumerate((0.9, 0.8, 0.7, 0.6, 0.1)):
             n = m.Note("psg", v, 0)
@@ -166,7 +173,7 @@ class Stream(unittest.TestCase):
             notes.append(n)
         late = m.Note("psg", 9, 10)
         late.t1, late.f, late.a, late.vol, late.end, late.peak = 30, [(10, 440.0)], [(10, 1.0)], [1.0] * 20, 30, 1.0
-        segs = m.arrange(notes + [late], 60)
+        segs = m.arrange(notes + [late], 60, 4)
         playing = {n.voice for ch in segs for n, a, b in ch}
         self.assertNotIn(4, playing)                           # the quiet one found no channel
         self.assertIn(9, playing)                              # the loud late one took the quietest's
@@ -186,8 +193,7 @@ class Pack(unittest.TestCase):
         blob = m.pack(snd, [(0x1E8000, 0x8000)], {0x1B8C: 0x1B88}, log=lambda *_: None)
         magic, n_s, n_st, n_a, _, o_s, o_st, o_rq, o_idle = struct.unpack_from(">4sHHHHIIII", blob, 0)
         self.assertEqual((magic, n_s, n_st, n_a), (b"MDSN", 1, 1, 2))
-        silence, sfx = struct.unpack_from(">II", blob, 28)
-        self.assertEqual((silence, sfx), (0x1E8000, 0x1E8004))
+        self.assertEqual(struct.unpack_from(">I", blob, 28)[0], 0x1E8000)
         self.assertEqual(struct.unpack_from(">H", blob, o_rq)[0], 0x1B88)
         self.assertEqual(struct.unpack_from(">H", blob, o_rq + 2 + 2 * 0xA0)[0], m.KINDS["over"] << 12 | 0)
         self.assertEqual(struct.unpack_from(">H", blob, o_rq + 2 + 2 * 0xFD)[0], m.KINDS["stop"] << 12 | 0xFFF)
@@ -197,7 +203,7 @@ class Pack(unittest.TestCase):
         self.assertEqual((lp, nch, kind, nloc), (0, 2, m.KINDS["over"], 1))
         self.assertEqual(blob[d:d + 8], stream[1] + b"\xff")
         sd, ln, loop, looplen, flags = struct.unpack_from(">IHHHH", blob, o_s)
-        self.assertEqual((ln * 2, loop, looplen * 2, flags), (len(s.data), 0, s.looplen, 1))
+        self.assertEqual((ln * 2, loop, looplen * 2, flags), (len(s.data), 0, s.looplen, 0))
         self.assertEqual(blob[sd:sd + len(s.data)], s.data)
 
 

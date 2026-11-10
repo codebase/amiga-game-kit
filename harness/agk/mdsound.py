@@ -16,11 +16,13 @@ play:
                envelope is taken out of the sample and played as volume.
                PSG squares and noise are tiny loops; DAC samples are the
                game's own, resampled
-  four voices  at any moment the four most important notes get Paula's four
-               channels (decided here, not on the Amiga)
-  the stream   per sixtieth of a second, per channel: start sample N, period,
-               volume. The Amiga's player (recomp/mdamiga/sound.c) only does
-               what the stream says
+  eight voices music has eight of the Amiga mixer's voices (the Mega Drive
+               has ten or eleven, rarely all at once): when more notes sound,
+               the least important gives way (decided here, not on the Amiga)
+  the stream   per sixtieth of a second, per voice: start sample N, where it
+               sounds, period, volume. The Amiga's player
+               (recomp/mdamiga/sound.c) mixes what the stream says into
+               Paula's four channels: fourteen bits, left and right
   requests     what each value written to the driver means (music, an effect
                over the music, stop, fade) is read from what it did to music
                that was playing
@@ -39,7 +41,7 @@ Z80_CLOCK = 3579545.0
 TICKS = 60
 PSG_GAIN = 0.35                       # a square at full volume, against one FM carrier at full level
 DAC_GAIN = 1.0
-MAX_RATE = 28000.0
+MAX_RATE = 14000.0                    # the mixer puts out 13.9 kHz: nothing is sampled finer
 CARRIERS = {0: (3,), 1: (3,), 2: (3,), 3: (3,), 4: (1, 3), 5: (1, 2, 3), 6: (1, 2, 3), 7: (0, 1, 2, 3)}
 SLOT_OP = (0, 2, 1, 3)                # the register's slot (bits 2,3 of its number) -> the operator
 
@@ -674,23 +676,22 @@ def shape(n, pool, total):
     n.peak = max((n.imp or n.vol)[:8])
 
 
+MUSIC_VOICES = 8                      # the mixer's voices for music; an effect has two
 WEIGHT = {"dac": 1.4, "fm": 1.0, "psg": 0.7, "noise": 0.5}
-SIDE = (1, 2, 2, 1)                   # Paula's channels 0 and 3 are on the left, 1 and 2 on the right (bit 0 left)
 
 
-def arrange(notes, total, nch=4):
-    """the notes onto nch channels -> per channel [(note, from tick, to tick)]"""
+def arrange(notes, total, nch=MUSIC_VOICES):
+    """the notes onto the mixer's nch voices -> per voice [(note, from tick, to tick)]. When more sound at once
+    than there are voices, the one that matters least at that moment gives way"""
     segs = [[] for _ in range(nch)]
     cur = [None] * nch
-    load = [0, 0, 0]
     for n in sorted(notes, key=lambda n: (n.t0, -n.peak * WEIGHT[n.kind])):
         t = n.t0
         free = [c for c in range(nch) if cur[c] is None or cur[c].end <= t]
         imp = n.peak * WEIGHT[n.kind]
         if free:
-            want = [c for c in free if nch == 4 and n.pan != 3 and SIDE[c] == (2 if n.pan == 1 else 1)]
             same = [c for c in free if cur[c] is not None and cur[c].voice == n.voice]
-            c = (same or want or sorted(free, key=lambda c: (load[SIDE[c % 4]], c)))[0]
+            c = (same or free)[0]
         else:
             def now(c):
                 m = cur[c]
@@ -702,13 +703,12 @@ def arrange(notes, total, nch=4):
             m, a, _ = segs[c][-1]
             segs[c][-1] = (m, a, t)
         cur[c] = n
-        load[SIDE[c % 4]] += 1
         segs[c].append((n, t, min(n.end, total)))
     return segs
 
 
 def frames_of(segs, total, gain):
-    """-> per channel, per tick: (sample index to start or -1, period, volume 0..64) or None while silent"""
+    """-> per channel, per tick: (sample index to start or -1, period, volume 0..64, pan) or None while silent"""
     out = []
     for ch in segs:
         row = [None] * total
@@ -728,21 +728,23 @@ def frames_of(segs, total, gain):
                 v = n.vol[k] * s.scale * gain if k < len(n.vol) else 0
                 vol = int(min(64, round(v * 64)))
                 if t > a and row[t - 1] is not None:      # small changes wait: a few cents, a step of volume for three ticks
-                    _, per0, vol0 = row[t - 1]
+                    _, per0, vol0, _ = row[t - 1]
                     if abs(per - per0) * 400 < per0:
                         per = per0
                     if vol and abs(vol - vol0) < 2 and (t - a) % 3:
                         vol = vol0
-                row[t] = (s.index if t == a and a == n.t0 else -1, per, vol)
+                row[t] = (s.index if t == a and a == n.t0 else -1, per, vol, n.pan)
         out.append(row)
     return out
 
 
 def encode(rows, a, b, local, state=None, sync=False):
     """ticks a..b of the channels' rows as the player's bytes. A byte under $80: that many more ticks with no
-    change; else its low bits say which channels follow, each a flags byte (1: start a sample, a byte: its
-    number in the stream's own list `local`; 2: period, a word; 8: period, a signed byte's change; 4: volume,
-    a byte). `sync`: the first tick sets every channel outright (a loop is entered there)"""
+    change; else its low four bits say which of channels 0..3 follow (and bit 6: a second byte, for channels
+    4..11), each a flags byte and then, in this order: 1: start a sample (a byte: its number in the stream's own
+    list `local`); 16: where it sounds (a byte: 2 left, 1 right, 3 both); 2: period (a word, in Paula's units);
+    8: period, a signed byte's change; 4: volume (a byte, 0..64). $FF ends the stream.
+    `sync`: the first tick sets every channel outright (a loop is entered there)"""
     nch = len(rows)
     st = state if state is not None else [[-1, 0] for _ in range(nch)]      # per channel: period, volume
     out = bytearray()
@@ -760,7 +762,7 @@ def encode(rows, a, b, local, state=None, sync=False):
                     body.append(0)
                     st[c][1] = 0
             else:
-                inst, per, vol = r
+                inst, per, vol, pan = r
                 if inst < 0 and sync and t == a:          # sounding across the loop's start: started again there
                     k = t
                     while k > 0 and rows[c][k] is not None and rows[c][k][0] < 0:
@@ -773,6 +775,8 @@ def encode(rows, a, b, local, state=None, sync=False):
                             raise SoundError("a stream uses more than 255 samples")
                         local.append(inst)
                     body.append(local.index(inst))
+                    fl |= 16
+                    body.append(pan)
                 if inst >= 0 or (sync and t == a) or abs(per - st[c][0]) > 127:
                     fl |= 2
                     body += struct.pack(">H", per)
@@ -794,7 +798,11 @@ def encode(rows, a, b, local, state=None, sync=False):
                 k = min(wait, 128)
                 out.append(k - 1)
                 wait -= k
-            out.append(0x80 | mask)
+            if mask >> 4:
+                out.append(0x80 | 0x40 | (mask & 15))
+                out.append(mask >> 4)
+            else:
+                out.append(0x80 | mask)
             out += ev
         else:
             wait += 1
@@ -940,7 +948,7 @@ def build(d, log=print, only=None):
     streams = {}
     for key, (notes, total, loop) in parsed.items():
         kind = kinds.get(key, "over")
-        nch = 4 if kind in ("music", "jingle") else 2
+        nch = MUSIC_VOICES if kind in ("music", "jingle") else 2
         rows = frames_of(arrange(notes, total, nch), total, gain)
         local = []
         if loop:                          # the start once, then a round taken from the second time through
@@ -957,40 +965,43 @@ def build(d, log=print, only=None):
     return {"streams": streams, "requests": reqs, "kinds": kinds, "pool": pool, "idle": idle, "addrs": addrs, "gain": gain}
 
 
-def wav(path, stream, pool, seconds=60, rate=28000):
-    """a stream as Paula would play it (channels 0,3 left and 1,2 right) -> a WAV file, for listening"""
+def wav(path, stream, pool, seconds=60, rate=13909):
+    """a stream as the Amiga's mixer plays it -> a WAV file, for listening on the host"""
     import wave
     nch, data, body, local = stream
-    chan = [dict(s=None, pos=0.0, per=428, vol=0) for _ in range(4)]
-    cmap = (0, 1, 2, 3) if nch == 4 else (3, 2)
+    chan = [dict(s=None, pos=0.0, per=428, vol=0, pan=3) for _ in range(nch)]
     out = bytearray()
     src, p = data, 0
     wait = 0
-    spt = rate // TICKS
+    spt = 232
     for _ in range(seconds * TICKS):
         if wait:
             wait -= 1
         else:
             while p >= len(src):
-                if body is None:
-                    src = b"\x7f"
-                else:
-                    src = body
+                src = b"\x7f" if body is None else body
                 p = 0
             b = src[p]
             p += 1
             if b < 0x80:
                 wait = b
             else:
+                mask = b & 15
+                if b & 0x40:
+                    mask |= src[p] << 4
+                    p += 1
                 for c in range(nch):
-                    if not b & (1 << c):
+                    if not mask & (1 << c):
                         continue
                     fl = src[p]
                     p += 1
-                    ch = chan[cmap[c]]
+                    ch = chan[c]
                     if fl & 1:
                         ch["s"] = pool.order[local[src[p]]]
                         ch["pos"] = 0.0
+                        p += 1
+                    if fl & 16:
+                        ch["pan"] = src[p]
                         p += 1
                     if fl & 2:
                         ch["per"] = src[p] << 8 | src[p + 1]
@@ -1003,22 +1014,24 @@ def wav(path, stream, pool, seconds=60, rate=28000):
                         p += 1
         for _ in range(spt):
             mix = [0, 0]
-            for i, ch in enumerate(chan):
+            for ch in chan:
                 s = ch["s"]
-                if s is None or not ch["vol"]:
-                    if s is not None:
-                        ch["pos"] += PAULA / ch["per"] / rate
+                if s is None:
                     continue
                 pos = ch["pos"]
                 n = len(s.data)
                 if pos >= n:
                     if not s.looplen:
+                        ch["s"] = None
                         continue
                     pos = s.loop + (pos - s.loop) % s.looplen
-                    ch["pos"] = pos
                 v = s.data[int(pos)]
-                mix[0 if i in (0, 3) else 1] += (v - 256 if v > 127 else v) * ch["vol"]
-                ch["pos"] = pos + PAULA / ch["per"] / rate
+                v = (v - 256 if v > 127 else v) * (ch["vol"] * 3 // 4 if ch["pan"] == 3 else ch["vol"])
+                if ch["pan"] & 2:
+                    mix[0] += v
+                if ch["pan"] & 1:
+                    mix[1] += v
+                ch["pos"] = pos + 255.0 / ch["per"]
             out += struct.pack("<hh", max(-32768, min(32767, mix[0] * 2)), max(-32768, min(32767, mix[1] * 2)))
     with wave.open(path, "wb") as w:
         w.setnchannels(2)
@@ -1052,13 +1065,12 @@ def aliases(d, addrs):
 def pack(snd, regions, alias=None, log=print):
     """build()'s result -> the Amiga player's data (big-endian; offsets from its start):
       0 'MDSN'   4 samples.w streams.w addresses.w 0.w
-      12 -> samples: data.l (offset) length.w loop.w (words; $FFFF plays once) looplen.w flags.w (1: an effect's: kept in chip RAM)
-      16 -> streams: data.l loop.l (0: ends) channels.b kind.b locals.w -> its sample list.l (words; bit 15: left out)
+      12 -> samples: data.l (offset) length.w loop.w (words; $FFFF plays once) looplen.w 0.w
+      16 -> streams: data.l loop.l (0: ends) voices.b kind.b locals.w -> its sample list.l (words)
       20 -> requests: per address: the Z80 address.w, then 256 words: kind << 12 | stream ($FFF none)
       24 -> the idle driver's RAM (8192 bytes: what the game reads back)
-      28 chip RAM: silence.l effects.l music.l its size.l jingles.l its size.l
-    `regions`: [(address, size)] of chip RAM free for samples. Samples stay in fast RAM; the effects' are copied to
-    chip RAM once, a piece of music's when it starts."""
+      28 chip RAM for the mixer's buffers.l (2K)
+    `regions`: [(address, size)] of chip RAM that is free. Everything else stays in fast RAM."""
     pool = snd["pool"]
     streams = snd["streams"]
     kinds = snd["kinds"]
@@ -1075,63 +1087,11 @@ def pack(snd, regions, alias=None, log=print):
         sid[key] = uniq[ident]
     if len(order) >= 0xFFF:
         raise SoundError("too many streams")
-    resident = set()
-    for nch, data, body, local, kind in order:
-        if kind not in ("music", "jingle"):
-            resident.update(local)
-    size = lambda i: len(pool.order[i].data)
-    regions = sorted(([a, n] for a, n in regions), key=lambda r: -r[1])
+    regions = [r for r in regions if r[1] >= 2048]
     if not regions:
-        raise SoundError("no chip RAM left for samples")
-    silence = regions[0][0]
-    regions[0][0] += 4
-    regions[0][1] -= 4
-
-    want = {"music": 0, "jingle": 0}
-    for nch, data, body, local, kind in order:
-        if kind in want:
-            want[kind] = max(want[kind], sum(size(i) for i in local if i not in resident))
-    # three blocks: the effects' samples (all of them, always there), a buffer for the music playing and one for a
-    # jingle over it. The largest want first, each from the region with the most room left, cut down to it
-    wants = sorted([("sfx", sum(size(i) for i in resident)), ("music", min(want["music"], 0x10000)), ("jingle", min(want["jingle"], 0x8000))],
-                   key=lambda w: -w[1])
-    got = {}
-    left_out = set()
-    for name, n in wants:
-        r = max(regions, key=lambda r: r[1])
-        room = r[1] & ~1
-        if name == "sfx":
-            for i in sorted(resident, key=size, reverse=True):
-                if n <= room:
-                    break
-                left_out.add(i)
-                n -= size(i)
-        n = min(n, room) & ~1
-        got[name] = (r[0], n)
-        r[0] += n
-        r[1] -= n
-    need = got["sfx"][1]
-    sfx_base = got["sfx"][0]
-    resident -= left_out
-    bufs = {"music": got["music"], "jingle": got["jingle"]}
-    dropped = 0
-    locals_ = []
-    for nch, data, body, local, kind in order:
-        words = []
-        if kind in want:
-            cap = bufs[kind][1]
-            total = sum(size(i) for i in local if i not in resident)
-            out = set()
-            for i in sorted((i for i in local if i not in resident), key=size, reverse=True):
-                if total <= cap:
-                    break
-                out.add(i)
-                total -= size(i)
-            dropped += len(out)
-            words = [i | (0x8000 if i in out else 0) for i in local]
-        else:
-            words = [i | (0x8000 if i in left_out else 0) for i in local]
-        locals_.append(words)
+        raise SoundError("no chip RAM left for the mixer's buffers (2K)")
+    mixbuf = min(regions, key=lambda r: r[1])[0]
+    locals_ = [list(local) for nch, data, body, local, kind in order]
     addrs = list(snd["addrs"])
     table = {a: a for a in addrs}
     for a, known in (alias or {}).items():
@@ -1176,12 +1136,10 @@ def pack(snd, regions, alias=None, log=print):
         d = len(blob)
         blob += s.data
         if s.looplen:
-            struct.pack_into(">IHHHH", blob, off_samples + 12 * i, d, len(s.data) // 2, s.loop // 2, s.looplen // 2, 1 if i in resident else 0)
+            struct.pack_into(">IHHHH", blob, off_samples + 12 * i, d, len(s.data) // 2, s.loop // 2, s.looplen // 2, 0)
         else:
-            struct.pack_into(">IHHHH", blob, off_samples + 12 * i, d, len(s.data) // 2, 0xFFFF, 0, 1 if i in resident else 0)
+            struct.pack_into(">IHHHH", blob, off_samples + 12 * i, d, len(s.data) // 2, 0xFFFF, 0, 0)
     struct.pack_into(">4sHHHHIIII", blob, 0, b"MDSN", n_s, len(order), len(table), 0, off_samples, off_streams, off_req, off_idle)
-    struct.pack_into(">IIIIII", blob, 28, silence, sfx_base or 0, bufs["music"][0], bufs["music"][1], bufs["jingle"][0], bufs["jingle"][1])
-    log(f"sound: {len(order)} streams, {n_s} samples; chip RAM: {need} bytes of effects' samples"
-        + (f" ({len(left_out)} left out)" if left_out else "") + f", {bufs['music'][1]} for a piece of music (the largest wants {want['music']}), "
-        f"{bufs['jingle'][1]} for a jingle" + (f"; {dropped} samples of pieces too large for that are left out" if dropped else ""))
+    struct.pack_into(">I", blob, 28, mixbuf)
+    log(f"sound: {len(order)} streams, {n_s} samples, {len(blob)} bytes for the Amiga's player (fast RAM; the mixer's buffers at ${mixbuf:06X})")
     return bytes(blob)

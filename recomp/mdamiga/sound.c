@@ -1,138 +1,109 @@
-/* The sound of a ported Mega Drive game: Paula played from the stream agk
- * port made (harness/agk/mdsound.py has the format and how it is made: the
- * game's own driver run on the host, its notes given to four channels, its
- * FM patches rendered to samples). Nothing is worked out here. Sixty times a
- * second, on CIA-B's timer (level 6: music keeps its beat when the game
- * doesn't), each player reads its next bytes: start sample N on channel C,
- * this period, this volume.
+/* The sound of a ported Mega Drive game: a twelve-voice mixer on Paula,
+ * played from the stream agk port made (harness/agk/mdsound.py has the
+ * format and how it is made: the game's own driver run on the host, its
+ * notes as "start sample N, this period, this volume", its FM patches
+ * rendered to samples). Nothing musical is worked out here.
+ *
+ * Paula plays two buffers a side, over and over, 232 samples at period 255:
+ * a sixtieth of a second. Channels 0 and 3 are the left (0 at volume 64 has
+ * the high byte, 3 at volume 1 the next six bits: fourteen bits between
+ * them), 1 and 2 the right. When channel 0 comes to the end of a buffer its
+ * interrupt (level 4) is the tick: the stream's next bytes are read, and the
+ * voices are mixed into the buffer Paula will take after the one it has just
+ * started. So the music keeps its beat whatever the game is doing, and the
+ * samples never leave fast RAM. Voices 0..7 are the music's (or a jingle's,
+ * while the music waits), 8..11 two effects'.
  *
  * The game talks to "its Z80": a byte written to one of the driver's request
- * addresses is looked up (music: replace; effect: over the music on channel 3,
- * a second one on 2; jingle: the music waits; stop; fade), and what it reads
- * back is the idle driver's RAM, where the driver always says it is ready.
- *
- * The samples stay in fast RAM. The effects' are copied to chip RAM once, a
- * piece of music's when it starts (into the one buffer music has). */
+ * addresses is looked up (music, an effect, a jingle, stop, fade), and what
+ * it reads back is the idle driver's RAM, where the driver is always ready. */
 typedef unsigned char u8;
-typedef unsigned short u16;
-typedef unsigned long u32;
 typedef signed char s8;
+typedef unsigned short u16;
+typedef short s16;
+typedef unsigned long u32;
+typedef long s32;
 #define CUSTOM(o) (*(volatile u16 *)(0xDFF000 + (o)))
 #define CUSTOML(o) (*(volatile u32 *)(0xDFF000 + (o)))
-#define CIAB(o) (*(volatile u8 *)(0xBFD000 + (o)))
 
 const u8 *port_sound;                     /* main.c: the data, or 0 */
-int port_hz = 50;                         /* the machine's (for CIA-B's clock) */
+int port_hz = 50;
 
 struct smp { u32 data; u16 len, loop, looplen, flags; };
 struct strm { u32 data, loop; u8 nch, kind; u16 nlocal; u32 local; };
 enum { K_MUSIC = 1, K_OVER, K_STOP, K_FADE, K_JINGLE };
+#define N 232                             /* samples a tick */
+#define PERIOD 255                        /* 3546895 / 255 = 13909 Hz; 232 of them: 59.95 ticks a second */
+#define NV 12
 
 static const struct smp *smps;
 static const struct strm *strms;
 static const u8 *reqs, *idle;
-static u16 n_smps, n_strms, n_addrs;
-static u32 chip_silence, chip_music, chip_music_size, chip_jingle, chip_jingle_size;
-#define MAX_SMPS 1024
-static u32 kept[MAX_SMPS];                /* an effect's sample in chip RAM (0: not there) */
+static u16 n_addrs;
+static u8 *chipbuf;                       /* 8 buffers of N: [which of the two][channel] */
+static u8 fill;                           /* the pair to mix into next */
 
+struct voice { const s8 *data; u32 pos, step, end, llen; u8 vol, pan, on; };
+static struct voice voice[NV];
 struct player {
 	const u8 *p, *loop;                   /* p == 0: not playing */
 	u16 wait, id;
-	u8 nch, map[4];
-	u16 per[4];
+	u8 nch, base;                         /* its voices: base.. */
+	u16 per[8];
 	const u16 *local;
-	u32 addr[256];                        /* its samples in chip RAM */
 };
 static struct player music, jingle, sfx[2];
-static struct { u32 addr; const struct smp *s; u16 per; u8 vol; } mus[4];   /* what the music has on each channel */
-static u8 owner[4];                       /* 0: the music's; 1, 2: that effect's */
-static u8 trig;                           /* channels starting a sample this tick */
-static struct { u32 lc, llc; u16 len, llen; } go[4];
 static u8 mvol = 64, fading, fade_n;
 static volatile u8 rq[16], rq_w, rq_r;    /* requests waiting for the tick: address index, value */
+static s16 voltab[65][256];               /* a sample byte at a volume */
+static s32 acc[2][N];
 
-static void pa_start(int ch, u32 addr, const struct smp *s, int from_loop) {
-	if (!addr) { CUSTOM(0xA8 + ch * 16) = 0; return; }
-	trig |= (u8)(1 << ch);
-	if (s->loop != 0xFFFF) { go[ch].llc = addr + s->loop * 2; go[ch].llen = s->looplen; }
-	else { go[ch].llc = chip_silence; go[ch].llen = 2; }
-	if (from_loop) { go[ch].lc = go[ch].llc; go[ch].len = go[ch].llen; }
-	else { go[ch].lc = addr; go[ch].len = s->len; }
-}
-static void lines(int n) {
-	while (n--) { u8 v = *(volatile u8 *)0xDFF006; while (*(volatile u8 *)0xDFF006 == v) {} }
-}
-static void quiet_music(void) {
-	for (int ch = 0; ch < 4; ch++) { mus[ch].vol = 0; mus[ch].s = 0; if (!owner[ch]) CUSTOM(0xA8 + ch * 16) = 0; }
-}
-/* a channel an effect had goes back to the music: a note that is still held picks up at its loop */
-static void give_back(int ch) {
-	owner[ch] = 0;
-	if (mus[ch].s && mus[ch].vol && mus[ch].addr && mus[ch].s->loop != 0xFFFF && (music.p || jingle.p)) {
-		pa_start(ch, mus[ch].addr, mus[ch].s, 1);
-		CUSTOM(0xA6 + ch * 16) = mus[ch].per;
-		CUSTOM(0xA8 + ch * 16) = (u16)(mus[ch].vol * mvol >> 6);
-	} else CUSTOM(0xA8 + ch * 16) = 0;
-}
-static void finish(struct player *pl, int who) {
-	pl->p = 0;
-	if (who) { for (int c = 0; c < pl->nch; c++) if (owner[pl->map[c]] == who) give_back(pl->map[c]); }
-	else quiet_music();
-}
+static void hush(int a, int b) { for (int i = a; i < b; i++) voice[i].on = 0; }
 
-static void step(struct player *pl, int who) {
+static void step(struct player *pl) {
 	if (!pl->p) return;
 	if (pl->wait) { pl->wait--; return; }
 	const u8 *p = pl->p;
 	u8 b = *p++;
 	if (b == 0xFF) {
-		if (!pl->loop) { finish(pl, who); return; }
+		if (!pl->loop) { pl->p = 0; hush(pl->base, pl->base + pl->nch); return; }
 		p = pl->loop;
 		b = *p++;
 	}
 	if (b < 0x80) { pl->wait = b; pl->p = p; return; }
+	int mask = b & 15;
+	if (b & 0x40) mask |= *p++ << 4;
 	for (int c = 0; c < pl->nch; c++) {
-		if (!(b & (1 << c))) continue;
+		if (!(mask & (1 << c))) continue;
 		u8 fl = *p++;
-		int ch = pl->map[c], mine = owner[ch] == who;
+		struct voice *v = &voice[pl->base + c];
 		if (fl & 1) {
-			u8 i = *p++;
-			const struct smp *s = &smps[pl->local[i] & 0x7FFF];
-			if (!who) { mus[ch].s = s; mus[ch].addr = pl->addr[i]; }
-			if (mine) pa_start(ch, pl->addr[i], s, 0);
+			const struct smp *s = &smps[pl->local[*p++] & 0x7FFF];
+			v->data = (const s8 *)(port_sound + s->data);
+			v->pos = 0;
+			v->end = (u32)s->len << 17;
+			v->llen = s->loop != 0xFFFF ? (u32)s->looplen << 17 : 0;
+			v->on = 1;
 		}
+		if (fl & 16) v->pan = *p++;
 		if (fl & 2) { pl->per[c] = (u16)(p[0] << 8 | p[1]); p += 2; }
 		if (fl & 8) pl->per[c] = (u16)(pl->per[c] + (s8)*p++);
-		if (fl & 10) { if (!who) mus[ch].per = pl->per[c]; if (mine) CUSTOM(0xA6 + ch * 16) = pl->per[c]; }
-		if (fl & 4) {
-			u8 v = *p++;
-			if (!who) { mus[ch].vol = v; v = (u8)(v * mvol >> 6); }
-			if (mine) CUSTOM(0xA8 + ch * 16) = v;
-		}
+		if (fl & 10) v->step = ((u32)PERIOD << 16) / (pl->per[c] ? pl->per[c] : 1);
+		if (fl & 4) v->vol = *p++;
 	}
 	pl->p = p;
 }
 
-static void copy(const u8 *s, u8 *d, u32 n) { while (n--) *d++ = *s++; }
-
-static void begin(struct player *pl, int id, u32 base, u32 size) {
+static void begin(struct player *pl, int id, int base) {
 	const struct strm *st = &strms[id];
-	u32 at = base;
 	pl->local = (const u16 *)(port_sound + st->local);
-	for (int i = 0; i < st->nlocal && i < 256; i++) {
-		u16 w = pl->local[i];
-		const struct smp *s = &smps[w & 0x7FFF];
-		u32 n = (u32)s->len * 2;
-		if ((w & 0x7FFF) < MAX_SMPS && kept[w & 0x7FFF]) pl->addr[i] = kept[w & 0x7FFF];
-		else if ((w & 0x8000) || !size || at + n > base + size) pl->addr[i] = 0;
-		else { copy(port_sound + s->data, (u8 *)at, n); pl->addr[i] = at; at += n; }
-	}
-	pl->p = port_sound + st->data;
 	pl->loop = st->loop ? port_sound + st->loop : 0;
 	pl->wait = 0;
 	pl->id = (u16)id;
 	pl->nch = st->nch;
+	pl->base = (u8)base;
+	hush(base, base + pl->nch);
+	pl->p = port_sound + st->data;
 }
 
 static void request(int ai, int v) {
@@ -141,39 +112,22 @@ static void request(int ai, int v) {
 	switch (kind) {
 	case K_MUSIC:
 		jingle.p = 0;
-		quiet_music();
 		mvol = 64; fading = 0;
-		for (int c = 0; c < 4; c++) music.map[c] = (u8)c;
-		begin(&music, id, chip_music, chip_music_size);
+		hush(0, 8);
+		begin(&music, id, 0);
 		break;
 	case K_JINGLE:
-		quiet_music();
-		for (int c = 0; c < 4; c++) jingle.map[c] = (u8)c;
-		begin(&jingle, id, chip_jingle, chip_jingle_size);
+		hush(0, 8);
+		begin(&jingle, id, 0);
 		break;
-	case K_OVER: {
-		int n = strms[id].nch, k;
-		if (n >= 2) {                     /* both channels: whatever effects were playing stop */
-			sfx[1].p = 0;
-			k = 0;
-			owner[3] = owner[2] = 1;
-			sfx[0].map[0] = 3; sfx[0].map[1] = 2;
-		} else {
-			if (sfx[0].p && sfx[0].id == id && sfx[0].nch == 1) k = 0;
-			else if (sfx[1].p && sfx[1].id == id) k = 1;
-			else if (!sfx[0].p) k = 0;
-			else if (!sfx[1].p && sfx[0].nch == 1) k = 1;
-			else k = 0;
-			if (k == 0 && sfx[0].p && sfx[0].nch == 2) { if (owner[2] == 1) give_back(2); }
-			sfx[k].map[0] = (u8)(k ? 2 : 3);
-			owner[k ? 2 : 3] = (u8)(k + 1);
-		}
-		begin(&sfx[k], id, 0, 0);
+	case K_OVER: {                        /* the same effect again takes its own place; else the free one, else the first */
+		int k = sfx[0].p && sfx[0].id == id ? 0 : sfx[1].p && sfx[1].id == id ? 1 : !sfx[0].p ? 0 : !sfx[1].p ? 1 : 0;
+		begin(&sfx[k], id, 8 + k * 2);
 		break;
 	}
 	case K_STOP:
 		music.p = jingle.p = 0;
-		quiet_music();
+		hush(0, 8);
 		break;
 	case K_FADE:
 		if (music.p) { fading = 1; fade_n = 0; }
@@ -181,27 +135,63 @@ static void request(int ai, int v) {
 	}
 }
 
+static void mix(void) {
+	for (int i = 0; i < N; i++) acc[0][i] = acc[1][i] = 0;
+	for (int k = 0; k < NV; k++) {
+		struct voice *v = &voice[k];
+		if (!v->on || !v->step) continue;
+		int vol = k < 8 ? v->vol * mvol >> 6 : v->vol;
+		if (v->pan == 3) vol = vol * 3 >> 2;                  /* in the middle: on both sides, a little lower */
+		if (vol > 64) vol = 64;
+		const s16 *vt = voltab[vol];
+		const s8 *d = v->data;
+		u32 pos = v->pos, st = v->step;
+		s32 *l = acc[0], *r = acc[1];
+		int n = N;
+		while (n) {
+			if (pos >= v->end) {
+				if (!v->llen) { v->on = 0; break; }
+				do pos -= v->llen; while (pos >= v->end);
+			}
+			u32 room = (v->end - pos + st - 1) / st;
+			int m = room < (u32)n ? (int)room : n;
+			n -= m;
+			if (!vol) { pos += st * (u32)m; l += m; r += m; }
+			else if (v->pan == 3) { while (m--) { s32 s = vt[(u8)d[pos >> 16]]; *l++ += s; *r++ += s; pos += st; } }
+			else if (v->pan == 2) { while (m--) { *l++ += vt[(u8)d[pos >> 16]]; pos += st; } r += 0; }
+			else { while (m--) { *r++ += vt[(u8)d[pos >> 16]]; pos += st; } }
+		}
+		v->pos = pos;
+	}
+	u8 *b = chipbuf + fill * 4 * N;
+	static const u8 hi[2] = { 0, 1 }, lo[2] = { 3, 2 };
+	for (int side = 0; side < 2; side++) {
+		u8 *h = b + hi[side] * N, *w = b + lo[side] * N;
+		const s32 *a = acc[side];
+		for (int i = 0; i < N; i++) {
+			s32 s = a[i] * 2;
+			if (s > 32767) s = 32767; else if (s < -32768) s = -32768;
+			h[i] = (u8)(s >> 8);
+			w[i] = (u8)((s & 0xFF) >> 2);
+		}
+	}
+}
+
+/* channel 0 has just taken the buffers it was pointed at: point all four at the other pair, and fill that */
 void sound_tick(void) {
+	u8 *b = chipbuf + fill * 4 * N;
+	for (int ch = 0; ch < 4; ch++) CUSTOML(0xA0 + ch * 16) = (u32)(b + ch * N);
 	while (rq_r != rq_w) { int a = rq[rq_r], v = rq[rq_r + 1]; rq_r = (u8)((rq_r + 2) & 15); request(a, v); }
 	if (fading && ++fade_n >= 3) {
 		fade_n = 0;
 		if (mvol) mvol--;
-		if (!mvol) { fading = 0; music.p = 0; quiet_music(); mvol = 64; }
-		else for (int ch = 0; ch < 4; ch++) if (!owner[ch]) CUSTOM(0xA8 + ch * 16) = (u16)(mus[ch].vol * mvol >> 6);
+		if (!mvol) { fading = 0; music.p = 0; hush(0, 8); mvol = 64; }
 	}
-	if (jingle.p) step(&jingle, 0); else step(&music, 0);
-	step(&sfx[0], 1);
-	step(&sfx[1], 2);
-	if (trig) {                           /* the samples that start now: off, pointed, on; then their loops */
-		u8 t = trig;
-		trig = 0;
-		CUSTOM(0x096) = t;
-		for (int ch = 0; ch < 4; ch++) if (t & (1 << ch)) { CUSTOML(0xA0 + ch * 16) = go[ch].lc; CUSTOM(0xA4 + ch * 16) = go[ch].len; }
-		lines(5);
-		CUSTOM(0x096) = (u16)(0x8200 | t);
-		lines(3);
-		for (int ch = 0; ch < 4; ch++) if (t & (1 << ch)) { CUSTOML(0xA0 + ch * 16) = go[ch].llc; CUSTOM(0xA4 + ch * 16) = go[ch].llen; }
-	}
+	if (jingle.p) step(&jingle); else step(&music);
+	step(&sfx[0]);
+	step(&sfx[1]);
+	mix();
+	fill ^= 1;
 }
 
 /* the game's side: its Z80's RAM */
@@ -221,32 +211,25 @@ void sound_init(void) {
 	if (!b || b[0] != 'M' || b[1] != 'D' || b[2] != 'S' || b[3] != 'N') return;
 	const u16 *w = (const u16 *)b;
 	const u32 *l = (const u32 *)b;
-	n_smps = w[2]; n_strms = w[3]; n_addrs = w[4];
+	n_addrs = w[4];
 	smps = (const struct smp *)(b + l[3]);
 	strms = (const struct strm *)(b + l[4]);
 	reqs = b + l[5];
-	chip_silence = l[7];
-	u32 at = l[8];
-	chip_music = l[9]; chip_music_size = l[10]; chip_jingle = l[11]; chip_jingle_size = l[12];
-	*(u32 *)chip_silence = 0;
-	for (int i = 0; i < n_smps && i < MAX_SMPS; i++) {
-		if (!(smps[i].flags & 1) || !at) continue;
-		u32 n = (u32)smps[i].len * 2;
-		copy(b + smps[i].data, (u8 *)at, n);
-		kept[i] = at;
-		at += n;
-	}
+	chipbuf = (u8 *)l[7];
+	if (!chipbuf) return;
+	for (int i = 0; i < 8 * N; i++) chipbuf[i] = 0;
+	for (int v = 0; v <= 64; v++) for (int s = 0; s < 256; s++) voltab[v][s] = (s16)((s8)s * v);
 	CUSTOM(0x096) = 0x000F;
-	for (int ch = 0; ch < 4; ch++) CUSTOM(0xA8 + ch * 16) = 0;
 	CUSTOM(0x09E) = 0x00FF;               /* ADKCON: no modulation between channels */
+	for (int ch = 0; ch < 4; ch++) {
+		CUSTOML(0xA0 + ch * 16) = (u32)(chipbuf + ch * N);
+		CUSTOM(0xA4 + ch * 16) = N / 2;
+		CUSTOM(0xA6 + ch * 16) = PERIOD;
+		CUSTOM(0xA8 + ch * 16) = ch == 0 || ch == 1 ? 64 : 1;
+	}
+	fill = 1;
 	idle = b + l[6];
-	u32 count = (port_hz == 60 ? 715909 : 709379) / 60;
-	CIAB(0xD00) = 0x7F;                   /* its interrupts: timer A only */
-	CIAB(0xE00) = 0;
-	CIAB(0x400) = (u8)count; CIAB(0x500) = (u8)(count >> 8);
-	(void)CIAB(0xD00);
-	CIAB(0xD00) = 0x81;
-	CIAB(0xE00) = 0x11;                   /* load and run, over and over */
-	CUSTOM(0x09C) = 0x2000;
-	CUSTOM(0x09A) = 0xA000;               /* level 6 on */
+	CUSTOM(0x09C) = 0x0780;
+	CUSTOM(0x09A) = 0x8080;               /* channel 0's interrupt (level 4) */
+	CUSTOM(0x096) = 0x820F;
 }

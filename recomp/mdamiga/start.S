@@ -36,10 +36,10 @@ _port_go:
 	lea	quiet(pc),a1                | the other interrupt levels: nothing of ours is enabled on them
 	move.l	a1,0x64(a0)
 	move.l	a1,0x68(a0)
-	move.l	a1,0x70(a0)
 	move.l	a1,0x74(a0)
-	lea	l6(pc),a1                   | CIA-B's timer: the sound's tick
 	move.l	a1,0x78(a0)
+	lea	l4(pc),a1                   | audio channel 0: the sound's tick
+	move.l	a1,0x70(a0)
 	lea	_vectors,a0
 	movec	a0,vbr
 	jsr	_port_place
@@ -124,12 +124,12 @@ _stub_table:                            | in agk port's SHIM_NAMES order
 	.long	stub_fixa0, stub_fixa1, stub_fixa2, stub_fixa3, stub_fixa4, stub_fixa5, stub_fixa6
 	.long	0
 
-| ---- level 6: sixty times a second, whatever the game is doing: the sound (sound.c)
-l6:
+| ---- level 4: Paula has started on the next buffer, sixty times a second whatever the game is
+| doing: the sound (sound.c) reads its stream and mixes the buffer after that
+l4:
 	movem.l	d0-d1/a0-a1,-(sp)
-	move.b	0xbfdd00,d0                 | (reading it lets go of the line)
-	move.w	#0x2000,0xdff09c
-	move.w	#0x2000,0xdff09c
+	move.w	#0x0780,0xdff09c
+	move.w	#0x0780,0xdff09c
 	jsr	_sound_tick
 	movem.l	(sp)+,d0-d1/a0-a1
 	rte
