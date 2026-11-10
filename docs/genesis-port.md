@@ -175,6 +175,21 @@ How `layer.c` works, and what it has learned:
   after eight blanks, as far as it got). A slow machine gets fewer pictures,
   not a slower game. Colours aren't regrouped while a fade is moving: every
   step of it would be a screenful of cells.
+- **The game first, the picture in its waits.** `agk port` finds the loops
+  where the game waits for an interrupt (a test of RAM and a branch back to
+  it: Sonic 2 has two) and lists them in `port.json` (`idle`) and
+  `port_layout.h` (`PORT_IDLES`). The copper raises an interrupt every
+  sixteen lines; when it lands in one of those loops the layer draws until the
+  blank is near, so the game's logic is never held up by drawing. Without
+  such loops (or when none is reached for six blanks) the layer draws after
+  the game's vertical interrupt as before. While the game's vertical interrupt
+  runs the VDP's status reads "in blank", however late the Amiga delivered it:
+  Sonic 2's handler otherwise waits a whole frame for the flag.
+- **Only what changed.** DMA to video memory is compared and copied in longs,
+  the scroll geometry is redone only when the scroll table, the vertical
+  scroll or its registers changed, tiles go from chunky to planar through a
+  table per palette line, and a sprite cell that lies whole on the screen is
+  drawn a tile row at a time.
 - **Bitplane pointers carry.** Skipping the high word of a pointer in the
   copper list is only right while the running pointer is in the same 64K.
 
@@ -216,10 +231,12 @@ changes (speed shoes) and the driver's pause aren't followed yet.
 
 Not in it yet: the interlaced two-player mode (the attract mode's second
 demo), the window plane, water palettes, hardware sprites. On a stock
-A1200 with fast RAM (`a1200-fast`) it boots and runs, slowly: the title at
-about sixteen pictures a second with the game's own logic behind too (the
-game's code and the VDP's DMA emulation take most of a frame before anything
-is drawn), and the mixer is more than that machine has. `a1200-accel` is the
+A1200 with fast RAM (`a1200-fast`), sound off, Emerald Hill's logic runs at
+about 85 to 90% of full speed (70% while scrolling fast) with eight to twelve
+pictures a second, and cells can be seen stale while it scrolls; the mixer is
+more than that machine has, so it has no sound there yet. The original code
+runs unchanged against an emulated VDP, which a 14 MHz 68020 pays for: a port
+written by hand for the Amiga will be faster. `a1200-accel` is the
 profile it is developed on.
 
 The plan it follows:

@@ -1087,6 +1087,26 @@ def learn(analysis, outdir, log=print):
 
 # ------------------------------------------------------------------- port
 
+def idle_loops(code):
+    """-> [(a, b)]: a test of the game's RAM at a and a branch back to it at b when it fails: nothing in
+    the loop changes what it tests, so it is the game waiting for an interrupt (the vertical blank's,
+    mostly: its frame is done). The Amiga's layer does its drawing while the game is in one."""
+    out = []
+    for a in sorted(code):
+        n, mn, ops = code[a]
+        base, _ = base_size(mn)
+        if base not in ("tst", "cmp", "cmpi", "btst") or a + n not in code:
+            continue
+        mem = [o for o in ops if not IMM.match(o)]
+        if not mem or not all(ABS.match(o) and is_ram(int(ABS.match(o).group(1), 16)) for o in mem):
+            continue
+        _, mn2, ops2 = code[a + n]
+        m = BRANCH.match(mn2)
+        if m and m.group(1) not in ("ra", "sr") and int(ABS.match(ops2[0]).group(1), 16) == a:
+            out.append((a, a + n))
+    return out
+
+
 def port(rom_path, analysis, outdir, image, log=print):
     """-> (the port's memory image path, its layout and counts)"""
     os.makedirs(outdir, exist_ok=True)
@@ -1174,6 +1194,7 @@ def port(rom_path, analysis, outdir, image, log=print):
     info = {"layout": lay, "instructions": len(code), "code_bytes": len(blob), "stats": dict(stats),
             "rewrites": dict(rw.notes), "unknown_targets": sorted(rw.unknown_targets),
             "entries_without_room": failed, "entries": plan,
+            "idle": [[new_addr[a], new_addr[b]] for a, b in idle_loops(code)],
             "sp": lay["ram"] + (struct.unpack(">I", rom[0:4])[0] & 0xFFFF), "pc": struct.unpack(">I", rom[4:8])[0]}
     with open(os.path.join(outdir, "port.json"), "w") as f:
         json.dump(info, f)
@@ -1181,6 +1202,7 @@ def port(rom_path, analysis, outdir, image, log=print):
         f"the hardware layer's page at ${lay['shim']:06X}, top ${top:06X}")
     log("  " + ", ".join(f"{v} {k}" for k, v in sorted(rw.notes.items())))
     log("  old code: " + ", ".join(f"{v} {k}" for k, v in sorted(stats.items())))
+    log(f"  {len(info['idle'])} loop(s) where the game waits for an interrupt")
     if rw.unknown_targets:
         log(f"  {len(rw.unknown_targets)} branch targets in code the port doesn't have (it runs where it was, unported): "
             + " ".join(f"${t:06X}" for t in sorted(rw.unknown_targets)[:8]) + (" ..." if len(rw.unknown_targets) > 8 else ""))
@@ -1288,6 +1310,8 @@ def build_amiga(outdir, kit_root, image, analysis=None, log=print):
         f.write("/* where agk port put things (port.json) */\n")
         for k, v in defs.items():
             f.write(f"#define PORT_{k} {v:#x}\n")
+        # (the loops the game waits for an interrupt in, first and last instruction: the layer draws meanwhile)
+        f.write("#define PORT_IDLES " + "".join(f"{a:#x},{b:#x}," for a, b in info.get("idle", [])) + "\n")
     script = ("m68k-amigaos-gcc -m68020 -O2 -fomit-frame-pointer -Wall -Wl,-Map,game.map -o game main.c layer.c sound.c inflate.c start.S > build.log 2>&1 "
               "|| { tail -30 build.log; exit 1; }; m68k-amigaos-nm -n game > game.nm; m68k-amigaos-strip game; "
               "printf 'game\\n' > startup-sequence; rm -f game.adf; "

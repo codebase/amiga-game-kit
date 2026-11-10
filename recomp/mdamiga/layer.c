@@ -50,6 +50,7 @@ static u8 reg[24];
 static u32 vdp_code, vdp_addr;
 static int ctrl_pending, dma_fill_pending;
 static u16 status = 0x3400;
+static u8 in_vint;                        /* the game's vertical interrupt handler is running */
 static u8 pad_th[2], pad_ctrl[2];
 static u16 pad_state[2];                  /* bits: 0 up 1 down 2 left 3 right 4 B 5 C 6 A 7 Start */
 static u16 keys;
@@ -61,10 +62,21 @@ volatile u32 vbl_count;
 static u8 *const surf[4] = { (u8 *)PORT_SCREEN0, (u8 *)(PORT_SCREEN0 + PF_BYTES),
                              (u8 *)(PORT_SCREEN0 + 2 * PF_BYTES), (u8 *)(PORT_SCREEN0 + 3 * PF_BYTES) };
 static u16 *const cop[2] = { (u16 *)PORT_COPPER, (u16 *)(PORT_COPPER + 0x4000) };   /* (in one 64K: COP1LC changes in one write) */
+#ifdef LAYER_DEBUG                        /* (counts a debug build reports) */
+#define DBG(x) x
+static int dbg_cells, dbg_tiles;         /* drawn this frame */
+static int dbg_moved, dbg_group, dbg_flip, dbg_geo;
+static u32 dbg_rd, dbg_wr, dbg_data, dbg_dma, dbg_vint, dbg_w2, dbg_en;
+#else
+#define DBG(x) (void)0
+#endif
 static int dbg_snap;
-static int dbg_cells, dbg_tiles;         /* drawn this frame (LAYER_DEBUG shows them) */
 static int back;                          /* which of plane A's bitmaps (and which copper list) is being made */
 
+#ifdef LAYER_DEBUG
+static void ser(int c) { while (!(CUSTOM(0x018) & 0x2000)) ; CUSTOM(0x030) = (u16)(0x100 | c); }
+static void ser_hex(u32 v, int digits) { for (int k = digits * 4 - 4; k >= 0; k -= 4) ser("0123456789ABCDEF"[(v >> k) & 15]); ser(' '); }
+#endif
 static u32 mem16(u32 a) { const u8 *p = (const u8 *)a; return (u32)p[0] << 8 | p[1]; }
 extern u32 port_ram;                      /* main.c: where the game's RAM went (fast RAM) */
 static u32 game_addr(u32 a) {
@@ -85,7 +97,9 @@ static u8 sh_ok[2][CELLS];                /* the shadow's cell holds its tile */
 static u8 valid[4][32 * 128];             /* per surface */
 static u32 nt[2];                         /* the planes' name tables in VRAM */
 static u8 tile_dirty[2048];
-static int tiles_dirty;
+static int tiles_dirty, td_lo = 2048, td_hi = -1;   /* ... and the range they are in */
+static u32 hs_at;                         /* the horizontal scroll table in VRAM */
+static u8 hs_dirty = 1;                   /* the scroll (table, vertical, mode) changed: the geometry is to be worked out again */
 static int cell_all[2];
 static int cram_dirty = 1;
 static u16 seen[2][4];                    /* the colours the tiles drawn in a playfield have used, per palette line */
@@ -101,9 +115,10 @@ static void cell_dirty(int p, u32 cell) {
 	valid[p + 2][at] = valid[p + 2][at + 64] = 0;
 }
 static void all_dirty(int p) {
-	u32 i;
-	for (i = 0; i < CELLS; i++) sh_ok[p][i] = 0;
-	for (i = 0; i < 32 * 128; i++) valid[p][i] = valid[p + 2][i] = 0;
+	u32 *a = (u32 *)sh_ok[p], *b, i;        /* (by longs: a stock A1200 feels this) */
+	for (i = 0; i < CELLS / 4; i++) a[i] = 0;
+	a = (u32 *)valid[p]; b = (u32 *)valid[p + 2];
+	for (i = 0; i < 32 * 128 / 4; i++) a[i] = b[i] = 0;
 }
 /* the VDP's planes are pw x ph cells (32, 64 or 128 each way); the bitmaps hold 64 x 32. A narrower
  * plane repeats across the bitmap; what lies beyond 64 x 32 of a bigger one isn't shown. */
@@ -121,7 +136,11 @@ static void vram_w(u32 a, u8 hi, u8 lo) {
 	a &= 0xFFFE;
 	if (vram[a] == hi && vram[a + 1] == lo) return;
 	vram[a] = hi; vram[a + 1] = lo;
-	tile_dirty[a >> 5] = 1; tiles_dirty = 1;
+	int t = (int)(a >> 5);
+	tile_dirty[t] = 1; tiles_dirty = 1;
+	if (t < td_lo) td_lo = t;
+	if (t > td_hi) td_hi = t;
+	if (a - hs_at < 0x380) hs_dirty = 1;
 	u32 o = a - nt[0], size = (u32)(pw * ph * 2);
 	if (o < size) entry_dirty(0, o >> 1);
 	o = a - nt[1];
@@ -131,7 +150,30 @@ static void vram_w8(u32 a, u8 v) {        /* a single byte (fills, copies) */
 	a &= 0xFFFF;
 	if (a & 1) vram_w(a, vram[a & 0xFFFE], v); else vram_w(a, v, vram[a + 1]);
 }
+/* n words from p into VRAM at a (even): what a DMA is. A tile's worth (32 bytes) at a time where
+ * that fits: compared by longs and, most of the time, found the same (the game sends its scroll
+ * and sprite tables every frame); copied by longs where no name table is, a word at a time there. */
+static void vram_block(u32 a, const u8 *p, u32 n) {
+	u32 size = (u32)(pw * ph * 2);
+	if (a + n * 2 > 0x10000) { for (; n; n--, p += 2, a += 2) vram_w(a, p[0], p[1]); return; }
+	for (; n && (a & 31); n--, p += 2, a += 2) vram_w(a, p[0], p[1]);
+	for (; n >= 16; n -= 16, p += 32, a += 32) {
+		const u32 *s = (const u32 *)p;
+		u32 *d = (u32 *)&vram[a];
+		if (s[0] == d[0] && s[1] == d[1] && s[2] == d[2] && s[3] == d[3] && s[4] == d[4] && s[5] == d[5] && s[6] == d[6] && s[7] == d[7]) continue;
+		if (a + 32 > nt[0] && a < nt[0] + size) { for (int k = 0; k < 32; k += 2) vram_w(a + (u32)k, p[k], p[k + 1]); continue; }
+		if (a + 32 > nt[1] && a < nt[1] + size) { for (int k = 0; k < 32; k += 2) vram_w(a + (u32)k, p[k], p[k + 1]); continue; }
+		d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = s[3]; d[4] = s[4]; d[5] = s[5]; d[6] = s[6]; d[7] = s[7];
+		int t = (int)(a >> 5);
+		tile_dirty[t] = 1; tiles_dirty = 1;
+		if (t < td_lo) td_lo = t;
+		if (t > td_hi) td_hi = t;
+		if (a + 32 > hs_at && a < hs_at + 0x380) hs_dirty = 1;
+	}
+	for (; n; n--, p += 2, a += 2) vram_w(a, p[0], p[1]);
+}
 static void tables_moved(void) {
+	DBG(dbg_moved++);
 	nt[0] = (u32)(reg[2] & 0x38) << 10;
 	nt[1] = (u32)(reg[4] & 7) << 13;
 	static const u8 shifts[4] = { 5, 6, 5, 7 };
@@ -143,12 +185,13 @@ static void tables_moved(void) {
 
 /* ----------------------------------------------------------------- VDP */
 static void vdp_data_write(u16 v) {
+	DBG(dbg_data++);
 	switch (vdp_code & 0xF) {
 	case 1:
 		if (vdp_addr & 1) vram_w(vdp_addr, (u8)v, (u8)(v >> 8)); else vram_w(vdp_addr, (u8)(v >> 8), (u8)v);
 		break;
 	case 3: { u16 n = v & 0xEEE, *c = &cram[(vdp_addr >> 1) & 63]; if (*c != n) { *c = n; cram_dirty = 1; cram_chg[(vdp_addr >> 1) & 63] = 1; } break; }
-	case 5: vsram[(vdp_addr >> 1) % 40] = v & 0x7FF; break;
+	case 5: { u16 *c = &vsram[(vdp_addr >> 1) % 40]; if (*c != (v & 0x7FF)) { *c = v & 0x7FF; hs_dirty = 1; } break; }
 	}
 	vdp_addr = (vdp_addr + reg[15]) & 0xFFFF;
 	if (dma_fill_pending) {
@@ -177,13 +220,12 @@ static void dma_run(void) {
 	u32 len = reg[19] | (u32)reg[20] << 8;
 	if (!len) len = 0x10000;
 	int mode = reg[23] >> 6;
+	DBG(dbg_dma += len);
 	if (mode < 2) {
 		u32 src = ((u32)(reg[23] & 0x7F) << 17 | (u32)reg[22] << 9 | (u32)reg[21] << 1);
 		if ((vdp_code & 0xF) == 1 && reg[15] == 2 && !(vdp_addr & 1)) {   /* the usual case: words into VRAM */
-			const u8 *p = (const u8 *)game_addr(src);
-			u32 a = vdp_addr;
-			for (u32 i = 0; i < len; i++) { vram_w(a, p[0], p[1]); p += 2; a += 2; }
-			vdp_addr = a & 0xFFFF;
+			vram_block(vdp_addr, (const u8 *)game_addr(src), len);
+			vdp_addr = (vdp_addr + len * 2) & 0xFFFF;
 			src += len * 2;
 		} else {
 			for (u32 i = 0; i < len; i++) {
@@ -213,6 +255,7 @@ static void vdp_ctrl_write(u16 v) {
 			reg[r] = (u8)v;
 			if (r == 2 || r == 4 || r == 16) tables_moved();
 			if (r == 7) cram_dirty = 1;
+			if (r == 11 || r == 13) { hs_at = (u32)(reg[13] & 0x3F) << 10; hs_dirty = 1; }
 		}
 		vdp_code &= ~3UL;
 		return;
@@ -261,7 +304,10 @@ static u32 io_read(u32 a, int bits) {
 		case 0x4: case 0x6: {
 			int l = beam_line();
 			v = status | 1;
-			if (l >= H) v |= 0x0008;
+			/* (the game's vertical interrupt is in the blank whenever it comes: the layer may have held it
+			 * up past the top of the picture, and a handler that waits for the blank's flag, as Sonic 2's
+			 * does, would wait a frame for the next) */
+			if (l >= H || in_vint) v |= 0x0008;
 			if ((CUSTOM(0x006) & 0xFF) > 0xB0) v |= 0x0004;
 			ctrl_pending = 0;
 			break;
@@ -310,6 +356,7 @@ static void io_write(u32 a, u32 v, int bits) {
 }
 
 void sh_r(u32 a, int bits) {
+	DBG(dbg_rd++);
 	u8 *cell = (u8 *)PORT_SHIM;
 	u32 v;
 	a &= 0xFFFFFF;
@@ -324,6 +371,7 @@ void sh_r(u32 a, int bits) {
 }
 
 void sh_w(u32 a, int bits) {
+	DBG(dbg_wr++);
 	const u8 *cell = (const u8 *)PORT_SHIM;
 	u32 v = bits == 8 ? cell[0] : bits == 16 ? (u32)cell[0] << 8 | cell[1]
 	      : (u32)cell[0] << 24 | (u32)cell[1] << 16 | (u32)cell[2] << 8 | cell[3];
@@ -345,6 +393,16 @@ static u8 map[2][64];
 static u32 grouped_at[2];
 static const u8 lev[8] = { 0, 52, 87, 116, 144, 172, 206, 255 };
 
+/* lut[p][line][v]: a byte of a tile (two pixels) in playfield p's slots, as two bits in each of four
+ * plane bytes (plane 0's in the top byte): what a tile is turned planar with, a row in four look-ups */
+static u32 lut[2][4][256];
+static u8 lut_ok[2];                      /* a bit per palette line */
+static u16 used[256];                     /* the two colours of such a byte, as bits */
+static u32 lut_entry(const u8 *m, int v) {
+	u32 a = m[v >> 4], b = m[v & 15];
+	return (a & 1) << 25 | (b & 1) << 24 | (a & 2) << 16 | (b & 2) << 15 | (a & 4) << 7 | (b & 4) << 6 | (a & 8) >> 2 | (b & 8) >> 3;
+}
+
 static int dist(u16 a, u16 b) {           /* two CRAM words */
 	int dr = (int)(a >> 1 & 7) - (int)(b >> 1 & 7), dg = (int)(a >> 5 & 7) - (int)(b >> 5 & 7), db = (int)(a >> 9 & 7) - (int)(b >> 9 & 7);
 	return dr * dr * 3 + dg * dg * 4 + db * db * 2;
@@ -362,6 +420,12 @@ static void newcomer(int p, int c) {
 	else if (best > 12) want_group[p] = 1;
 	map[p][c] = (u8)bs;
 	pal_stale = 1;
+	if (lut_ok[p] >> (c >> 4) & 1) {      /* the table's entries with this colour in them */
+		u32 *l = lut[p][c >> 4];
+		const u8 *m = &map[p][c & 0x30];
+		int i = c & 15;
+		for (int j = 0; j < 16; j++) { l[i << 4 | j] = lut_entry(m, i << 4 | j); l[j << 4 | i] = lut_entry(m, j << 4 | i); }
+	}
 }
 
 /* group the colours playfield p's tiles use into 15 slots: fifteen colours picked to be as far from each other
@@ -400,6 +464,7 @@ static int group(int p) {
 		for (i = 0; i < count; i++) map[p][member[i]] = (u8)(near[i] + 1);
 	}
 	nslot[p] = (u8)reps;
+	lut_ok[p] = 0;
 	for (i = 0; i < reps; i++) slot_rep[p][i + 1] = rep[i];
 	for (k = 0, i = 0; i < 64; i++) k |= old[i] ^ map[p][i];
 	return k;
@@ -451,22 +516,21 @@ static const ptile_t *get_tile(int p, int tile, int line) {
 	const u8 *src = &vram[tile * 32];
 	const u8 *m = &map[p][line * 16];
 	u16 bits = 0;
-	for (int i = 0; i < 32; i++) bits |= (u16)(1 << (src[i] >> 4) | 1 << (src[i] & 15));
+	for (int i = 0; i < 32; i++) bits |= used[src[i]];
 	bits &= (u16)~(seen[p][line] | 1);
 	if (bits) {
 		seen[p][line] |= bits;
 		for (int i = 1; i < 16; i++) if (bits >> i & 1) newcomer(p, line * 16 + i);
 	}
+	u32 *l = lut[p][line];
+	if (!(lut_ok[p] >> line & 1)) {
+		for (int v = 0; v < 256; v++) l[v] = lut_entry(m, v);
+		lut_ok[p] |= (u8)(1 << line);
+	}
 	for (int y = 0; y < 8; y++, src += 4) {
-		u8 p0 = 0, p1 = 0, p2 = 0, p3 = 0;
-		for (int x = 0; x < 4; x++) {
-			u8 s = m[src[x] >> 4];
-			p0 = (u8)(p0 << 1 | (s & 1)); p1 = (u8)(p1 << 1 | (s >> 1 & 1)); p2 = (u8)(p2 << 1 | (s >> 2 & 1)); p3 = (u8)(p3 << 1 | (s >> 3));
-			s = m[src[x] & 15];
-			p0 = (u8)(p0 << 1 | (s & 1)); p1 = (u8)(p1 << 1 | (s >> 1 & 1)); p2 = (u8)(p2 << 1 | (s >> 2 & 1)); p3 = (u8)(p3 << 1 | (s >> 3));
-		}
-		t->row[y][0] = p0; t->row[y][1] = p1; t->row[y][2] = p2; t->row[y][3] = p3;
-		t->mask[y] = (u8)(p0 | p1 | p2 | p3);
+		u32 v = l[src[0]] << 6 | l[src[1]] << 4 | l[src[2]] << 2 | l[src[3]];
+		*(u32 *)t->row[y] = v;
+		t->mask[y] = (u8)(v >> 24 | v >> 16 | v >> 8 | v);
 	}
 	cache_ok[p][tile] |= (u8)(1 << line);
 	return t;
@@ -478,7 +542,7 @@ static void draw_cell(int p, u32 cell, int over) {
 	int tile = (e[0] & 7) << 8 | e[1], line = (e[0] >> 5) & 3, hf = e[0] & 8, vf = e[0] & 16;
 	const ptile_t *t = get_tile(p, tile, line);
 	u8 *d = shadow[p] + (cell >> 6) * 8 * SH_ROW + (cell & 63);
-	dbg_cells++;
+	DBG(dbg_cells++);
 	tile_in_nt[tile] = 1;
 	if (!over) sh_ok[p][cell] = 1;
 	for (int y = 0; y < 8; y++, d += SH_ROW) {
@@ -501,7 +565,7 @@ static void put(int s, int p, int r, int c, int n) {
 	const u8 *src = shadow[p] + r * 8 * SH_ROW + (c & 63);
 	u8 *dst = surf[s] + r * 8 * PF_ROW + c;
 	int k, y;
-	dbg_tiles += n;
+	DBG(dbg_tiles += n);
 	if (n == 4) {
 		for (k = 0; k < 4; k++, src += SH_PLANE - 8 * SH_ROW, dst += PF_PLANE - 8 * PF_ROW)
 			for (y = 0; y < 8; y++, src += SH_ROW, dst += PF_ROW) *(u32 *)dst = *(const u32 *)src;
@@ -523,6 +587,8 @@ static u8 wmin[2][32], wmax[2][32];       /* per cell row of the bitmap: the col
 static void geometry(void) {
 	const u8 *hs = &vram[(u32)(reg[13] & 0x3F) << 10];
 	int mode = reg[11] & 3;
+	hs_dirty = 0;
+	DBG(dbg_geo++);
 	for (int p = 0; p < 2; p++) {
 		int vs = vsram[p];
 		for (int r = 0; r < 32; r++) { wmin[p][r] = 255; wmax[p][r] = 0; }
@@ -597,6 +663,9 @@ static void build_copper(void) {
 	*c++ = 0x106; *c++ = 0x1200;          /* and their low bits */
 	for (i = 0; i < 32; i++) { *c++ = (u16)(0x180 + 2 * i); *c++ = pal_lo[i]; }
 	*c++ = 0x106; *c++ = 0x1000;
+	/* every sixteenth line the copper raises an interrupt (the blitter's bit): start.S looks where the game is */
+	*c++ = 0x1001; *c++ = 0xFFFE; *c++ = 0x009C; *c++ = 0x8040;
+	*c++ = 0x2001; *c++ = 0xFFFE; *c++ = 0x009C; *c++ = 0x8040;
 	for (int y = 0; y < H; y++) {
 		for (int p = 0; p < 2; p++) {
 			int x = sx[p][y];
@@ -605,8 +674,8 @@ static void build_copper(void) {
 		}
 		int c1 = fine[1] << 4 | fine[0];
 		int moveA = y == 0 || want[0] != ptr[0] + PF_ROW, moveB = y == 0 || want[1] != ptr[1] + PF_ROW;
-		int movec = y == 0 || c1 != con1, irq = y && y - 1 == hint;
-		if (y && (moveA || moveB || movec || irq)) {   /* after line y-1's fetch, before line y's */
+		int movec = y == 0 || c1 != con1, irq = y && y - 1 == hint, poll = y && ((0x2C + y - 1) & 15) == 15;
+		if (y && (moveA || moveB || movec || irq || poll)) {   /* after line y-1's fetch, before line y's */
 			int l = 0x2C + y - 1;
 			if (l >= 256 && !past255) { *c++ = 0xFFDF; *c++ = 0xFFFE; past255 = 1; }
 			if (l != 255) { *c++ = (u16)((l & 0xFF) << 8 | 0xDB); *c++ = 0xFFFE; }
@@ -624,8 +693,12 @@ static void build_copper(void) {
 				*c++ = (u16)(r + 2); *c++ = (u16)a;
 			}
 		}
+		if (poll) { *c++ = 0x009C; *c++ = 0x8040; }
 		ptr[0] = want[0]; ptr[1] = want[1]; con1 = c1;
 	}
+	if (!past255) { *c++ = 0xFFDF; *c++ = 0xFFFE; }
+	*c++ = 0x0F01; *c++ = 0xFFFE; *c++ = 0x009C; *c++ = 0x8040;   /* (lines 271 and 287) */
+	*c++ = 0x1F01; *c++ = 0xFFFE; *c++ = 0x009C; *c++ = 0x8040;
 	*c++ = 0xFFFF; *c++ = 0xFFFE;
 	CUSTOM(0x082) = (u16)(u32)cop[back];
 }
@@ -677,6 +750,41 @@ static void sprites(void) {
 					if (Y <= -8 || Y >= H) continue;
 					const ptile_t *t = get_tile(0, (tile0 + col * h + (vf ? h - 1 - cy : cy)) & 0x7FF, line);
 					u32 last = 0xFFFFFFFF;
+					/* the usual case, the quick way: the tile whole on screen, its eight lines scrolled alike, and
+					 * no edge of the bitmap in it. The (at most four) cells it touches once, then a word a plane a row. */
+					if (Y >= 0 && Y + 7 < H && sx[0][Y] == sx[0][Y + 7] && sx[0][Y] == sx[0][Y + 3] && row_of[0][Y + 7] == row_of[0][Y] + 7) {
+						int bx = sx[0][Y] + X, brow = row_of[0][Y], sh = bx & 7, c0 = (bx >> 3) & 63;
+						if (bx >= 0 && c0 < 63) {
+							int two_c = sh != 0, two_r = (brow & 7) != 0;
+							for (int e = 0; e < 4; e++) {
+								if (((e & 1) && !two_c) || ((e & 2) && !two_r)) continue;
+								u32 cr = (u32)((brow >> 3) + (e >> 1));
+								u32 cl = cr << 6 | (u32)(c0 + (e & 1)), at2 = cr * 128 + (u32)(bx >> 3) + (u32)(e & 1);
+								if (!sh_ok[0][cl]) draw_cell(0, cl, 0);
+								if (!bob_flag[cl]) {
+									bob_flag[cl] = 1; bob_list[bob_n++] = (u16)cl;
+									if (!pass && (nta[entry_of(cl) * 2] & 0x80)) over_list[over_n++] = (u16)cl;
+								}
+								if (!gflag[at2]) { gflag[at2] = 1; glist[gn++] = (u16)at2; val[at2] = 0; }
+							}
+							u8 *d = base + brow * SH_ROW + c0;
+							int up = 8 - sh;
+							for (int r = 0; r < 8; r++, d += SH_ROW) {
+								int rr = vf ? 7 - r : r;
+								u8 m = t->mask[rr];
+								if (!m) continue;
+								const u8 *src = t->row[rr];
+								u8 b0 = src[0], b1 = src[1], b2 = src[2], b3 = src[3];
+								if (hf) { m = rev[m]; b0 = rev[b0]; b1 = rev[b1]; b2 = rev[b2]; b3 = rev[b3]; }
+								u16 k = (u16)~(m << up);
+								*(u16 *)d = (u16)((*(u16 *)d & k) | (b0 << up));
+								*(u16 *)(d + SH_PLANE) = (u16)((*(u16 *)(d + SH_PLANE) & k) | (b1 << up));
+								*(u16 *)(d + SH_PLANE * 2) = (u16)((*(u16 *)(d + SH_PLANE * 2) & k) | (b2 << up));
+								*(u16 *)(d + SH_PLANE * 3) = (u16)((*(u16 *)(d + SH_PLANE * 3) & k) | (b3 << up));
+							}
+							continue;
+						}
+					}
 					for (int r = 0; r < 8; r++) {
 						int yy = Y + r;
 						if (yy < 0 || yy >= H) continue;
@@ -719,26 +827,58 @@ static void sprites(void) {
 }
 
 /* ------------------------------------------------------------ the frame */
-/* after the game's vertical interrupt, interrupts masked: the cells and the sprites, then the
- * display that shows them from the next vertical blank */
-static int rest;                          /* (debug: frames a picture took) */
+static u32 began_at;                      /* the blank the picture being made was begun in */
+static int rest;                          /* (debug: the times it was gone on with) */
 static u8 busy;                           /* a picture is being made in the bitmaps off screen, and isn't whole yet */
-static u32 fade_at;                       /* when most of the palette last moved */
+static u32 vint_seq, drawn_seq;           /* the game's interrupts, and the one the picture being made (or last made) began after */
+static u32 work_at;                       /* the blank in which the layer last drew while the game waited */
+static const u32 idles[] = { PORT_IDLES 0, 0 };   /* agk port's: the loops the game waits for an interrupt in */
+static u32 fade_at, fade_gap;             /* when most of the palette last moved, and how long after the time before */
+static void picture(void);
+/* The game comes first: a frame of its logic, then the picture in what is left of the frame. The
+ * game says when it is done by waiting for its interrupt in a loop agk port found, and the copper
+ * asks every sixteen lines where it is (start.S). So a slow machine shows fewer pictures and plays
+ * at the game's speed, and a fast one loses nothing. */
+static int waiting(u32 pc) {              /* the game, interrupted at pc, was in one of its waiting loops */
+	pc -= port_ram - PORT_RAM;
+	for (int i = 0; idles[i]; i += 2) if (pc >= idles[i] && pc <= idles[i + 1]) return 1;
+	return 0;
+}
+void layer_idle(u32 pc) {
+	if (!busy && drawn_seq == vint_seq) return;   /* nothing new to show */
+	if (!waiting(pc)) return;
+	deadline = 300;                       /* (the vertical blank's interrupt is to come on time) */
+	if (late()) return;
+	work_at = vbl_count;
+	picture();
+}
+
+/* after the game's vertical interrupt. A game that never waits (it takes more than a frame, every
+ * frame, or agk port found no such loop) is given its picture here, a slice of the frame at a time. */
 void layer_frame(void) {
-	int p, i;
 	layer_irq_leave();
+	in_vint = 0;
+	vint_seq++;
+	if (idles[0] && vbl_count - work_at < 6) return;
 	deadline = raster() + SLICE;          /* (without it a busy game would never be given a picture) */
 	if (deadline < DEADLINE) deadline = DEADLINE;
 	if (deadline > 300) deadline = 300;
 	if (late()) return;
-	geometry();
+	picture();
+}
+
+/* the cells and the sprites, then the display that shows them from the next vertical blank; as far
+ * as the time goes (deadline), and gone on with the next time */
+static void picture(void) {
+	int p, i;
+	if (hs_dirty) geometry();
 	if (scene_new) {                      /* the planes were set up anew: the colours are found again as tiles are drawn */
 		scene_new = 0;
 		for (p = 0; p < 2; p++) {
 			for (i = 0; i < 4; i++) seen[p][i] = 0;
 			for (i = 0; i < 64; i++) map[p][i] = 0;
 			for (i = 0; i < 2048; i++) cache_ok[p][i] = 0;
-			nslot[p] = want_group[p] = 0;
+			nslot[p] = want_group[p] = lut_ok[p] = 0;
 		}
 		for (i = 0; i < 64; i++) anim[i] = anim_n[i] = 0;
 		cram_dirty = 1;
@@ -748,8 +888,13 @@ void layer_frame(void) {
 		cram_dirty = 0;
 		/* a few colours changing by themselves, again and again: a cycle (a fade changes most of them) */
 		for (i = 0; i < 64; i++) n += cram_chg[i];
+		if (n > 16) {                     /* (a slow machine's fade has long steps: it isn't over between two of them) */
+			fade_gap = vbl_count - fade_at;
+			if (fade_gap > 100) fade_gap = 100;
+			fade_at = vbl_count;
+		}
 		for (i = 0; i < 64; i++) {
-			if (n > 16) { anim[i] = anim_n[i] = 0; fade_at = vbl_count; }
+			if (n > 16) anim[i] = anim_n[i] = 0;
 			else if (cram_chg[i] && !anim[i] && ++anim_n[i] >= 3) {
 				anim[i] = 1;
 				for (p = 0; p < 2; p++) if (seen[p][i >> 4] >> (i & 15) & 1) want_group[p] = 1;
@@ -760,25 +905,26 @@ void layer_frame(void) {
 		for (p = 0; p < 2; p++) if (err[p] > 60) want_group[p] = 1;   /* (a fade came up: what was grouped in the dark) */
 	}
 	/* (not while a fade is moving: every step of it would be a new grouping and a screenful of cells) */
-	for (p = 0; p < 2; p++) if (want_group[p] && vbl_count - grouped_at[p] >= 25 && vbl_count - fade_at >= 12) {
+	for (p = 0; p < 2; p++) if (want_group[p] && vbl_count - grouped_at[p] >= 25 && vbl_count - fade_at >= 12 + 3 * fade_gap) {
 		want_group[p] = 0;
 		if (group(p)) {
+			DBG(dbg_group++);
 			for (i = 0; i < 2048; i++) cache_ok[p][i] = 0;
 			cell_all[p] = 1;
 		}
 		pal_stale = 1;
 	}
 	if (tiles_dirty) {                    /* tiles the game rewrote: their planar copies go, and the cells showing them */
-		int scan = 0;
-		tiles_dirty = 0;
-		for (i = 0; i < 2048; i++) if (tile_dirty[i]) { cache_ok[0][i] = cache_ok[1][i] = 0; if (tile_in_nt[i]) scan = 1; else tile_dirty[i] = 0; }
+		int scan = 0, lo = td_lo, hi = td_hi;
+		tiles_dirty = 0; td_lo = 2048; td_hi = -1;
+		for (i = lo; i <= hi; i++) if (tile_dirty[i]) { cache_ok[0][i] = cache_ok[1][i] = 0; if (tile_in_nt[i]) scan = 1; else tile_dirty[i] = 0; }
 		if (scan) {
 			for (p = 0; p < 2; p++) {
 				const u8 *t = &vram[nt[p] & 0xFFFF];
 				int count = pw * ph > 4096 ? 4096 : pw * ph;
 				for (i = 0; i < count; i++, t += 2) if (tile_dirty[(t[0] & 7) << 8 | t[1]]) entry_dirty(p, i);
 			}
-			for (i = 0; i < 2048; i++) if (tile_dirty[i]) tile_dirty[i] = tile_in_nt[i] = 0;   /* (drawn again, they say so again) */
+			for (i = lo; i <= hi; i++) if (tile_dirty[i]) tile_dirty[i] = tile_in_nt[i] = 0;   /* (drawn again, they say so again) */
 		}
 	}
 	for (p = 0; p < 2; p++) if (cell_all[p]) { cell_all[p] = 0; all_dirty(p); }
@@ -790,18 +936,21 @@ void layer_frame(void) {
 		bob_n = 0;
 		if (reg[1] & 0x40) sprites();
 		busy = 1;
+		drawn_seq = vint_seq;
+		began_at = vbl_count;
 		rest = 0;
 	}
 	rest++;
 	/* the cells in view, as far as the time goes; a picture not whole by then is gone on with after the
 	 * next blank (for the scroll as it is then), and what is on screen stays meanwhile */
-	if ((!present(s, 0) || !present(s + 1, 1)) && rest < 8) return;
+	if ((!present(s, 0) || !present(s + 1, 1)) && vbl_count - began_at < 8) return;
 	/* (eight blanks and still not whole: the game changes more a frame than there is time for. It is shown
 	 * as far as it got: cells out of date here and there are better than no picture) */
 	if (pal_stale) { int err[2]; pal_stale = 0; load_palette(err); }   /* (colours that came with this frame's tiles) */
 	build_copper();
 	back ^= 1;
 	busy = 0;
+	DBG(dbg_flip++);
 #ifdef LAYER_DEBUG                        /* the layer's state where a memory dump finds it */
 	{ u8 *d = (u8 *)0x900000; for (i = 0; i < 24; i++) d[i] = reg[i];
 	  for (i = 0; i < 64; i++) { d[32 + i * 2] = (u8)(cram[i] >> 8); d[33 + i * 2] = (u8)cram[i]; }
@@ -835,8 +984,29 @@ static void keyboard(void) {
 }
 
 /* the vertical blank: the pads. -> nonzero if the game's own vertical interrupt is enabled */
-int layer_vbl(void) {
+static int waiting(u32 pc);
+#ifdef LAYER_DEBUG_TRACE
+static u16 tr[48][3];
+static int tn;
+#endif
+int layer_vbl(u32 pc) {
 	vbl_count++;
+	DBG(dbg_vint += (u32)waiting(pc));
+	DBG(dbg_w2 += (pc - (port_ram - PORT_RAM) >= idles[2] && idles[2]));
+	DBG(dbg_en += (reg[1] >> 5) & 1);
+#ifdef LAYER_DEBUG_TRACE                  /* 48 blanks from the 2400th: the line the blank's interrupt came at, whether the game waited, its frame count */
+	{ u32 n = vbl_count - LAYER_DEBUG_TRACE;
+	  if (n < 48) { tr[n][0] = (u16)raster(); tr[n][1] = (u16)(waiting(pc) | busy << 4 | (vint_seq - drawn_seq) << 8); tr[n][2] = (u16)mem16(port_ram + 0xFE04); }
+	  else if (n < 96 && tn < 48) { ser_hex(tr[tn][0], 3); ser_hex(tr[tn][1], 4); ser_hex(tr[tn][2], 4); ser('\n'); tn++; } }
+#endif
+#ifdef LAYER_DEBUG                        /* every 256 blanks: pictures shown, geometries, groupings, plane set-ups; the game's reads and writes of
+	                                        * hardware, its words to the VDP's data port, words by DMA, and the frames it finished in time */
+	if (!(vbl_count & 255)) {
+		ser_hex((u32)dbg_flip, 2); ser_hex((u32)dbg_geo, 2); ser_hex((u32)dbg_group, 2); ser_hex((u32)dbg_moved, 2); ser_hex(dbg_rd, 5); ser_hex(dbg_wr, 5); ser_hex(dbg_data, 5); ser_hex(dbg_dma, 5); ser_hex(dbg_vint, 3); ser_hex(dbg_w2, 3); ser_hex(dbg_en, 3); ser_hex(mem16(port_ram + 0xFE04), 4); ser('\n'); dbg_w2 = dbg_en = 0;
+		dbg_rd = dbg_wr = dbg_data = dbg_dma = dbg_vint = 0;
+		dbg_flip = dbg_geo = dbg_group = dbg_moved = 0;
+	}
+#endif
 	keyboard();
 	u16 j = CUSTOM(0x00C), s = keys;
 	if (j & 2) s |= 8;
@@ -847,13 +1017,19 @@ int layer_vbl(void) {
 	if (!(CUSTOM(0x016) & 0x4000)) s |= 128;
 	pad_state[0] = s;
 	layer_irq_enter();
+	in_vint = 1;
 	return reg[1] & 0x20;
 }
 
 void layer_init(void) {
 	u32 i;
 	for (i = 0; i < 256; i++) { u8 v = 0; for (int k = 0; k < 8; k++) if (i >> k & 1) v |= (u8)(0x80 >> k); rev[i] = v; }
+	for (i = 0; i < 256; i++) used[i] = (u16)(1 << (i >> 4) | 1 << (i & 15));
 	for (i = 0; i < 4 * PF_BYTES; i++) surf[0][i] = 0;
+#ifdef LAYER_DEBUG
+	CUSTOM(0x032) = 372;                  /* where the program was loaded, on the serial line (a profile needs it) */
+	ser_hex((u32)layer_init, 8); ser('\n');
+#endif
 	tables_moved();
 	for (int k = 0; k < 2; k++) { cop[k][0] = 0xFFFF; cop[k][1] = 0xFFFE; }
 	CUSTOM(0x100) = 0x0201;

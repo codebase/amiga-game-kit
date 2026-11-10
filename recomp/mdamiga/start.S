@@ -50,7 +50,7 @@ _port_go:
 	movec	d0,cacr
 	lea	0xdff000,a6
 	move.w	#0x8380,0x96(a6)            | DMA: bitplanes and the copper
-	move.w	#0xc030,0x9a(a6)            | interrupts: the vertical blank and the copper's
+	move.w	#0xc070,0x9a(a6)            | interrupts: the vertical blank, the copper's, and the copper's other one (see l3)
 	move.l	_port_sp,sp
 	jmp	PORT_PC                     | (the ROM's reset vector: its old code is a jump to the new)
 
@@ -135,15 +135,27 @@ l4:
 	rte
 
 | ---- level 3: the vertical blank. The layer's part, then the game's own handler (the vector the
-| ROM has for the Mega Drive's level 6), which returns through `post`: a frame is drawn there when
-| there is time, with interrupts back on, so the game's interrupt keeps its beat meanwhile.
+| ROM has for the Mega Drive's level 6), which returns through `post`. The picture is drawn while
+| the game waits for its next interrupt (the copper's question, below); in `post` only when it
+| hasn't waited for some frames.
 l3:
 	movem.l	d0-d1/a0-a1,-(sp)
 	move.w	0xdff01e,d0
 	btst	#5,d0
-	bne.s	1f
-	move.w	#0x0050,0xdff09c            | the copper's: the line the game asked its horizontal interrupt for
-	move.w	#0x0050,0xdff09c
+	bne	1f
+	btst	#6,d0
+	beq.s	4f
+	move.w	#0x0040,0xdff09c            | the copper asks every sixteen lines (with the blitter's bit: nothing else uses it)
+	move.w	#0x0040,0xdff09c            | whether the game is waiting: the layer draws while it is
+	move.l	18(sp),d0                   | (where it was interrupted)
+	move.l	sp,_irq_saved_sp
+	lea	_istack_top,sp
+	move.l	d0,-(sp)
+	jsr	_layer_idle
+	move.l	_irq_saved_sp,sp
+	bra	3f
+4:	move.w	#0x0010,0xdff09c            | the copper's: the line the game asked its horizontal interrupt for
+	move.w	#0x0010,0xdff09c
 	btst	#4,d0
 	beq.s	3f
 	jsr	_layer_irq_enter
@@ -158,11 +170,17 @@ hint_done:
 	move.l	(sp)+,PORT_SHIM
 	movem.l	d0-d1/a0-a1,-(sp)
 	jsr	_layer_irq_leave
+	| (the game may have been waiting for this very interrupt, and is still in its loop: a question
+	| the copper asked meanwhile would find it there and keep it from leaving for another frame)
+	move.w	#0x0040,0xdff09c
+	move.w	#0x0040,0xdff09c
 3:	movem.l	(sp)+,d0-d1/a0-a1
 	rte
 1:	move.w	#0x0020,0xdff09c
 	move.w	#0x0020,0xdff09c
+	move.l	18(sp),-(sp)                | (where the game was)
 	jsr	_layer_vbl
+	addq.l	#4,sp
 	tst.l	d0
 	movem.l	(sp)+,d0-d1/a0-a1
 	beq.s	post
@@ -180,6 +198,8 @@ post:
 	lea	_istack_top,sp
 	jsr	_layer_frame                | the display for this frame, the cells and the sprites
 	move.l	_irq_saved_sp,sp
+	move.w	#0x0040,0xdff09c            | (as above: the game is given the time to leave its loop)
+	move.w	#0x0040,0xdff09c
 	movem.l	(sp)+,d0-d1/a0-a1
 	rte
 
