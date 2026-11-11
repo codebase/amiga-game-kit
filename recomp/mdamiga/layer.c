@@ -73,12 +73,31 @@ static u32 dbg_rd, dbg_wr, dbg_data, dbg_dma, dbg_vint, dbg_w2, dbg_en;
 static int dbg_snap;
 static int back;                          /* which of plane A's bitmaps (and which copper list) is being made */
 
-#ifdef LAYER_DEBUG
 static void ser(int c) { while (!(CUSTOM(0x018) & 0x2000)) ; CUSTOM(0x030) = (u16)(0x100 | c); }
 static void ser_hex(u32 v, int digits) { for (int k = digits * 4 - 4; k >= 0; k -= 4) ser("0123456789ABCDEF"[(v >> k) & 15]); ser(' '); }
-#endif
+extern u32 port_ram;
+static u32 mem16(u32 a);
+/* an exception nothing handles (start.S, before it stops with the border striped): what and where,
+ * on the serial port. Vector 010 at an address in the ROM is the port's mark on old code no known
+ * path leads to: a computed jump the analysis run never took (`entry HEX` in port.txt, or play
+ * that part in the analysis run). */
+void layer_fault(u32 pc, u32 vector) {
+	const char *m = "port: exception, vector offset ";
+	while (*m) ser(*m++);
+	ser_hex(vector & 0xFFF, 3);
+	m = "at ";
+	while (*m) ser(*m++);
+	ser_hex(pc, 8);
+	if (pc - port_ram < 0x200000) { m = "(the port's layout: "; while (*m) ser(*m++); ser_hex(pc - (port_ram - PORT_RAM), 6); ser(')'); }
+	ser('\n');
+	extern u32 fault_regs[16];
+	for (int i = 0; i < 16; i++) { if (!(i & 7)) { ser("da"[i >> 3]); ser(' '); } ser_hex(fault_regs[i], 8); if ((i & 7) == 7) ser('\n'); }
+	const u8 *sp = (const u8 *)fault_regs[15];   /* (the exception's frame, then what the game had on its stack) */
+	ser('s'); ser(' ');
+	for (int i = 0; i < 24; i++) ser_hex(mem16((u32)sp + 2 * i), 4);
+	ser('\n');
+}
 static u32 mem16(u32 a) { const u8 *p = (const u8 *)a; return (u32)p[0] << 8 | p[1]; }
-extern u32 port_ram;                      /* main.c: where the game's RAM went (fast RAM) */
 static u32 game_addr(u32 a) {
 	a &= 0xFFFFFF;
 	return a >= 0xE00000 ? port_ram + (a & 0xFFFF) : a;
@@ -319,7 +338,7 @@ static u32 io_read(u32 a, int bits) {
 	if (a >= 0xA10000 && a < 0xA10020) {
 		u32 v = 0;
 		switch (a & 0x1E) {
-		case 0x00: v = 0xE0; break;
+		case 0x00: v = PORT_VERSION; break;   /* (the region the cartridge is for: agk port, from its header) */
 		case 0x02: v = pad_read(0); break;
 		case 0x04: v = pad_read(1); break;
 		case 0x06: v = 0x7F; break;
@@ -839,7 +858,9 @@ static void picture(void);
  * game says when it is done by waiting for its interrupt in a loop agk port found, and the copper
  * asks every sixteen lines where it is (start.S). So a slow machine shows fewer pictures and plays
  * at the game's speed, and a fast one loses nothing. */
-static int waiting(u32 pc) {              /* the game, interrupted at pc, was in one of its waiting loops */
+static u8 stops;                          /* the game waits with `stop` */
+static int waiting(u32 pc) {              /* the game, interrupted at pc, was in one of its waiting loops (or stopped) */
+	if (*(u16 *)(pc - 4) == 0x4E72) { stops = 1; return 1; }
 	pc -= port_ram - PORT_RAM;
 	for (int i = 0; idles[i]; i += 2) if (pc >= idles[i] && pc <= idles[i + 1]) return 1;
 	return 0;
@@ -859,7 +880,7 @@ void layer_frame(void) {
 	layer_irq_leave();
 	in_vint = 0;
 	vint_seq++;
-	if (idles[0] && vbl_count - work_at < 6) return;
+	if ((idles[0] || stops) && vbl_count - work_at < 6) return;
 	deadline = raster() + SLICE;          /* (without it a busy game would never be given a picture) */
 	if (deadline < DEADLINE) deadline = DEADLINE;
 	if (deadline > 300) deadline = 300;

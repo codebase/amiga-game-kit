@@ -15,6 +15,11 @@ and effects on Paula's four channels. It needs an accelerated A1200 to hold
 its speed; a stock one is the work ahead, an A500 version a reduced art pass
 after that.
 
+Thunder Force IV is the second game through it: 7997 of 8000 frames match
+the original on the host, and on the Amiga it shows its intro, title and
+stage select and plays its first stage, without its HUD, its player's ship
+or sound yet (the window plane and its sound driver are the work ahead).
+
 ## The stages
 
 ```
@@ -125,6 +130,54 @@ exists there, so:
 Only the game's own instructions cost time in this build (the glue the port
 adds is free), so it stays in step with the original and the frames can be
 compared one to one.
+The chips' events are looked at where the original's control flow
+was, not at the port's own calls, so a loop that polls the vertical blank
+leaves on the same turn as the original's (a game that seeds its random
+numbers from the HV counter, as Thunder Force IV does, shows any slip at
+once).
+
+When they part, these find where: `RECOMP_PORT_STOP=HEX` ends the run when
+the pc gets there and prints how it got there, the registers and the stack;
+`RECOMP_DUMP_AT=HEX` with `--dump FILE` writes 64K from that address (the
+game's RAM: `FF0000` in the original, the port's `RAM` in the port) to compare
+the two after the same number of frames; `PORT_DEBUG_WALK=1 agk port ...`
+says why a routine a table names wasn't taken as code.
+
+#### What a second game needed (Thunder Force IV)
+
+Sonic 2 alone had hidden these; the port handles them now:
+
+- **A stack from zero.** `suba.l sp,sp` (and a reset vector of 0) means the
+  top of RAM on a 24-bit bus: the port loads the top of the moved RAM.
+- **`stop`.** The game waits for its interrupt with `stop #$2500`: the mask is
+  lowered as `move #..,sr`'s is, and on the Amiga an interrupt of the layer's
+  own (the copper's poll, a blank the game has turned off) puts it back to
+  sleep, drawing meanwhile.
+- **Calls with their data after them.** `bsr print` followed by the string,
+  which the routine reads through its return address: the call keeps the old
+  return address, and the code after the string is an entry in the old space.
+- **`rte` from a subroutine.** Routines that push the status register and
+  leave with `rte` build the 68000's six-byte frame, which a 68020 refuses:
+  every `rte` becomes `move (sp)+,sr; rts`, and the Amiga's interrupt entry
+  builds the game's frames to match.
+- **Tables of routines.** `lea table(pc),an; movea.l (an,dn.w),am; jsr (am)`
+  and a routine's address stored with `move.l #routine,somewhere` lead to
+  code the analysis run may never have reached (game modes, object types):
+  both are followed. Thunder Force IV went from 14,000 to 42,000 instructions
+  ported.
+- **Old bytes that never ran are left alone.** What the disassembly reached
+  but the analysis never executed may be data: it is ported, but its old
+  bytes are neither made into jumps nor poisoned.
+- **The region.** `$A10001` answers what the cartridge's header asks for (a
+  US game is told an NTSC console, or it stops with a message).
+- Three hints were still written by hand (`port.txt`): a `cmpa.w` on a
+  register that holds a number, not a pointer (`raw`); a `jmp (pc,d3.w)` that
+  with d3 = 0 runs its own extension word (`replace`); the first RAM clear,
+  from address 0 down (`pre`/`post`).
+
+On the Amiga an exception nothing handles is reported on the serial port
+(vector, pc, registers, stack) before the border stripes: vector `010` at a
+ROM address is old code no known path leads to.
 
 ### 4. The Amiga's hardware layer
 

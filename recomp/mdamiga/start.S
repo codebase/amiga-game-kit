@@ -56,7 +56,16 @@ _port_go:
 
 | an exception nothing handles: the border shows which (the vector's offset), and it stops
 fault:
-	move.w	6(sp),d0
+	move.w	#0x2700,sr
+	movem.l	d0-d7/a0-a7,_fault_regs
+	move.l	2(sp),a0                    | where
+	moveq	#0,d2
+	move.w	6(sp),d2                    | which
+	lea	_istack_top,sp
+	move.l	d2,-(sp)
+	move.l	a0,-(sp)
+	jsr	_layer_fault                | (said on the serial port)
+	move.w	d2,d0
 	and.w	#0x0fff,d0
 1:	move.w	d0,0xdff180
 	move.w	#0x0f00,0xdff180
@@ -153,15 +162,14 @@ l3:
 	move.l	d0,-(sp)
 	jsr	_layer_idle
 	move.l	_irq_saved_sp,sp
-	bra	3f
+	bra	6f
 4:	move.w	#0x0010,0xdff09c            | the copper's: the line the game asked its horizontal interrupt for
 	move.w	#0x0010,0xdff09c
 	btst	#4,d0
-	beq.s	3f
+	beq.s	6f
 	jsr	_layer_irq_enter
 	movem.l	(sp)+,d0-d1/a0-a1
 	move.l	PORT_SHIM,-(sp)
-	move.w	#0x006c,-(sp)
 	pea	hint_done(pc)
 	move.w	#0x2300,-(sp)
 	move.l	0x70.w,-(sp)                | the game's handler (the Mega Drive's level 4)
@@ -174,6 +182,13 @@ hint_done:
 	| the copper asked meanwhile would find it there and keep it from leaving for another frame)
 	move.w	#0x0040,0xdff09c
 	move.w	#0x0040,0xdff09c
+	bra.s	3f
+	| an interrupt of the Amiga's that the game didn't get: if it was waiting in a `stop`, it goes on
+	| waiting (the Mega Drive would not have woken it)
+6:	move.l	18(sp),a0
+	cmp.w	#0x4e72,-4(a0)
+	bne.s	3f
+	subq.l	#4,18(sp)
 3:	movem.l	(sp)+,d0-d1/a0-a1
 	rte
 1:	move.w	#0x0020,0xdff09c
@@ -183,10 +198,16 @@ hint_done:
 	addq.l	#4,sp
 	tst.l	d0
 	movem.l	(sp)+,d0-d1/a0-a1
-	beq.s	post
-	move.l	PORT_SHIM,-(sp)             | the cell: the interrupted code may be between an instruction and its call
-	move.w	#0x006c,-(sp)               | a frame for the game's rte: back here, still at level 3
-	pea	post_cell(pc)
+	bne.s	7f
+	move.l	a0,-(sp)                    | (its interrupt is off: a `stop` goes on waiting)
+	move.l	6(sp),a0
+	cmp.w	#0x4e72,-4(a0)
+	bne.s	8f
+	subq.l	#4,6(sp)
+8:	move.l	(sp)+,a0
+	bra.s	post
+7:	move.l	PORT_SHIM,-(sp)             | the cell: the interrupted code may be between an instruction and its call
+	pea	post_cell(pc)                | a frame for the game's return, the 68000's (agk port turns its rte into move (sp)+,sr; rts)
 	move.w	#0x2300,-(sp)
 	move.l	0x78.w,-(sp)                | the game's handler
 	rts
@@ -204,9 +225,10 @@ post:
 	rte
 
 	.bss
-	.globl	_vectors, _lstack_top, _istack_top, _saved_sp, _irq_saved_sp
+	.globl	_vectors, _lstack_top, _istack_top, _saved_sp, _irq_saved_sp, _fault_regs
 _vectors:	.space	1024
 _saved_sp:	.space	4
+_fault_regs:	.space	64
 _irq_saved_sp:	.space	4
 	.space	8192
 _lstack_top:

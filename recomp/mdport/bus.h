@@ -30,6 +30,11 @@ void port_stepped(void);
    agk port's map of where the game's instructions start is loaded at $E00000, a bit per word. */
 #define PORT_STARTS 0xE00000u
 #define MACHINE_CYC(pc) do { if ((pc) >= PORT_TOP || (mem[PORT_STARTS + ((pc) >> 4)] >> (((pc) >> 1) & 7) & 1)) CYC(8); } while (0)
+/* the chips' events are looked at where the original's control flow was (the map at $E80000 for
+   rewritten code, the opcode for old code run in place), not at the port's own calls and jumps */
+#define PORT_FLOWS 0xE80000u
+#define MACHINE_FLOW(pc, f) ((pc) >= PORT_TOP ? (f) : !(mem[PORT_STARTS + ((pc) >> 4)] >> (((pc) >> 1) & 7) & 1) ? 0 : \
+	(pc) >= PORT_SHIM ? (mem[PORT_FLOWS + ((pc) >> 4)] >> (((pc) >> 1) & 7) & 1) : (f))
 #define MACHINE_STEPPED() port_stepped()
 #define CODE_WRITE(a, bits, v) ((void)0)
 extern u8 code_bits[REGION0_SIZE >> 4], code_bits_slow[REGION1_SIZE >> 4];

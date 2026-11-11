@@ -3,6 +3,7 @@
  * that still reaches for the Mega Drive's own addresses. */
 #include "host.h"
 #include "start.h"
+#include <stdlib.h>
 #include <string.h>
 
 #define ENTRIES (PORT_SHIM + 0x100)       /* r8 r16 r32 w8 w16 w32, 8 bytes apart (agk port's SHIM_NAMES) */
@@ -23,11 +24,22 @@ static u32 recent[8192], recent_sp[8192]; static unsigned nrecent;
 static u32 cell_saved[16]; static int cell_depth;
 void port_irq_taken(void) { if (cell_depth < 16) memcpy(&cell_saved[cell_depth], &mem[CELL], 4); cell_depth++; }
 void port_stepped(void) {
-	if (cell_depth && (((u32)mem[cpu.pc] << 8 | mem[cpu.pc + 1]) == 0x4E73) && cpu.pc < PORT_TOP) {
+	if (cell_depth && cpu.pc < PORT_TOP && (((u32)mem[cpu.pc] << 8 | mem[cpu.pc + 1]) == 0x4E73   /* rte, or the port's: move (sp)+,sr; rts */
+	    || (((u32)mem[cpu.pc] << 8 | mem[cpu.pc + 1]) == 0x46DF && ((u32)mem[cpu.pc + 2] << 8 | mem[cpu.pc + 3]) == 0x4E75))) {
 		cell_depth--;
 		if (cell_depth < 16) memcpy(&mem[CELL], &cell_saved[cell_depth], 4);
 	}
 	recent_sp[nrecent & 8191] = A[7]; recent[nrecent++ & 8191] = cpu.pc;
+	{ static long stop = -1;              /* RECOMP_PORT_STOP=HEX: the run ends when the pc gets there, with how it got there */
+	  if (stop < 0) { const char *e = getenv("RECOMP_PORT_STOP"); stop = e ? strtol(e, NULL, 16) : 0; }
+	  if (stop && cpu.pc == (u32)stop) {
+		fprintf(stderr, "port: frame %u, pc $%06X reached; before it:", frame_count, cpu.pc);
+		for (unsigned i = nrecent > 48 ? nrecent - 48 : 0; i < nrecent; i++) fprintf(stderr, " %06X", recent[i & 8191]);
+		fprintf(stderr, "\nport: d0-d7"); for (int i = 0; i < 8; i++) fprintf(stderr, " %08X", cpu.d[i]);
+		fprintf(stderr, "\nport: a0-a7"); for (int i = 0; i < 8; i++) fprintf(stderr, " %08X", A[i]);
+		fprintf(stderr, "\nport: stack"); for (int i = 0; i < 16; i++) fprintf(stderr, " %02X%02X", mem[(A[7] + 2 * i) & 0xFFFFFF], mem[(A[7] + 2 * i + 1) & 0xFFFFFF]);
+		fputc('\n', stderr); exit(1);
+	  } }
 	for (int i = 0; i < 8; i++) if (A[i] != a_seen[i]) {
 		u32 d = A[i] - a_seen[i];
 		if (d + 64 > 128) a_writer[i] = cpu.pc;

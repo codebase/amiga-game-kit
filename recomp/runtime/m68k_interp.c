@@ -473,6 +473,9 @@ void interp_run(void) {
 		u32 op = rd16(pc);
 		int flow = (op >> 12) == 6 || (op & 0xFF80) == 0x4E80 || (op & 0xF0F8) == 0x50C8 || (op & 0xFFF0) == 0x4E40
 		        || op == 0x4E71 || op == 0x4E72 || op == 0x4E73 || op == 0x4E75 || op == 0x4E77;
+#ifdef MACHINE_FLOW
+		flow = MACHINE_FLOW(pc, flow);
+#endif
 #ifdef MACHINE_CYC
 		MACHINE_CYC(pc);                  /* (a port under test: only the game's own instructions take time) */
 #else

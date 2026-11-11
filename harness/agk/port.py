@@ -233,6 +233,29 @@ def table_targets(by_addr, order, rom, known, data=frozenset()):
                     out.add(tgt)
                     k += 1
                 tbytes |= set(range(start, start + 4 * k))
+        elif mn == "moveal" and re.fullmatch(r"a[0-6]", ops[1]) and re.fullmatch(r"(a[0-6])@\((-?\d+|0x[0-9a-f]+),d[0-7]:[wl](:1)?\)", ops[0]):
+            # `lea T,an` then `movea.l (d,an,dm),ak` then `jmp/jsr (ak)`: longs from T + d, as above
+            base = ops[0][:2]
+            m = re.search(r"\((-?\d+|0x[0-9a-f]+),", ops[0])
+            d = int(m.group(1), 0)
+            nxt = [by_addr[x] for x in order[i + 1:i + 4]]
+            if not any(m2 in ("jmp", "jsr") and o2[0] == ops[1] + "@" for _, m2, o2 in nxt):
+                continue
+            prev = [by_addr[x] for x in order[max(0, i - 3):i]]
+            ts = [int((ABS.match(o2[0]) or PCREL.match(o2[0])).group(1), 16) for _, m2, o2 in prev
+                  if m2 == "lea" and len(o2) == 2 and o2[1] == base and (ABS.match(o2[0]) or PCREL.match(o2[0]))]
+            if not ts or not 0x200 <= ts[-1] + d < romsize:
+                continue
+            start, k = ts[-1] + d, 0
+            while start + 4 * k + 3 < romsize and k < 1024:
+                if k and (start + 4 * k) in known:
+                    break
+                tgt = struct.unpack(">I", rom[start + 4 * k:start + 4 * k + 4])[0]
+                if tgt & 1 or not 0x200 <= tgt < romsize:
+                    break
+                out.add(tgt)
+                k += 1
+            tbytes |= set(range(start, start + 4 * k))
     return out, tbytes
 
 
@@ -267,6 +290,14 @@ def find_code(rom_path, analysis, image, hints, log=print):
     data = read | hints["data"]
     candidates, tables = set(), set()
     code = set()
+    # routines that read their data from after the call (a string to print) and return past it: known
+    # from the calls that ran, where what follows the call never executed
+    data_callees = set()
+    for a, w, mn, ops in instrs:
+        if a in covered and (mn == "jsr" or mn.startswith("bsr")) and (a + 2 * w) not in covered:
+            t = direct_target(mn, [gas_operand(o) for o in recomp.split_operands(ops)] if ops else [])
+            if t is not None:
+                data_callees.add(t)
     for _ in range(16):
         instrs, added = recomp.follow_branches(images, instrs, image, analysis, anchors=sorted(truth | candidates))
         by_addr = {a: (2 * w, mn, [gas_operand(o) for o in recomp.split_operands(ops)] if ops else []) for a, w, mn, ops in instrs}
@@ -281,19 +312,22 @@ def find_code(rom_path, analysis, image, hints, log=print):
                 if a in accepted or a in seen:
                     continue
                 if a not in by_addr or a & 1 or a >= len(rom):
+                    if os.environ.get("PORT_DEBUG_WALK"): print(f"walk {start:06X}: {a:06X} not disassembled")
                     return None
                 n, mn, ops = by_addr[a]
                 if a not in covered:
                     if mn in (".short", ".long", "illegal") or any(GARBAGE.search(o) for o in ops):
+                        if os.environ.get("PORT_DEBUG_WALK"): print(f"walk {start:06X}: {a:06X} {mn} {ops} isn't an instruction")
                         return None
                     if any(b in data or owner.get(b, a) != a for b in range(a, a + n)):
+                        if os.environ.get("PORT_DEBUG_WALK"): print(f"walk {start:06X}: {a:06X} {mn} is data the game reads, or overlaps code")
                         return None
                 seen.add(a)
                 t = direct_target(mn, ops)
                 if t is not None and not is_ram(t):
                     todo.append(t)
-                if falls_through(mn):
-                    todo.append(a + n)
+                if falls_through(mn) and not (a not in covered and t in data_callees):
+                    todo.append(a + n)    # (not after a call to a routine that takes its data from after the call)
             return seen
 
         code, owner = set(), {}
@@ -324,6 +358,14 @@ def find_code(rom_path, analysis, image, hints, log=print):
                 accept(seen)
         order = sorted(code)
         found, tbytes = table_targets(by_addr, order, rom, code, data)
+        # a routine's address stored in memory (move.l #routine,somewhere: an interrupt's handler for
+        # this screen, an object's code) is code too, whether or not the analysis run came that way
+        for a in order:
+            n, mn, ops = by_addr[a]
+            if mn == "movel" and len(ops) == 2 and IMM.match(ops[0]) and not re.fullmatch(r"[ad][0-7]|sp|fp", ops[1]):
+                v = int(IMM.match(ops[0]).group(1)) & 0xFFFFFFFF
+                if 0x200 <= v < len(rom) and not v & 1 and v not in data and v not in code:
+                    found.add(v)
         found = found - truth - candidates
         tables = candidates & code
         if not found and tbytes <= data:
@@ -610,6 +652,7 @@ class Rewriter:
         self.old_targets = collections.defaultdict(set)   # addr -> old addresses it may transfer to if run in place
         self.calls = set()                # instructions that push a return address
         self.unknown_targets = set()
+        self.data_calls = set()           # calls followed by their data, not by code
         self.notes = collections.Counter()
 
     def label(self, a):
@@ -703,6 +746,15 @@ class Rewriter:
             self.notes["pointers brought over where they are loaded (fixa)"] += len(fix)
         return ["\t" + s for s in H["pre"].get(a, [])] + lines + fix + ["\t" + s for s in H["post"].get(a, [])]
 
+    def call_with_data(self, a, n, t):
+        """a call that data follows (a string printed by the routine, which reads it through its return
+        address and returns past it): the return address is the old one, where the data is, and the
+        routine comes back into old code, which has a jump at the instruction after the data"""
+        self.unsafe.add(a)
+        self.data_calls.add(a)
+        self.notes["calls with their data after them (the old return address is kept)"] += 1
+        return [f"\tpea {a + n:#x}", f"\tjbra {self.target(t)}"]
+
     def instr_(self, a, n, mn, ops):
         text = lambda o=ops: [f"\t{mn} {','.join(o)}" if o else f"\t{mn}"]
         if a in self.hints["raw"]:
@@ -717,6 +769,8 @@ class Rewriter:
             cc = m.group(1)
             if cc == "sr":
                 self.calls.add(a)
+                if a + n not in self.code:
+                    return self.call_with_data(a, n, t)
             return [f"\tjb{cc} {self.target(t)}"]
         if DBCC.match(mn):
             t = int(ABS.match(ops[1]).group(1), 16)
@@ -730,6 +784,8 @@ class Rewriter:
             t = direct_target(mn, ops)
             if t is not None:
                 self.old_targets[a].add(t)
+                if mn == "jsr" and a + n not in self.code:
+                    return self.call_with_data(a, n, t)
                 return [f"\t{'jbsr' if mn == 'jsr' else 'jbra'} {self.target(t)}"]
             m = PCIDX.match(ops[0])
             if m:                         # a table jump: the target is table + index, an old address (its trampoline takes it on)
@@ -742,8 +798,26 @@ class Rewriter:
                 self.notes["table jumps"] += 1
                 return seq
             return text()
+        # ---- rte: the game's frames are the 68000's (a status word and an address: some routines push
+        # their own and are called with jsr); a 68020 wants a format word after them, so the port
+        # returns the 68000's way and the Amiga's interrupt entry builds its frames to match
+        if mn == "rte":
+            self.unsafe.add(a)
+            self.notes["rte as the 68000 did it"] += 1
+            return ["\tmovew sp@+,%sr", "\trts"]
+        # ---- `suba.l sp,sp`: a stack from address 0 down, which on the Mega Drive is the top of its RAM
+        if base == "suba" and bits == 32 and ops == ["sp", "sp"]:
+            self.unsafe.add(a)
+            self.notes["stack pointers cleared (the top of RAM)"] += 1
+            return [f"\tmoveal #{self.lay['ram'] + 0x10000:#x},sp"]
         # ---- the interrupt mask: the Mega Drive's vertical interrupt is level 6 and its horizontal one 4;
         # the port delivers both at level 3 (the Amiga's vertical blank), so "allow them" is mask 2
+        if mn == "stop" and len(ops) == 1 and IMM.match(ops[0]):      # (the wait for an interrupt, with its mask)
+            v = int(IMM.match(ops[0]).group(1)) & 0xFFFF
+            if 3 <= (v >> 8 & 7) <= 5:
+                self.unsafe.add(a)
+                self.notes["interrupt masks lowered to the Amiga's"] += 1
+                return [f"\tstop #{(v & ~0x700) | 0x200}"]
         if len(ops) == 2 and ops[1] == "%sr" and base == "move" and IMM.match(ops[0]):
             v = int(IMM.match(ops[0]).group(1)) & 0xFFFF
             ipl = v >> 8 & 7
@@ -870,7 +944,7 @@ class Rewriter:
                 errors.append(f"${a:06X} {mn} {','.join(ops)}: {e}")
                 out += [f"\t.short {POISON:#x}"]
                 self.unsafe.add(a)
-            if falls_through(mn) and a + n not in self.code:
+            if falls_through(mn) and a + n not in self.code and a not in self.data_calls:
                 out.append(f"\tjmp {a + n:#x}")   # into code the port doesn't have: it runs where it was
                 self.unknown_targets.add(a + n)
         return "\n".join(out) + "\n", errors
@@ -950,7 +1024,7 @@ def parse_hunk(data):
 
 # ---------------------------------------------------------- the old space
 
-def patch_old(rom, code, rw, entries, new_addr, lay, log=print):
+def patch_old(rom, code, rw, entries, new_addr, lay, log=print, covered=None):
     """the ROM image with the old code made into jumps to the new: 6 bytes at every entry that has
     the room, the original instructions where a short block can run in place, a branch to an
     island for the rest; everything else poisoned -> (image, stats)"""
@@ -958,14 +1032,19 @@ def patch_old(rom, code, rw, entries, new_addr, lay, log=print):
     order = sorted(code)
     nxt_instr = {a: a + code[a][0] for a in order}
     entries = set(entries)
+    # (what the disassembly reached but the analysis run never executed may yet be data the game reads:
+    # the old bytes of it are left as they are, neither made into jumps nor poisoned)
+    ran = (lambda x: x in covered) if covered is not None else (lambda x: True)
     # routines: what calls reach and what follows an unconditional transfer are entries too (a table may name them)
     for a in order:
         n, mn, ops = code[a]
         t = direct_target(mn, ops)
-        if t in code and (mn == "jsr" or mn.startswith("bsr")):
+        if t in code and (mn == "jsr" or mn.startswith("bsr")) and ran(t):
             entries.add(t)
-        if not falls_through(mn) and a + n in code:
+        if not falls_through(mn) and a + n in code and ran(a + n):
             entries.add(a + n)
+    follows = {a + code[a][0] for a in order}
+    entries |= {a for a in order if a not in follows and ran(a)}   # code after data: a call with its data after it returns here
     while True:
         plan, grew = {}, False
         es = sorted(entries)
@@ -1004,6 +1083,8 @@ def patch_old(rom, code, rw, entries, new_addr, lay, log=print):
             kept |= set(range(e, e + room))
     dead = []
     for a in order:
+        if not ran(a):
+            continue
         for b in range(a, a + code[a][0], 2):
             if b not in kept:
                 img[b:b + 2] = struct.pack(">H", POISON)
@@ -1129,7 +1210,7 @@ def port(rom_path, analysis, outdir, image, log=print):
         v = struct.unpack(">I", blob[off:off + 4])[0] + lay["code"]
         blob[off:off + 4] = struct.pack(">I", v)
     new_addr = {a: lay["code"] + syms[rw.label(a)] for a in code}
-    img, stats, failed, plan, inplace = patch_old(rom, code, rw, entries, new_addr, lay, log)
+    img, stats, failed, plan, inplace = patch_old(rom, code, rw, entries, new_addr, lay, log, covered)
     for a in hints["reloc"]:
         v = struct.unpack(">I", img[a:a + 4])[0]
         img[a:a + 4] = struct.pack(">I", lay["ram"] + (v & 0xFFFF))
@@ -1149,7 +1230,7 @@ def port(rom_path, analysis, outdir, image, log=print):
     for off in relocs2:
         v = struct.unpack(">I", blob2[off:off + 4])[0] + lay2["code"]
         blob2[off:off + 4] = struct.pack(">I", v)
-    img2 = patch_old(rom, code, rw2, entries, {a: lay2["code"] + syms2[rw2.label(a)] for a in code}, lay2, lambda *_: None)[0]
+    img2 = patch_old(rom, code, rw2, entries, {a: lay2["code"] + syms2[rw2.label(a)] for a in code}, lay2, lambda *_: None, covered)[0]
     for a in hints["reloc"]:
         v = struct.unpack(">I", img2[a:a + 4])[0]
         img2[a:a + 4] = struct.pack(">I", lay2["ram"] + (v & 0xFFFF))
@@ -1191,11 +1272,21 @@ def port(rom_path, analysis, outdir, image, log=print):
         starts[a >> 4] |= 1 << ((a >> 1) & 7)
     with open(os.path.join(outdir, "port.starts"), "wb") as f:
         f.write(starts)
+    # and which of the rewritten ones were control flow: the checking build looks at the chips' events
+    # where the original did, not at the calls the port added
+    flows = bytearray(top >> 4)
+    for o, na in new_addr.items():
+        mn = code[o][1]
+        if BRANCH.match(mn) or DBCC.match(mn) or mn in ("jmp", "jsr", "nop", "stop", "rte", "rts", "rtr", "trap"):
+            flows[na >> 4] |= 1 << ((na >> 1) & 7)
+    with open(os.path.join(outdir, "port.flows"), "wb") as f:
+        f.write(flows)
     info = {"layout": lay, "instructions": len(code), "code_bytes": len(blob), "stats": dict(stats),
             "rewrites": dict(rw.notes), "unknown_targets": sorted(rw.unknown_targets),
             "entries_without_room": failed, "entries": plan,
             "idle": [[new_addr[a], new_addr[b]] for a, b in idle_loops(code)],
-            "sp": lay["ram"] + (struct.unpack(">I", rom[0:4])[0] & 0xFFFF), "pc": struct.unpack(">I", rom[4:8])[0]}
+            "sp": lay["ram"] + ((struct.unpack(">I", rom[0:4])[0] - 1 & 0xFFFF) + 1),   # (a stack from 0 is from the top of RAM)
+             "pc": struct.unpack(">I", rom[4:8])[0]}
     with open(os.path.join(outdir, "port.json"), "w") as f:
         json.dump(info, f)
     log(f"rewritten: {len(code)} instructions -> {len(blob)} bytes of code at ${lay['code']:06X}; RAM at ${lay['ram']:06X}, "
@@ -1304,6 +1395,11 @@ def build_amiga(outdir, kit_root, image, analysis=None, log=print):
             "CODESIZE": lay["top"] - lay["code"], "TOP": lay["top"], "SP": info["sp"], "PC": info["pc"],
             "SCREEN0": screen, "COPPER": copper, "ZSIZE": len(z),   # (four bitmaps of 128K, then two copper lists)
             "IMGSIZE": len(payload), "SNDDISK": snd_disk, "SNDZSIZE": len(sz), "SNDSIZE": len(sound or b"")}
+    # the console the game is told it runs on ($A10001): a game sold in one region may refuse another
+    # (Thunder Force IV stops with a message), so it is the header's: Europe if listed (the Amiga is
+    # PAL), else overseas at 60 Hz, else Japan
+    region = bytes(rom[0x1F0:0x200])
+    defs["VERSION"] = 0xE0 if b"E" in region or not region.strip() else 0xA0 if b"U" in region else 0x20
     if defs["COPPER"] + 0x8000 > 0x200000:
         raise PortError("the port's image and its screen don't fit in 2 MB of chip RAM")
     with open(os.path.join(adir, "port_layout.h"), "w") as f:

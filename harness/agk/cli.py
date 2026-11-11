@@ -625,7 +625,7 @@ def cmd_port(args):
             "SHIM": lay["shim"], "TOP": lay["top"], "ROMSIZE": lay["romsize"]}
     cpu_regs = {"PC": info["pc"], "SSP": info["sp"], "A7": info["sp"], "SR": 0x2700}
     runtime = [os.path.join(ROOT, "recomp", d) for d in MACHINES["mdport"]["dirs"]]
-    recomp.write_project(out, [], set(), cpu_regs, [(path, 0), (os.path.join(out, "port.starts"), 0xE00000)], regs, runtime, regions=MACHINES["mdport"]["regions"], machine="mdport")
+    recomp.write_project(out, [], set(), cpu_regs, [(path, 0), (os.path.join(out, "port.starts"), 0xE00000), (os.path.join(out, "port.flows"), 0xE80000)], regs, runtime, regions=MACHINES["mdport"]["regions"], machine="mdport")
     cc = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc")
     srcs = [os.path.join(out, f) for f in os.listdir(out) if f.endswith(".c")]
     cmd = [cc, "-std=gnu11", "-O1", "-Wall", "-Wno-unused-label", "-Wno-unused-variable", "-Wno-unused-but-set-variable",

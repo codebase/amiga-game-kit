@@ -343,7 +343,8 @@ void frame_hook(void) {
 	if (max_frames && frame_count >= max_frames) {
 		if (png_path) write_png(png_path);
 		if (wavf) wav_close();
-		if (dump_path) { FILE *f = fopen(dump_path, "wb"); if (f) { fwrite(mem, 1, 0x80000, f); fclose(f); } }
+		if (dump_path) { FILE *f = fopen(dump_path, "wb"); const char *e = getenv("RECOMP_DUMP_AT");   /* RECOMP_DUMP_AT=HEX: 64K from there instead (a console's RAM) */
+			if (f) { if (e) fwrite(mem + (strtoul(e, NULL, 16) & 0xFFFFFF), 1, 0x10000, f); else fwrite(mem, 1, 0x80000, f); fclose(f); } }
 		coverage_save();
 		interp_report();
 		if (!analysis_dir) machine_at_exit();
