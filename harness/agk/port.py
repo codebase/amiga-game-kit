@@ -275,6 +275,12 @@ def find_code(rom_path, analysis, image, hints, log=print):
     vectors = {v for v in vectors if 0x200 <= v < len(rom) and not v & 1}
     truth = set(dyn) | vectors | hints["entry"]
     instrs = recomp.disassemble(images, ranges, image, analysis, covered)
+    # two executed instructions can share bytes (Thunder Force IV's boot enters two bytes before its
+    # reset path's first instruction, and the reset enters at it): the decode keeps one, the other is added
+    have = {i[0] for i in instrs}
+    for a in sorted(covered - have):
+        instrs += [i for i in recomp.disassemble(images, [(a, a + 1)], image, analysis) if i[0] == a]
+    instrs.sort()
     # what the game read of its ROM as data: every byte read that isn't part of an executed instruction
     by0 = {a: 2 * w for a, w, mn, ops in instrs}
     read = set()
@@ -935,7 +941,7 @@ class Rewriter:
         out = ["\t.text"]
         order = sorted(self.code)
         errors = []
-        for a in order:
+        for i, a in enumerate(order):
             n, mn, ops = self.code[a]
             out.append(f"{self.label(a)}:")
             try:
@@ -947,6 +953,8 @@ class Rewriter:
             if falls_through(mn) and a + n not in self.code and a not in self.data_calls:
                 out.append(f"\tjmp {a + n:#x}")   # into code the port doesn't have: it runs where it was
                 self.unknown_targets.add(a + n)
+            elif falls_through(mn) and i + 1 < len(order) and order[i + 1] != a + n and a not in self.data_calls:
+                out.append(f"\tjbra {self.label(a + n)}")   # (the next one here shares this one's bytes: another way in)
         return "\n".join(out) + "\n", errors
 
 
