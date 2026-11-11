@@ -71,7 +71,7 @@ IMM = re.compile(r"#(-?\d+)$")
 PCREL = re.compile(r"%pc@\(0x([0-9a-f]+)\)$")
 PCIDX = re.compile(r"%pc@\(0x([0-9a-f]+),((?:d|a)[0-7]|sp):([wl])(?::[1248])?\)$")
 AREG = re.compile(r"\b(a[0-7]|sp|fp)\b")
-GARBAGE = re.compile(r"\)@\(|:[248]\)|@\(0x[0-9a-f]+\)@|\[")
+GARBAGE = re.compile(r"\)@\(|:[248]\)|@\(0x[0-9a-f]+\)@|\[|^@\(")   # (68020 addressing: what data looks like when read as code)
 NO_FALL = ("rts", "rte", "rtr", "jmp", "illegal", ".short", ".long")
 SIZES = {"b": 8, "w": 16, "l": 32}
 
@@ -1362,7 +1362,7 @@ def build_amiga(outdir, kit_root, image, analysis=None, log=print):
             if holes and 0x200 < end:     # (the header's checksum again, for the ROM without them)
                 rom[0x18E:0x190] = struct.pack(">H", sum(struct.unpack(f">{(end - 0x200) // 2}H", rom[0x200:end])) & 0xFFFF)
             top = (lay["top"] + 1) & ~1
-            regions = [(copper + 0x8000, 0x200000 - copper - 0x8000), (top, screen - top)] + holes
+            regions = [(copper + 0xB000, 0x200000 - copper - 0xB000), (top, screen - top)] + holes   # (after the copper lists and the window's bitmap)
             sound = mdsound.pack(snd, [r for r in regions if r[1] >= 2048], mdsound.aliases(analysis, snd["addrs"]), log)
         except mdsound.SoundError as e:
             raise PortError(f"the sound: {e}")
@@ -1400,7 +1400,7 @@ def build_amiga(outdir, kit_root, image, analysis=None, log=print):
     # PAL), else overseas at 60 Hz, else Japan
     region = bytes(rom[0x1F0:0x200])
     defs["VERSION"] = 0xE0 if b"E" in region or not region.strip() else 0xA0 if b"U" in region else 0x20
-    if defs["COPPER"] + 0x8000 > 0x200000:
+    if defs["COPPER"] + 0xB000 > 0x200000:
         raise PortError("the port's image and its screen don't fit in 2 MB of chip RAM")
     with open(os.path.join(adir, "port_layout.h"), "w") as f:
         f.write("/* where agk port put things (port.json) */\n")

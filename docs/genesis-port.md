@@ -17,8 +17,8 @@ after that.
 
 Thunder Force IV is the second game through it: 7997 of 8000 frames match
 the original on the host, and on the Amiga it shows its intro, title and
-stage select and plays its first stage, without its HUD, its player's ship
-or sound yet (the window plane and its sound driver are the work ahead).
+stage select and plays its first stage with its status bar (the window
+plane), without sound yet (its sound driver isn't Sonic 2's).
 
 ## The stages
 
@@ -282,8 +282,12 @@ mixing, is the route there: the first version of `sound.c`, in the history),
 and an FM sound that is a snapshot per octave rather than the chip. Tempo
 changes (speed shoes) and the driver's pause aren't followed yet.
 
+The window plane is a bar of up to 64 lines at the top or the bottom (a
+status bar): a small bitmap of its own that the copper points plane A's
+bitplanes at on those lines.
+
 Not in it yet: the interlaced two-player mode (the attract mode's second
-demo), the window plane, water palettes, hardware sprites. On a stock
+demo), a window that isn't such a bar, water palettes, hardware sprites. On a stock
 A1200 with fast RAM (`a1200-fast`), sound off, Emerald Hill's logic runs at
 about 85 to 90% of full speed (70% while scrolling fast) with eight to twelve
 pictures a second, and cells can be seen stale while it scrolls; the mixer is

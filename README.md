@@ -258,8 +258,8 @@ playfield, copper scrolling) and the game's music and effects converted for
 Paula. Sonic 2 plays Emerald Hill on an accelerated A1200; a stock A1200 with
 fast RAM runs it at about 70 to 90% speed, a few pictures a second, without
 sound so far. Thunder Force IV is the second game through the pipeline: it
-matches the original on the host and reaches its first stage on the Amiga,
-with its HUD, player ship and sound still to come. You bring the ROM; the repo holds only tools.
+matches the original on the host and plays its first stage on the Amiga,
+with sound still to come. You bring the ROM; the repo holds only tools.
 [docs/reading-games.md](docs/reading-games.md) walks through Ocean's RoboCop
 with it.
 

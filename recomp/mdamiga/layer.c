@@ -127,6 +127,31 @@ static u8 want_group[2], scene_new = 1, pal_stale;
 static u8 cram_chg[64];                   /* written with a new value since the last frame */
 static u8 anim[64], anim_n[64];           /* a colour the game keeps changing on its own (a waterfall's cycle) */
 
+/* The window: a third plane that takes plane A's place on some lines, unscrolled (a status bar).
+ * Its cells go straight into a bitmap of its own in chip RAM (after the copper lists: 8 cell rows
+ * of 40, a word of lead-in for the fetch that starts early), and the copper points plane A's
+ * bitplanes there on its lines. A bar of up to 64 lines at the top or the bottom is what it does. */
+#define WIN_ROW 48
+#define WIN_PLANE (WIN_ROW * 64)
+static u8 *const wsurf = (u8 *)(PORT_COPPER + 0x8000);
+static u8 wok[8 * 40], wall = 1;
+static u32 wnt;                           /* its name table */
+static int wtop, wlines, wrow0;           /* the lines it covers (none: wlines 0), and its first cell row */
+static void window_moved(void) {
+	int r = reg[18] & 31, h40 = reg[12] & 1;
+	wnt = (u32)(reg[3] & (h40 ? 0x3C : 0x3E)) << 10;
+	wlines = 0;
+	if (!(reg[17] & 0x9F)) {              /* (full width only) */
+		if (!(reg[18] & 0x80)) { if (r && r <= 8) { wtop = 0; wrow0 = 0; wlines = r * 8; } }
+		else if (r < 28 && 28 - r <= 8) { wtop = r * 8; wrow0 = r; wlines = (28 - r) * 8; }
+	}
+	wall = 1;
+}
+static void window_entry(u32 n) {         /* entry n of its name table was written */
+	u32 cy = n >> ((reg[12] & 1) ? 6 : 5), cx = n & ((reg[12] & 1) ? 63 : 31);
+	if (cx < 40 && cy - (u32)wrow0 < 8) wok[(cy - (u32)wrow0) * 40 + cx] = 0;
+}
+
 static void cell_dirty(int p, u32 cell) {
 	u32 at = (cell >> 6) * 128 + (cell & 63);
 	sh_ok[p][cell] = 0;
@@ -164,6 +189,8 @@ static void vram_w(u32 a, u8 hi, u8 lo) {
 	if (o < size) entry_dirty(0, o >> 1);
 	o = a - nt[1];
 	if (o < size) entry_dirty(1, o >> 1);
+	o = a - wnt;
+	if (wlines && o < 0x1000) window_entry(o >> 1);
 }
 static void vram_w8(u32 a, u8 v) {        /* a single byte (fills, copies) */
 	a &= 0xFFFF;
@@ -182,6 +209,7 @@ static void vram_block(u32 a, const u8 *p, u32 n) {
 		if (s[0] == d[0] && s[1] == d[1] && s[2] == d[2] && s[3] == d[3] && s[4] == d[4] && s[5] == d[5] && s[6] == d[6] && s[7] == d[7]) continue;
 		if (a + 32 > nt[0] && a < nt[0] + size) { for (int k = 0; k < 32; k += 2) vram_w(a + (u32)k, p[k], p[k + 1]); continue; }
 		if (a + 32 > nt[1] && a < nt[1] + size) { for (int k = 0; k < 32; k += 2) vram_w(a + (u32)k, p[k], p[k + 1]); continue; }
+		if (wlines && a + 32 > wnt && a < wnt + 0x1000) { for (int k = 0; k < 32; k += 2) vram_w(a + (u32)k, p[k], p[k + 1]); continue; }
 		d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = s[3]; d[4] = s[4]; d[5] = s[5]; d[6] = s[6]; d[7] = s[7];
 		int t = (int)(a >> 5);
 		tile_dirty[t] = 1; tiles_dirty = 1;
@@ -273,6 +301,7 @@ static void vdp_ctrl_write(u16 v) {
 		if (r < 24 && reg[r] != (u8)v) {
 			reg[r] = (u8)v;
 			if (r == 2 || r == 4 || r == 16) tables_moved();
+			if (r == 3 || r == 12 || r == 17 || r == 18) window_moved();
 			if (r == 7) cram_dirty = 1;
 			if (r == 11 || r == 13) { hs_at = (u32)(reg[13] & 0x3F) << 10; hs_dirty = 1; }
 		}
@@ -578,6 +607,28 @@ static void draw_cell(int p, u32 cell, int over) {
 	}
 }
 
+/* the window's cells that changed, into its bitmap */
+static void window(void) {
+	if (!wlines) return;
+	int rows = wlines >> 3, sh = (reg[12] & 1) ? 6 : 5;
+	for (int r = 0; r < rows; r++) for (int c = 0; c < 40; c++) {
+		u8 *okp = &wok[r * 40 + c];
+		if (*okp && !wall) continue;
+		*okp = 1;
+		const u8 *e = &vram[(wnt + ((u32)((r + wrow0) << sh | c) << 1)) & 0xFFFF];
+		int tile = (e[0] & 7) << 8 | e[1], line = (e[0] >> 5) & 3, hf = e[0] & 8, vf = e[0] & 16;
+		const ptile_t *t = get_tile(0, tile, line);
+		u8 *d = wsurf + r * 8 * WIN_ROW + 2 + c;
+		tile_in_nt[tile] = 1;
+		for (int y = 0; y < 8; y++, d += WIN_ROW) {
+			const u8 *q = t->row[vf ? 7 - y : y];
+			if (hf) { d[0] = rev[q[0]]; d[WIN_PLANE] = rev[q[1]]; d[WIN_PLANE * 2] = rev[q[2]]; d[WIN_PLANE * 3] = rev[q[3]]; }
+			else { d[0] = q[0]; d[WIN_PLANE] = q[1]; d[WIN_PLANE * 2] = q[2]; d[WIN_PLANE * 3] = q[3]; }
+		}
+	}
+	wall = 0;
+}
+
 /* n cells (1, 2 or 4: a byte, a word or a long a row, at an address that suits it) of cell row r
  * from plane p's shadow into surface s at column c of its 128 */
 static void put(int s, int p, int r, int c, int n) {
@@ -675,6 +726,7 @@ static void build_copper(void) {
 	u16 *c = cop[back];
 	u32 ptr[2], want[2];
 	const u8 *base[2] = { surf[back * 2], surf[back * 2 + 1] };
+	u32 pstep = PF_PLANE;
 	int fine[2], con1, past255 = 0, hint = (reg[0] & 0x10) ? reg[10] : -1, i;
 	*c++ = 0x100; *c++ = (reg[1] & 0x40) ? 0x0611 : 0x0201;   /* BPLCON0: eight planes as two playfields, or nothing */
 	*c++ = 0x106; *c++ = 0x1000;          /* BPLCON3: the second playfield's colours from 16 */
@@ -691,6 +743,7 @@ static void build_copper(void) {
 			want[p] = (u32)base[p] + (u32)row_of[p][y] * PF_ROW + (u32)((x - 1) >> 4) * 2;
 			fine[p] = (16 - (x & 15)) & 15;
 		}
+		if ((u32)(y - wtop) < (u32)wlines) { want[0] = (u32)wsurf + (u32)(y - wtop) * WIN_ROW; fine[0] = 0; }   /* the window's lines */
 		int c1 = fine[1] << 4 | fine[0];
 		int moveA = y == 0 || want[0] != ptr[0] + PF_ROW, moveB = y == 0 || want[1] != ptr[1] + PF_ROW;
 		int movec = y == 0 || c1 != con1, irq = y && y - 1 == hint, poll = y && ((0x2C + y - 1) & 15) == 15;
@@ -702,16 +755,18 @@ static void build_copper(void) {
 		}
 		if (irq) { *c++ = 0x009C; *c++ = 0x8010; }
 		if (movec) { *c++ = 0x102; *c++ = (u16)c1; }
+		u32 step = (u32)(y - wtop) < (u32)wlines ? WIN_PLANE : PF_PLANE;   /* plane A's bitplanes: how far apart on this line */
 		for (int p = 0; p < 2; p++) if (p ? moveB : moveA) {
-			u32 a = want[p];
-			for (int k = 0; k < 4; k++, a += PF_PLANE) {
+			u32 a = want[p], st = p ? PF_PLANE : step, was = p ? PF_PLANE : pstep;
+			for (int k = 0; k < 4; k++, a += st) {
 				int r = 0x0E0 + (k * 2 + p) * 4;       /* plane A is bitplanes 1,3,5,7; plane B 2,4,6,8 */
 				/* (few moves fit between two lines' fetches: the high word only when the pointer, which
 				 * has run on a row from the last line, isn't in the same 64K) */
-				if (y == 0 || ((ptr[p] + (u32)k * PF_PLANE + PF_ROW) >> 16) != (a >> 16)) { *c++ = (u16)r; *c++ = (u16)(a >> 16); }
+				if (y == 0 || ((ptr[p] + (u32)k * was + PF_ROW) >> 16) != (a >> 16)) { *c++ = (u16)r; *c++ = (u16)(a >> 16); }
 				*c++ = (u16)(r + 2); *c++ = (u16)a;
 			}
 		}
+		pstep = step;
 		if (poll) { *c++ = 0x009C; *c++ = 0x8040; }
 		ptr[0] = want[0]; ptr[1] = want[1]; con1 = c1;
 	}
@@ -945,9 +1000,15 @@ static void picture(void) {
 				int count = pw * ph > 4096 ? 4096 : pw * ph;
 				for (i = 0; i < count; i++, t += 2) if (tile_dirty[(t[0] & 7) << 8 | t[1]]) entry_dirty(p, i);
 			}
+			if (wlines) {
+				const u8 *t = &vram[(wnt + ((u32)wrow0 << ((reg[12] & 1) ? 7 : 6))) & 0xFFFF];
+				int count = (wlines >> 3) << ((reg[12] & 1) ? 6 : 5);
+				for (i = 0; i < count; i++, t += 2) if (tile_dirty[(t[0] & 7) << 8 | t[1]]) window_entry((u32)i + ((u32)wrow0 << ((reg[12] & 1) ? 6 : 5)));
+			}
 			for (i = lo; i <= hi; i++) if (tile_dirty[i]) tile_dirty[i] = tile_in_nt[i] = 0;   /* (drawn again, they say so again) */
 		}
 	}
+	if (cell_all[0]) wall = 1;            /* (plane A's colours moved: the window's tiles are in them) */
 	for (p = 0; p < 2; p++) if (cell_all[p]) { cell_all[p] = 0; all_dirty(p); }
 	int s = back * 2;                     /* plane A's bitmap that isn't on screen */
 	if (!busy) {                          /* a new picture: the sprites as they are now */
@@ -964,6 +1025,7 @@ static void picture(void) {
 	rest++;
 	/* the cells in view, as far as the time goes; a picture not whole by then is gone on with after the
 	 * next blank (for the scroll as it is then), and what is on screen stays meanwhile */
+	window();
 	if ((!present(s, 0) || !present(s + 1, 1)) && vbl_count - began_at < 8) return;
 	/* (eight blanks and still not whole: the game changes more a frame than there is time for. It is shown
 	 * as far as it got: cells out of date here and there are better than no picture) */
@@ -1052,6 +1114,8 @@ void layer_init(void) {
 	ser_hex((u32)layer_init, 8); ser('\n');
 #endif
 	tables_moved();
+	window_moved();
+	for (i = 0; i < 4 * WIN_PLANE; i++) wsurf[i] = 0;
 	for (int k = 0; k < 2; k++) { cop[k][0] = 0xFFFF; cop[k][1] = 0xFFFE; }
 	CUSTOM(0x100) = 0x0201;
 	CUSTOM(0x102) = 0;
