@@ -820,10 +820,16 @@ class Rewriter:
         # the port delivers both at level 3 (the Amiga's vertical blank), so "allow them" is mask 2
         if mn == "stop" and len(ops) == 1 and IMM.match(ops[0]):      # (the wait for an interrupt, with its mask)
             v = int(IMM.match(ops[0]).group(1)) & 0xFFFF
+            # (the byte after the cell says "asleep": the Amiga's interrupt entry clears it when the game gets
+            # an interrupt, and puts the game back into the stop only while it is set: an interrupt of the
+            # Amiga's own that lands between the wake and the next instruction finds the same return address)
+            asleep = f"\tst {self.lay['cell'] + 0x10:#x}"
             if 3 <= (v >> 8 & 7) <= 5:
                 self.unsafe.add(a)
                 self.notes["interrupt masks lowered to the Amiga's"] += 1
-                return [f"\tstop #{(v & ~0x700) | 0x200}"]
+                return [asleep, f"\tstop #{(v & ~0x700) | 0x200}"]
+            self.unsafe.add(a)
+            return [asleep, f"\tstop #{v}"]
         if len(ops) == 2 and ops[1] == "%sr" and base == "move" and IMM.match(ops[0]):
             v = int(IMM.match(ops[0]).group(1)) & 0xFFFF
             ipl = v >> 8 & 7

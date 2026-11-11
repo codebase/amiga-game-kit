@@ -167,6 +167,7 @@ l3:
 	move.w	#0x0010,0xdff09c
 	btst	#4,d0
 	beq.s	6f
+	sf	PORT_SHIM+16                | (the game gets this one: it is awake)
 	jsr	_layer_irq_enter
 	movem.l	(sp)+,d0-d1/a0-a1
 	move.l	PORT_SHIM,-(sp)
@@ -184,10 +185,13 @@ hint_done:
 	move.w	#0x0040,0xdff09c
 	bra.s	3f
 	| an interrupt of the Amiga's that the game didn't get: if it was waiting in a `stop`, it goes on
-	| waiting (the Mega Drive would not have woken it)
+	| waiting (the Mega Drive would not have woken it). Asleep is the byte agk port sets before each
+	| stop and an interrupt the game gets clears: the return address alone is the same just after a wake
 6:	move.l	18(sp),a0
 	cmp.w	#0x4e72,-4(a0)
 	bne.s	3f
+	tst.b	PORT_SHIM+16
+	beq.s	3f
 	subq.l	#4,18(sp)
 3:	movem.l	(sp)+,d0-d1/a0-a1
 	rte
@@ -203,10 +207,13 @@ hint_done:
 	move.l	6(sp),a0
 	cmp.w	#0x4e72,-4(a0)
 	bne.s	8f
+	tst.b	PORT_SHIM+16
+	beq.s	8f
 	subq.l	#4,6(sp)
 8:	move.l	(sp)+,a0
 	bra.s	post
-7:	move.l	PORT_SHIM,-(sp)             | the cell: the interrupted code may be between an instruction and its call
+7:	sf	PORT_SHIM+16                | (awake)
+	move.l	PORT_SHIM,-(sp)             | the cell: the interrupted code may be between an instruction and its call
 	pea	post_cell(pc)                | a frame for the game's return, the 68000's (agk port turns its rte into move (sp)+,sr; rts)
 	move.w	#0x2300,-(sp)
 	move.l	0x78.w,-(sp)                | the game's handler

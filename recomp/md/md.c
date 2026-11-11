@@ -335,6 +335,9 @@ static u32 md_io_read_(u32 a, int bits) {
 	if (a >= 0xA11100 && a < 0xA11102) { u32 v = (z80_busreq && !z80_held) || !z80_busreq ? (z80_busreq ? 0 : 0x100) : 0; return bits == 8 ? ((a & 1) ? v & 0xFF : v >> 8) : v; }
 	if (a >= 0xA00000 && a < 0xA10000) {   /* the Z80's side, while the 68000 holds its bus */
 		z80_sync();
+		static int silent = -1;             /* RECOMP_Z80_SILENT=1: the driver's RAM reads 0, as on a port with no sound */
+		if (silent < 0) silent = getenv("RECOMP_Z80_SILENT") != NULL;
+		if (silent && a < 0xA04000) return 0;
 		if (a < 0xA04000) { u32 v = z80ram[a & 0x1FFF]; if (z80_steps > 20000) comm_r[a & 0x1FFF] = 1; return bits == 8 ? v : v << 8 | v; }
 		if (a < 0xA04004) return 0;         /* YM2612 status: never busy */
 		return 0xFF;
