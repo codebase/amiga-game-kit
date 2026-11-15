@@ -1276,10 +1276,11 @@ def port(rom_path, analysis, outdir, image, log=print):
     # Where the image holds an address of the game's RAM, of the ROM's copy above it or of the new code, so a
     # loader may put those somewhere else, together (the Amiga's puts them in fast RAM: chip RAM is half the
     # speed with eight bitplanes on). Found by doing the port once more for a layout a megabyte on and seeing
-    # which longs moved by that. The layer's page stays where it is.
+    # which longs moved by that. The layer's page goes with them: its cell and its jumps are used at every
+    # hardware access, and in chip RAM each of those waits for the bitplanes' fetches.
     shift = 0x100000
     lay2 = dict(lay)
-    for key in ("ram", "D", "mirror", "code"):
+    for key in ("ram", "D", "mirror", "shim", "cell", "code"):
         lay2[key] += shift
     rw2 = Rewriter(code, lay2, hw, hints)
     rw2.reach = rw.reach

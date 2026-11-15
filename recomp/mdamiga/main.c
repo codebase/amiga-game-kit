@@ -38,6 +38,7 @@ static u32 be32(const u8 *p) { return (u32)p[0] << 24 | (u32)p[1] << 16 | (u32)p
 static void add32(u8 *p, u32 d) { u32 v = be32(p) + d; p[0] = (u8)(v >> 24); p[1] = (u8)(v >> 16); p[2] = (u8)(v >> 8); p[3] = (u8)v; }
 
 u32 port_ram, port_sp;                    /* where the game's RAM is, and its first stack pointer */
+u32 port_cell;
 static u8 *block;                         /* fast RAM for the game's RAM, the ROM's copy above it and the code */
 
 /* in supervisor mode with everything off: the image to its addresses. The ROM (the game's data, and
@@ -66,7 +67,8 @@ void port_place(void) {
 	port_copy(image, (u8 *)0, PORT_ROMSIZE);
 	port_copy(image, (u8 *)(PORT_D + d), 0x8000);              /* the first 32K again, above the RAM */
 	for (u8 *p = (u8 *)port_ram; p < (u8 *)(PORT_D + d); p++) *p = 0;
-	u8 *s = (u8 *)(PORT_SHIM + 0x100);
+	port_cell = PORT_SHIM + d;            /* the layer's page: with the code, in fast RAM */
+	u8 *s = (u8 *)(port_cell + 0x100);
 	for (int k = 0; stub_table[k]; k++, s += 8) {              /* the layer's entry points: jumps to start.S */
 		u32 a = stub_table[k];
 		s[0] = 0x4E; s[1] = 0xF9; s[2] = (u8)(a >> 24); s[3] = (u8)(a >> 16); s[4] = (u8)(a >> 8); s[5] = (u8)a;

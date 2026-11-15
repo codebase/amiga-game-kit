@@ -160,6 +160,7 @@ l3:
 	move.l	sp,_irq_saved_sp
 	lea	_istack_top,sp
 	move.l	d0,-(sp)
+	jsr	_layer_blit                 | (the blitter's bit too: the next of its queue)
 	jsr	_layer_idle
 	move.l	_irq_saved_sp,sp
 	bra	6f
@@ -167,16 +168,16 @@ l3:
 	move.w	#0x0010,0xdff09c
 	btst	#4,d0
 	beq.s	6f
-	sf	PORT_SHIM+16                | (the game gets this one: it is awake)
+	sf	([_port_cell],16)           | (the game gets this one: it is awake)
 	jsr	_layer_irq_enter
 	movem.l	(sp)+,d0-d1/a0-a1
-	move.l	PORT_SHIM,-(sp)
+	move.l	([_port_cell]),-(sp)
 	pea	hint_done(pc)
 	move.w	#0x2300,-(sp)
 	move.l	0x70.w,-(sp)                | the game's handler (the Mega Drive's level 4)
 	rts
 hint_done:
-	move.l	(sp)+,PORT_SHIM
+	move.l	(sp)+,([_port_cell])
 	movem.l	d0-d1/a0-a1,-(sp)
 	jsr	_layer_irq_leave
 	| (the game may have been waiting for this very interrupt, and is still in its loop: a question
@@ -190,7 +191,7 @@ hint_done:
 6:	move.l	18(sp),a0
 	cmp.w	#0x4e72,-4(a0)
 	bne.s	3f
-	tst.b	PORT_SHIM+16
+	tst.b	([_port_cell],16)
 	beq.s	3f
 	subq.l	#4,18(sp)
 3:	movem.l	(sp)+,d0-d1/a0-a1
@@ -207,19 +208,19 @@ hint_done:
 	move.l	6(sp),a0
 	cmp.w	#0x4e72,-4(a0)
 	bne.s	8f
-	tst.b	PORT_SHIM+16
+	tst.b	([_port_cell],16)
 	beq.s	8f
 	subq.l	#4,6(sp)
 8:	move.l	(sp)+,a0
 	bra.s	post
-7:	sf	PORT_SHIM+16                | (awake)
-	move.l	PORT_SHIM,-(sp)             | the cell: the interrupted code may be between an instruction and its call
+7:	sf	([_port_cell],16)           | (awake)
+	move.l	([_port_cell]),-(sp)        | the cell: the interrupted code may be between an instruction and its call
 	pea	post_cell(pc)                | a frame for the game's return, the 68000's (agk port turns its rte into move (sp)+,sr; rts)
 	move.w	#0x2300,-(sp)
 	move.l	0x78.w,-(sp)                | the game's handler
 	rts
 post_cell:
-	move.l	(sp)+,PORT_SHIM
+	move.l	(sp)+,([_port_cell])
 post:
 	movem.l	d0-d1/a0-a1,-(sp)
 	move.l	sp,_irq_saved_sp

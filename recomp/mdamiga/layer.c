@@ -39,9 +39,15 @@ typedef signed short s16;
 #define CUSTOM(off) (*(volatile u16 *)(0xDFF000 + (off)))
 #define CIAA(off) (*(volatile u8 *)(0xBFE001 + (off)))
 #define H 224
+#ifndef DDFSTOP
+#define DDFSTOP 0x00B0
+#endif
+#ifndef FETCHED
+#define FETCHED 48                        /* bytes of a bitplane fetched a line: six fetches of 64 pixels */
+#endif
 #define PF_ROW 128                        /* bytes per bitmap row: 1024 pixels, the 512-pixel plane twice */
-#define PF_PLANE (PF_ROW * 256)           /* a bitplane: 256 rows */
-#define PF_BYTES (PF_PLANE * 4)
+#define PF_LINE (PF_ROW * 4)              /* a line: its four bitplanes' rows one after the other (the blitter does all four in one go) */
+#define PF_BYTES (PF_LINE * 256)          /* 256 lines */
 #define CELLS 2048                        /* 64 x 32 */
 
 static u8 vram[0x10000];
@@ -59,15 +65,24 @@ volatile u32 vbl_count;
 /* the bitmaps: two of each plane, one on screen while the other is brought up to date (sprites
  * rubbed out and drawn again, a screenful of cells after the colours were regrouped: never seen
  * half done). Surface back * 2 + p is plane p's that is being made. */
-static u8 *const surf[4] = { (u8 *)PORT_SCREEN0, (u8 *)(PORT_SCREEN0 + PF_BYTES),
-                             (u8 *)(PORT_SCREEN0 + 2 * PF_BYTES), (u8 *)(PORT_SCREEN0 + 3 * PF_BYTES) };
+/* The game's RAM and code are in fast RAM (main.c), so the chip RAM agk port laid them out in is
+ * free: plane A once more without its sprites (what the blitter rubs them out with) and the sprites'
+ * images are there. A port with less than 128K of code has no room for it and draws them by hand. */
+#if PORT_SCREEN0 - PORT_CODE >= PF_BYTES && !defined(NO_BOBS)
+#define BOBS 1
+#define CLEAN 4
+#else
+#define BOBS 0
+#endif
+static u8 *const surf[5] = { (u8 *)PORT_SCREEN0, (u8 *)(PORT_SCREEN0 + PF_BYTES),
+                             (u8 *)(PORT_SCREEN0 + 2 * PF_BYTES), (u8 *)(PORT_SCREEN0 + 3 * PF_BYTES), (u8 *)PORT_CODE };
 static u16 *const cop[2] = { (u16 *)PORT_COPPER, (u16 *)(PORT_COPPER + 0x4000) };   /* (in one 64K: COP1LC changes in one write) */
 #ifdef LAYER_DEBUG                        /* (counts a debug build reports) */
 #define DBG(x) x
 static int dbg_cells, dbg_tiles;         /* drawn this frame */
 static int dbg_moved, dbg_group, dbg_flip, dbg_geo;
 static u32 dbg_rd, dbg_wr, dbg_data, dbg_dma, dbg_vint, dbg_w2, dbg_en;
-static u32 dbg_tc, dbg_tp, dbg_st, dbg_sn, dbg_gt;   /* cells drawn, cells put, sprite tiles, sprites, tiles made planar */
+static u32 dbg_tc, dbg_tp, dbg_st, dbg_sn, dbg_gt, dbg_bs, dbg_t1, dbg_t2, dbg_t3, dbg_gc;   /* cells drawn, cells put, sprite tiles, sprites, tiles made planar */
 #else
 #define DBG(x) (void)0
 #endif
@@ -76,7 +91,7 @@ static int back;                          /* which of plane A's bitmaps (and whi
 
 static void ser(int c) { while (!(CUSTOM(0x018) & 0x2000)) ; CUSTOM(0x030) = (u16)(0x100 | c); }
 static void ser_hex(u32 v, int digits) { for (int k = digits * 4 - 4; k >= 0; k -= 4) ser("0123456789ABCDEF"[(v >> k) & 15]); ser(' '); }
-extern u32 port_ram;
+extern u32 port_ram, port_cell;
 static u32 mem16(u32 a);
 /* an exception nothing handles (start.S, before it stops with the border striped): what and where,
  * on the serial port. Vector 010 at an address in the ROM is the port's mark on old code no known
@@ -114,7 +129,7 @@ static u32 game_addr(u32 a) {
 #define SH_PLANE (SH_ROW * 256)
 static u8 shadow[2][4 * SH_PLANE];
 static u8 sh_ok[2][CELLS];                /* the shadow's cell holds its tile */
-static u8 valid[4][32 * 128];             /* per surface */
+static u8 valid[5][32 * 128];             /* per surface */
 static u32 nt[2];                         /* the planes' name tables in VRAM */
 static u8 tile_dirty[2048];
 static int tiles_dirty, td_lo = 2048, td_hi = -1;   /* ... and the range they are in */
@@ -125,6 +140,8 @@ static int cram_dirty = 1;
 static u16 seen[2][4];                    /* the colours the tiles drawn in a playfield have used, per palette line */
 static u8 nslot[2], slot_rep[2][16];      /* its slots in use, and a colour of each (newcomers are measured against it) */
 static u8 want_group[2], scene_new = 1, pal_stale;
+static u8 grp_new[2], grp_n[2];
+static int grp_err[2];                    /* how far off the worst colour was just after the last grouping */
 static u8 cram_chg[64];                   /* written with a new value since the last frame */
 static u8 anim[64], anim_n[64];           /* a colour the game keeps changing on its own (a waterfall's cycle) */
 
@@ -132,9 +149,8 @@ static u8 anim[64], anim_n[64];           /* a colour the game keeps changing on
  * Its cells go straight into a bitmap of its own in chip RAM (after the copper lists: 8 cell rows
  * of 40, a word of lead-in for the fetch that starts early), and the copper points plane A's
  * bitplanes there on its lines. A bar of up to 64 lines at the top or the bottom is what it does. */
-#define WIN_ROW 48
-#define WIN_PLANE (WIN_ROW * 64)
-static u8 *const wsurf = (u8 *)(PORT_COPPER + 0x8000);
+#define WIN_BYTES (PF_LINE * 64)           /* 64 lines, laid out as the playfields' bitmaps are; its cells from byte 8 of a row */
+static u8 *const wsurf = (u8 *)PORT_RAM;  /* (chip RAM the game's RAM was laid out in: that is in fast RAM) */
 static u8 wok[8 * 40], wall = 1;
 static u32 wnt;                           /* its name table */
 static int wtop, wlines, wrow0;           /* the lines it covers (none: wlines 0), and its first cell row */
@@ -158,24 +174,31 @@ static void cell_dirty(int p, u32 cell) {
 	sh_ok[p][cell] = 0;
 	valid[p][at] = valid[p][at + 64] = 0;
 	valid[p + 2][at] = valid[p + 2][at + 64] = 0;
+	if (!p) valid[4][at] = valid[4][at + 64] = 0;
 }
 static void all_dirty(int p) {
 	u32 *a = (u32 *)sh_ok[p], *b, i;        /* (by longs: a stock A1200 feels this) */
 	for (i = 0; i < CELLS / 4; i++) a[i] = 0;
 	a = (u32 *)valid[p]; b = (u32 *)valid[p + 2];
 	for (i = 0; i < 32 * 128 / 4; i++) a[i] = b[i] = 0;
+	if (!p) { a = (u32 *)valid[4]; for (i = 0; i < 32 * 128 / 4; i++) a[i] = 0; }
 }
 /* the VDP's planes are pw x ph cells (32, 64 or 128 each way); the bitmaps hold 64 x 32. A narrower
  * plane repeats across the bitmap; what lies beyond 64 x 32 of a bigger one isn't shown. */
 static int pw_shift = 6, pw = 64, ph = 32;
+/* A plane taller than the bitmaps (64 or 128 cell rows: a stage that scrolls up and down) is seen
+ * through them: bitmap row r holds whichever plane row R with R % 32 == r is in view, rowmap says
+ * which, and when the view moves on a row the bitmap row that takes the new one is drawn again. */
+static u8 rowmap[2][32];
 static void entry_dirty(int p, u32 n) {   /* the name table entry n of plane p was written */
 	u32 cy = n >> pw_shift, cx = n & (u32)(pw - 1);
-	if (cy >= 32 || cx >= 64) return;
+	if (cx >= 64 || rowmap[p][cy & 31] != cy) return;
+	cy &= 31;
 	cell_dirty(p, cy << 6 | cx);
 	if (pw == 32) cell_dirty(p, cy << 6 | (cx + 32));
 }
-static u32 entry_of(u32 cell) {           /* a bitmap cell -> its name table entry */
-	return (((cell >> 6) & (u32)(ph - 1)) << pw_shift) | (cell & 63 & (u32)(pw - 1));
+static u32 entry_of(int p, u32 cell) {    /* a bitmap cell -> its name table entry */
+	return ((u32)rowmap[p][cell >> 6] << pw_shift) | (cell & 63 & (u32)(pw - 1));
 }
 static u8 changed = 1;                    /* the game wrote something the picture is made of, since the last one was begun */
 static void vram_w(u32 a, u8 hi, u8 lo) {
@@ -230,6 +253,7 @@ static void tables_moved(void) {
 	static const u8 shifts[4] = { 5, 6, 5, 7 };
 	pw_shift = shifts[reg[16] & 3]; pw = 1 << pw_shift;
 	ph = 1 << shifts[(reg[16] >> 4) & 3];
+	for (int p = 0; p < 2; p++) for (int r = 0; r < 32; r++) rowmap[p][r] = (u8)r;
 	cell_all[0] = cell_all[1] = 1;
 	scene_new = 1;
 }
@@ -410,7 +434,7 @@ static void io_write(u32 a, u32 v, int bits) {
 
 void sh_r(u32 a, int bits) {
 	DBG(dbg_rd++);
-	u8 *cell = (u8 *)PORT_SHIM;
+	u8 *cell = (u8 *)port_cell;
 	u32 v;
 	a &= 0xFFFFFF;
 	if (a >= 0xA00000 && a < 0xE00000) v = bits == 32 ? io_read(a, 16) << 16 | io_read(a + 2, 16) : io_read(a, bits);
@@ -425,7 +449,7 @@ void sh_r(u32 a, int bits) {
 
 void sh_w(u32 a, int bits) {
 	DBG(dbg_wr++);
-	const u8 *cell = (const u8 *)PORT_SHIM;
+	const u8 *cell = (const u8 *)port_cell;
 	u32 v = bits == 8 ? cell[0] : bits == 16 ? (u32)cell[0] << 8 | cell[1]
 	      : (u32)cell[0] << 24 | (u32)cell[1] << 16 | (u32)cell[2] << 8 | cell[3];
 	a &= 0xFFFFFF;
@@ -470,7 +494,7 @@ static void newcomer(int p, int c) {
 		if (d < best) { best = d; bs = s; }
 	}
 	if (nslot[p] < 15 && best > 0) { bs = ++nslot[p]; slot_rep[p][bs] = (u8)c; }
-	else if (best > 12) want_group[p] = 1;
+	else if (best > 12) { want_group[p] = 1; DBG(dbg_t1++); }
 	map[p][c] = (u8)bs;
 	pal_stale = 1;
 	if (lut_ok[p] >> (c >> 4) & 1) {      /* the table's entries with this colour in them */
@@ -598,7 +622,7 @@ static const ptile_t *get_tile(int p, int tile, int line) {
 
 /* a cell of plane p's shadow from its name table entry; over = keep what the tile leaves clear */
 static void draw_cell(int p, u32 cell, int over) {
-	const u8 *e = &vram[(nt[p] + entry_of(cell) * 2) & 0xFFFF];
+	const u8 *e = &vram[(nt[p] + entry_of(p, cell) * 2) & 0xFFFF];
 	int tile = (e[0] & 7) << 8 | e[1], line = (e[0] >> 5) & 3, hf = e[0] & 8, vf = e[0] & 16;
 	const ptile_t *t = get_tile(p, tile, line);
 	u8 *d = shadow[p] + (cell >> 6) * 8 * SH_ROW + (cell & 63);
@@ -644,12 +668,12 @@ static void window(void) {
 		const u8 *e = &vram[(wnt + ((u32)((r + wrow0) << sh | c) << 1)) & 0xFFFF];
 		int tile = (e[0] & 7) << 8 | e[1], line = (e[0] >> 5) & 3, hf = e[0] & 8, vf = e[0] & 16;
 		const ptile_t *t = get_tile(0, tile, line);
-		u8 *d = wsurf + r * 8 * WIN_ROW + 2 + c;
+		u8 *d = wsurf + r * 8 * PF_LINE + 8 + c;
 		tile_in_nt[tile] = 1;
-		for (int y = 0; y < 8; y++, d += WIN_ROW) {
+		for (int y = 0; y < 8; y++, d += PF_LINE) {
 			const u8 *q = t->row[vf ? 7 - y : y];
-			if (hf) { d[0] = rev[q[0]]; d[WIN_PLANE] = rev[q[1]]; d[WIN_PLANE * 2] = rev[q[2]]; d[WIN_PLANE * 3] = rev[q[3]]; }
-			else { d[0] = q[0]; d[WIN_PLANE] = q[1]; d[WIN_PLANE * 2] = q[2]; d[WIN_PLANE * 3] = q[3]; }
+			if (hf) { d[0] = rev[q[0]]; d[PF_ROW] = rev[q[1]]; d[PF_ROW * 2] = rev[q[2]]; d[PF_ROW * 3] = rev[q[3]]; }
+			else { d[0] = q[0]; d[PF_ROW] = q[1]; d[PF_ROW * 2] = q[2]; d[PF_ROW * 3] = q[3]; }
 		}
 	}
 	wall = 0;
@@ -659,18 +683,14 @@ static void window(void) {
  * from plane p's shadow into surface s at column c of its 128 */
 static void put(int s, int p, int r, int c, int n) {
 	const u8 *src = shadow[p] + r * 8 * SH_ROW + (c & 63);
-	u8 *dst = surf[s] + r * 8 * PF_ROW + c;
-	int k, y;
-	DBG(dbg_tiles += n); DBG(dbg_tp += (u32)n);
-	if (n == 4) {
-		for (k = 0; k < 4; k++, src += SH_PLANE - 8 * SH_ROW, dst += PF_PLANE - 8 * PF_ROW)
-			for (y = 0; y < 8; y++, src += SH_ROW, dst += PF_ROW) *(u32 *)dst = *(const u32 *)src;
-	} else if (n == 2) {
-		for (k = 0; k < 4; k++, src += SH_PLANE - 8 * SH_ROW, dst += PF_PLANE - 8 * PF_ROW)
-			for (y = 0; y < 8; y++, src += SH_ROW, dst += PF_ROW) *(u16 *)dst = *(const u16 *)src;
-	} else {
-		for (k = 0; k < 4; k++, src += SH_PLANE - 8 * SH_ROW, dst += PF_PLANE - 8 * PF_ROW)
-			for (y = 0; y < 8; y++, src += SH_ROW, dst += PF_ROW) *dst = *src;
+	u8 *dst = surf[s] + r * 8 * PF_LINE + c;
+	(void)n;
+	DBG(dbg_tiles += 4); DBG(dbg_tp += 4);
+	for (int k = 0; k < 4; k++, src += SH_PLANE, dst += PF_ROW) {
+		const u32 *a = (const u32 *)src;
+		u32 *d = (u32 *)dst;
+		d[0] = a[0]; d[PF_LINE / 4] = a[SH_ROW / 4]; d[PF_LINE / 2] = a[SH_ROW / 2]; d[PF_LINE * 3 / 4] = a[SH_ROW * 3 / 4];
+		d[PF_LINE] = a[SH_ROW]; d[PF_LINE * 5 / 4] = a[SH_ROW * 5 / 4]; d[PF_LINE * 3 / 2] = a[SH_ROW * 3 / 2]; d[PF_LINE * 7 / 4] = a[SH_ROW * 7 / 4];
 	}
 }
 
@@ -692,6 +712,10 @@ static void geometry(void) {
 	for (int y = 0; y < H; y += 4) *(u32 *)&brk[y] = 0;
 	for (int p = 0; p < 2; p++) {
 		int row = vsram[p] & 255, raw = -1, x = 0, c0 = 0, c1 = 0;
+		for (int k = 0, cy = (vsram[p] & 0x7FF) >> 3; k < 29; k++, cy++) {   /* the plane's rows in view */
+			int r = cy & 31, pr = cy & (ph - 1);
+			if (rowmap[p][r] != pr) { rowmap[p][r] = (u8)pr; for (u32 c = 0; c < 64; c++) cell_dirty(p, (u32)r << 6 | c); }
+		}
 		u8 *mn = wmin[p], *mx = wmax[p], bit = (u8)(1 << p);
 		u16 *sxp = sx[p];
 		u8 *rop = row_of[p];
@@ -705,7 +729,7 @@ static void geometry(void) {
 				if (v != raw) {
 					raw = v;
 					x = (0 - v) & 511;
-					if (x < 16) x += 512;
+					if (x < 32) x += 512;                 /* (room at the left for a sprite half off the screen) */
 					c0 = x >> 3; c1 = (x + 319) >> 3;
 					b = 1;
 				}
@@ -758,7 +782,7 @@ static void build_copper(void) {
 	u16 *c = cop[back];
 	u32 want[2];
 	const u8 *base[2] = { surf[back * 2], surf[back * 2 + 1] };
-	int fine[2], con1 = -1, past255 = 0, hint = (reg[0] & 0x10) ? reg[10] : -1, i;
+	int fine[2] = { 0, 0 }, con1 = -1, past255 = 0, hint = (reg[0] & 0x10) ? reg[10] : -1, i;
 	*c++ = 0x100; *c++ = (reg[1] & 0x40) ? 0x0611 : 0x0201;   /* BPLCON0: eight planes as two playfields, or nothing */
 	*c++ = 0x106; *c++ = 0x1000;          /* BPLCON3: the second playfield's colours from 16 */
 	for (i = 0; i < 32; i++) { *c++ = (u16)(0x180 + 2 * i); *c++ = pal_hi[i]; }
@@ -773,40 +797,41 @@ static void build_copper(void) {
 		 * and the lines of the two interrupts are looked at any further) */
 		int win = (u32)(y - wtop) < (u32)wlines;
 		int b = brk[y];
-		if (win || (wlines && y == wtop + wlines)) b |= 1;   /* (the window's rows are closer together than the modulo steps: every line) */
+		if (win) b &= ~1;                     /* (the window's rows follow each other as the playfields' do) */
+		if (wlines && (y == wtop || y == wtop + wlines)) b |= 1;
 		if (!y) b = 3;
 		int irq = y && y - 1 == hint, poll = y && ((0x2C + y - 1) & 15) == 15;
 		if (!(b | irq | poll)) continue;
 		int c1 = con1, movec = 0;
 		if (b) {
-			fine[0] = con1 & 15; fine[1] = (con1 >> 4) & 15;
 			for (int p = 0; p < 2; p++) if (b >> p & 1) {
 				int x = sx[p][y];
-				want[p] = (u32)base[p] + (u32)row_of[p][y] * PF_ROW + (u32)((x - 1) >> 4) * 2;
-				fine[p] = (16 - (x & 15)) & 15;
+				want[p] = (u32)base[p] + (u32)row_of[p][y] * PF_LINE + (u32)((x - 1) >> 6) * 8;
+				fine[p] = (64 - (x & 63)) & 63;
 			}
-			if (win) { want[0] = (u32)wsurf + (u32)(y - wtop) * WIN_ROW; fine[0] = 0; }   /* the window's lines */
-			c1 = fine[1] << 4 | fine[0];
+			if (win) { want[0] = (u32)wsurf + (u32)(y - wtop) * PF_LINE; fine[0] = 0; }   /* the window's lines */
+			/* (the scroll's low four bits where they always were, the two above them at the top of each half) */
+			c1 = (fine[1] & 15) << 4 | (fine[0] & 15) | (fine[0] >> 4) << 10 | (fine[1] >> 4) << 14;
 			movec = c1 != con1;
 		}
 		if (y) {                              /* after line y-1's fetch, before line y's */
 			int l = 0x2C + y - 1;
 			if (l >= 256 && !past255) { *c++ = 0xFFDF; *c++ = 0xFFFE; past255 = 1; }
-			if (l != 255) { *c++ = (u16)((l & 0xFF) << 8 | 0xDB); *c++ = 0xFFFE; }
+			if (l != 255) { *c++ = (u16)((l & 0xFF) << 8 | 0xC1); *c++ = 0xFFFE; }   /* (the line's last fetch is over at $C0: fourteen moves fit before the next line's first) */
 			else { *c++ = 0xFFDF; *c++ = 0xFFFE; past255 = 1; }
 		}
 		if (irq) { *c++ = 0x009C; *c++ = 0x8010; }
 		if (movec) { *c++ = 0x102; *c++ = (u16)c1; }
 		for (int p = 0; p < 2; p++) if (b >> p & 1) {
 			/* (few moves fit between two lines' fetches: the high word only when the pointer, which
-			 * has run on a row from the last line, isn't in the same 64K) */
+			 * has run on a line from the last, isn't in the same 64K) */
 			int pwin = !p && y && (u32)(y - 1 - wtop) < (u32)wlines;   /* the line above was the window's */
-			u32 a = want[p], st = (!p && win) ? WIN_PLANE : PF_PLANE, was = pwin ? WIN_PLANE : PF_PLANE, ran = 0;
-			if (y) ran = (pwin ? (u32)wsurf + (u32)(y - 1 - wtop) * WIN_ROW
-			                   : (u32)base[p] + (u32)row_of[p][y - 1] * PF_ROW + (u32)((sx[p][y - 1] - 1) >> 4) * 2) + PF_ROW;
-			for (int k = 0; k < 4; k++, a += st) {
+			u32 a = want[p], ran = 0;
+			if (y) ran = (pwin ? (u32)wsurf + (u32)(y - 1 - wtop) * PF_LINE
+			                   : (u32)base[p] + (u32)row_of[p][y - 1] * PF_LINE + (u32)((sx[p][y - 1] - 1) >> 6) * 8) + PF_LINE;
+			for (int k = 0; k < 4; k++, a += PF_ROW) {
 				int r = 0x0E0 + (k * 2 + p) * 4;       /* plane A is bitplanes 1,3,5,7; plane B 2,4,6,8 */
-				if (y == 0 || ((ran + (u32)k * was) >> 16) != (a >> 16)) { *c++ = (u16)r; *c++ = (u16)(a >> 16); }
+				if (y == 0 || ((ran + (u32)k * PF_ROW) >> 16) != (a >> 16)) { *c++ = (u16)r; *c++ = (u16)(a >> 16); }
 				*c++ = (u16)(r + 2); *c++ = (u16)a;
 			}
 		}
@@ -817,7 +842,6 @@ static void build_copper(void) {
 	*c++ = 0x0F01; *c++ = 0xFFFE; *c++ = 0x009C; *c++ = 0x8040;   /* (lines 271 and 287) */
 	*c++ = 0x1F01; *c++ = 0xFFFE; *c++ = 0x009C; *c++ = 0x8040;
 	*c++ = 0xFFFF; *c++ = 0xFFFE;
-	CUSTOM(0x082) = (u16)(u32)cop[back];
 }
 
 /* ------------------------------------------------------------- sprites */
@@ -830,6 +854,147 @@ static int bob_n, over_n;
 static u16 got_list[2][32 * 128];
 static u8 got_flag[2][32 * 128];
 static int got_n[2];
+
+/* ------------------------------------------------- the blitter's sprites */
+/* A sprite the screen shows whole lines of alike (no line scroll through it) is the blitter's: its
+ * image is made once, the four planes of each row one after the other with the mask beside them the
+ * same way, and one blit cuts it into plane A's bitmap, all four planes (the bitmaps' lines are laid
+ * out for it). Where it was in that bitmap two pictures ago, one blit from the bitmap without
+ * sprites puts the cells back. The blits of a picture are a queue the blitter's interrupt works
+ * through while the game runs; the picture is shown when the last is done. */
+#if BOBS
+#define SLOT 1032                         /* 32 rows x 4 planes x 4 bytes, the mask the same, and what a blit reads past the end */
+#define NSLOT_A ((PORT_SHIM - PORT_RAM - WIN_BYTES) / SLOT)
+#define NSLOT_B ((PORT_SCREEN0 - PORT_CODE - PF_BYTES) / SLOT)
+#define NSLOT (NSLOT_A + NSLOT_B)
+static struct { u16 key, stamp, t0, t1; u8 size, ok; } img[NSLOT];
+static u8 tile_img[2048];                 /* the tile is in an image */
+static u16 pic_no;
+static u8 *slot_at(int i) { return i < NSLOT_A ? (u8 *)PORT_RAM + WIN_BYTES + i * SLOT : (u8 *)PORT_CODE + PF_BYTES + (i - NSLOT_A) * SLOT; }
+static void img_flush(void) { for (int i = 0; i < NSLOT; i++) img[i].ok = 0; }
+static void img_tiles(int lo, int hi) {   /* tiles lo..hi were written, those with tile_dirty set */
+	for (int i = 0; i < NSLOT; i++) if (img[i].ok && img[i].t0 <= hi && img[i].t1 >= lo)
+		for (int t = img[i].t0; t <= img[i].t1; t++) if (tile_dirty[t & 0x7FF]) { img[i].ok = 0; break; }
+}
+/* -> the slot with the image of the sprite (tiles from tile0, w x h of them, palette line, flips), or -1 */
+static int img_get(u16 key, int w, int h) {
+	int size = w << 4 | h, at = (int)(((u32)key * 31 + (u32)size * 7) % NSLOT), victim = -1, i, k;
+	for (k = 0; k < 8; k++) {
+		i = at + k; if (i >= NSLOT) i -= NSLOT;
+		if (img[i].ok && img[i].key == key && img[i].size == size) { img[i].stamp = pic_no; return i; }
+		if (victim >= 0 && !img[victim].ok) continue;
+		if (!img[i].ok || (img[i].stamp != pic_no && (victim < 0 || (u16)(pic_no - img[i].stamp) > (u16)(pic_no - img[victim].stamp)))) victim = i;
+	}
+	if (victim < 0) return -1;
+	i = victim;
+	int tile0 = key & 0x7FF, line = (key >> 13) & 3, hf = key & 0x800, vf = key & 0x1000, ww2 = ((w + 1) >> 1) * 2;
+	u8 *im = slot_at(i), *mk = im + 512;
+	for (int cx = 0; cx < w; cx++) {
+		int col = hf ? w - 1 - cx : cx;
+		for (int cy = 0; cy < h; cy++) {
+			int tn = (tile0 + col * h + (vf ? h - 1 - cy : cy)) & 0x7FF;
+			const ptile_t *t = get_tile(0, tn, line);
+			tile_img[tn] = 1;
+			u8 *d = im + cy * 32 * ww2 + cx, *q = mk + cy * 32 * ww2 + cx;
+			for (int r = 0; r < 8; r++, d += 4 * ww2, q += 4 * ww2) {
+				int rr = vf ? 7 - r : r;
+				const u8 *src = t->row[rr];
+				u8 m = t->mask[rr], b0 = src[0], b1 = src[1], b2 = src[2], b3 = src[3];
+				if (hf) { m = rev[m]; b0 = rev[b0]; b1 = rev[b1]; b2 = rev[b2]; b3 = rev[b3]; }
+				d[0] = b0; d[ww2] = b1; d[2 * ww2] = b2; d[3 * ww2] = b3;
+				q[0] = q[ww2] = q[2 * ww2] = q[3 * ww2] = m;
+			}
+		}
+	}
+	if (w & 1) for (k = 0; k < h * 32; k++) im[k * ww2 + w] = mk[k * ww2 + w] = 0;
+	im[h * 32 * ww2] = im[h * 32 * ww2 + 1] = mk[h * 32 * ww2] = mk[h * 32 * ww2 + 1] = 0;
+	img[i].key = key; img[i].size = (u8)size; img[i].ok = 1; img[i].stamp = pic_no;
+	img[i].t0 = (u16)tile0; img[i].t1 = (u16)(tile0 + w * h - 1);
+	return i;
+}
+
+typedef struct { u32 a, b, d; u16 con0, size; } blit_t;   /* a cut (mask a, image b, into d) or a copy (a to d: con0 0x09F0) */
+#define NBQ 400
+static blit_t bq[NBQ], plan[NBQ / 2];
+static int bq_n, bq_pos, plan_n;
+static volatile u8 bq_run;
+static struct { u32 off; u16 size; } rects[2][NBQ / 2];   /* per bitmap of plane A: where the blitter drew in it */
+static int rect_n[2];
+static struct { s16 bx; u8 slot, row0, r0, rows, ww; } dl[80];   /* this picture's */
+static int dl_n;
+static void flip(void);
+
+static void blit_start(void) {
+	const blit_t *q = &bq[bq_pos++];
+	int words = q->size & 63;
+	CUSTOM(0x040) = q->con0;
+	CUSTOM(0x044) = 0xFFFF;
+	*(volatile u32 *)0xDFF050 = q->a;
+	*(volatile u32 *)0xDFF054 = q->d;
+	if (q->con0 == 0x09F0) {
+		CUSTOM(0x042) = 0; CUSTOM(0x046) = 0xFFFF;
+		CUSTOM(0x064) = (u16)(PF_ROW - words * 2);
+	} else {
+		CUSTOM(0x042) = q->con0 & 0xF000; CUSTOM(0x046) = 0;
+		*(volatile u32 *)0xDFF04C = q->b;
+		*(volatile u32 *)0xDFF048 = q->d;
+		CUSTOM(0x064) = 0xFFFE; CUSTOM(0x062) = 0xFFFE;
+		CUSTOM(0x060) = (u16)(PF_ROW - words * 2);
+	}
+	CUSTOM(0x066) = (u16)(PF_ROW - words * 2);
+	CUSTOM(0x058) = q->size;
+}
+/* the blitter's interrupt (and whoever passes by): the next of the queue, or the picture is done */
+void layer_blit(void) {
+	if (!bq_run || (CUSTOM(0x002) & 0x4000)) return;
+	if (bq_pos < bq_n) { blit_start(); return; }
+	bq_run = 0;
+	flip();
+}
+/* the cells a blit of `size` at `off` covers in bitmap s: fn 0 -> nonzero if the shadow has a sprite
+ * in one (a hand-drawn one); fn 1: those the clean bitmap doesn't hold lose their mark in s; fn 2: all do */
+static int rect_cells(int s, u32 off, u16 size, int fn) {
+	int row = (int)(off / PF_LINE), col = (int)(off % PF_LINE), words = size & 63, rows = (size >> 6) >> 2;
+	for (int cr = row >> 3; cr <= (row + rows - 1) >> 3; cr++)
+		for (int c = col; c < col + words * 2; c++) {
+			u32 at = (u32)(cr & 31) * 128 + (u32)c;
+			if (fn == 0) { if (bob_flag[(cr & 31) << 6 | (c & 63)]) return 1; }
+			else if (fn == 2 || !valid[CLEAN][at]) valid[s][at] = 0;
+		}
+	return 0;
+}
+/* this picture's blits, from the list sprites() made: planned before the cells are brought up to date
+ * (a cell the clean bitmap doesn't hold can't be put back from it: it is marked to be copied again) */
+static void bob_plan(int s) {
+	int nr = 0;
+	/* where the blitter drew in this bitmap last time: put back by the blitter, or, where a hand-drawn
+	 * sprite is now, by the cells being copied again (the copy has the sprite in it) */
+	bq_n = 0;
+	for (int i = 0; i < rect_n[back]; i++) {
+		u32 off = rects[back][i].off; u16 size = rects[back][i].size;
+		if (rect_cells(s, off, size, 0)) { rect_cells(s, off, size, 2); continue; }
+		rect_cells(s, off, size, 1);
+		bq[bq_n].a = (u32)surf[CLEAN] + off; bq[bq_n].d = (u32)surf[s] + off; bq[bq_n].con0 = 0x09F0; bq[bq_n].size = size; bq_n++;
+	}
+	plan_n = 0;
+	for (int i = 0; i < dl_n; i++) {
+		int ww = dl[i].ww, ww2 = ww * 2, rows = dl[i].rows, row = dl[i].row0, r = dl[i].r0, bx = dl[i].bx;
+		const u8 *im = slot_at(dl[i].slot);
+		while (rows > 0 && plan_n < NBQ / 2) {
+			int n = rows < 256 - row ? rows : 256 - row;
+			u32 off = (u32)row * PF_LINE + (u32)(bx >> 4) * 2;
+			blit_t *q = &plan[plan_n++];
+			q->a = (u32)im + 512 + (u32)(r * 4 * ww2); q->b = (u32)im + (u32)(r * 4 * ww2); q->d = (u32)surf[s] + off;
+			q->con0 = (u16)((bx & 15) << 12 | 0x0FCA); q->size = (u16)((n * 4) << 6 | (ww + 1));
+			rects[back][nr].off = off; rects[back][nr].size = q->size; nr++;
+			rect_cells(s, off, q->size, 1);
+			rows -= n; r += n; row = 0;
+		}
+	}
+	rect_n[back] = nr;
+}
+#endif
+
 
 static void sprites(void) {
 	static struct { s16 x, y; u8 w, h; u16 attr; } sp[80];
@@ -858,6 +1023,29 @@ static void sprites(void) {
 			if ((attr >> 15) != pass) continue;
 			if (X0 <= -w * 8 || X0 >= 320 || Y0 <= -h * 8 || Y0 >= H) continue;
 			int tile0 = attr & 0x7FF, line = (attr >> 13) & 3, hf = attr & 0x800, vf = attr & 0x1000;
+#if BOBS
+			{   /* the blitter's, if the lines it is on scroll alike and no cell with priority is before it */
+				int r0 = Y0 < 0 ? -Y0 : 0, r1 = h * 8 < H - Y0 ? h * 8 : H - Y0, ya = Y0 + r0, yb = Y0 + r1 - 1;
+				int bx = sx[0][ya] + X0, slot = -1;
+				if (dl_n < 80 && bx >= 0 && sx[0][yb] == sx[0][ya] && sx[0][(ya + yb) >> 1] == sx[0][ya]) {
+					int clear = 1;
+					if (!pass) {
+						int ra = row_of[0][ya];
+						for (int cr = ra >> 3; clear && cr <= (ra + r1 - r0 - 1) >> 3; cr++)
+							for (int cc = bx >> 3; cc <= (bx + w * 8 - 1) >> 3; cc++)
+								if (nta[entry_of(0, (u32)((cr & 31) << 6 | (cc & 63))) * 2] & 0x80) { clear = 0; break; }
+					}
+					if (clear) slot = img_get(attr & 0x7FFF, w, h);
+				}
+				if (slot >= 0) {
+					dl[dl_n].bx = (s16)bx; dl[dl_n].slot = (u8)slot; dl[dl_n].row0 = row_of[0][ya];
+					dl[dl_n].r0 = (u8)r0; dl[dl_n].rows = (u8)(r1 - r0); dl[dl_n].ww = (u8)((w + 1) >> 1);
+					dl_n++;
+					DBG(dbg_bs++);
+					continue;
+				}
+			}
+#endif
 			DBG(dbg_sn++);
 			for (int cx = 0; cx < w; cx++) {
 				int X = X0 + cx * 8;
@@ -882,7 +1070,7 @@ static void sprites(void) {
 								if (!sh_ok[0][cl]) draw_cell(0, cl, 0);
 								if (!bob_flag[cl]) {
 									bob_flag[cl] = 1; bob_list[bob_n++] = (u16)cl;
-									if (!pass && (nta[entry_of(cl) * 2] & 0x80)) over_list[over_n++] = (u16)cl;
+									if (!pass && (nta[entry_of(0, cl) * 2] & 0x80)) over_list[over_n++] = (u16)cl;
 								}
 								if (!gflag[at2]) { gflag[at2] = 1; glist[gn++] = (u16)at2; val[at2] = 0; }
 							}
@@ -922,7 +1110,7 @@ static void sprites(void) {
 								if (!sh_ok[0][cl]) draw_cell(0, cl, 0);
 								if (!bob_flag[cl]) {
 									bob_flag[cl] = 1; bob_list[bob_n++] = (u16)cl;
-									if (!pass && (nta[entry_of(cl) * 2] & 0x80)) over_list[over_n++] = (u16)cl;
+									if (!pass && (nta[entry_of(0, cl) * 2] & 0x80)) over_list[over_n++] = (u16)cl;
 								}
 								if (!gflag[at + e]) { gflag[at + e] = 1; glist[gn++] = (u16)(at + e); val[at + e] = 0; }
 							}
@@ -945,6 +1133,10 @@ static void sprites(void) {
 	got_n[back] = gn;
 }
 
+#if !BOBS
+void layer_blit(void) { }
+#endif
+
 /* ------------------------------------------------------------ the frame */
 static u32 began_at;                      /* the blank the picture being made was begun in */
 static int rest;                          /* (debug: the times it was gone on with) */
@@ -955,6 +1147,8 @@ static const u32 idles[] = { PORT_IDLES 0, 0 };   /* agk port's: the loops the g
 static u32 fade_at, fade_gap;             /* when most of the palette last moved, and how long after the time before */
 static u8 overran;                        /* the last picture's work ran into the next blank */
 static void picture(void);
+static u32 flipped_at = 0xFFFFFFFF;       /* the blank count when the last picture was handed to the copper */
+static u8 phase;                          /* of the picture being made: 0 before its sprites are looked at */
 /* The game comes first: a frame of its logic, then the picture in what is left of the frame. The
  * game says when it is done by waiting for its interrupt in a loop agk port found, and the copper
  * asks every sixteen lines where it is (start.S). So a slow machine shows fewer pictures and plays
@@ -997,6 +1191,9 @@ void layer_frame(void) {
  * as the time goes (deadline), and gone on with the next time */
 static void picture(void) {
 	int p, i;
+#ifdef NO_PICTURE                         /* (a measurement: the game with nothing drawn) */
+	if (vbl_count > NO_PICTURE) { CUSTOM(0x096) = 0x0100; return; }   /* (and no bitplanes fetched) */
+#endif
 	/* nothing the picture is made of was written since the one on screen was begun: it stands. (A game
 	 * that waits for the blank by asking the VDP, its interrupt off, writes nothing for frames on end,
 	 * and a stock machine has no time for the sprites and the copper list all over again each frame) */
@@ -1008,10 +1205,13 @@ static void picture(void) {
 			for (i = 0; i < 4; i++) seen[p][i] = 0;
 			for (i = 0; i < 64; i++) map[p][i] = 0;
 			for (i = 0; i < 2048; i++) cache_ok[p][i] = 0;
-			nslot[p] = want_group[p] = lut_ok[p] = 0;
+			nslot[p] = want_group[p] = lut_ok[p] = grp_n[p] = 0;
 		}
 		for (i = 0; i < 64; i++) anim[i] = anim_n[i] = 0;
 		cram_dirty = 1;
+#if BOBS
+		img_flush();
+#endif
 	}
 	if (cram_dirty) {
 		int err[2], n = 0;
@@ -1027,26 +1227,45 @@ static void picture(void) {
 			if (n > 16) anim[i] = anim_n[i] = 0;
 			else if (cram_chg[i] && !anim[i] && ++anim_n[i] >= 3) {
 				anim[i] = 1;
-				for (p = 0; p < 2; p++) if (seen[p][i >> 4] >> (i & 15) & 1) want_group[p] = 1;
+				for (p = 0; p < 2; p++) if (seen[p][i >> 4] >> (i & 15) & 1) { want_group[p] = 1; DBG(dbg_t2++); }
 			}
 			cram_chg[i] = 0;
 		}
 		load_palette(err);
-		for (p = 0; p < 2; p++) if (err[p] > 60) want_group[p] = 1;   /* (a fade came up: what was grouped in the dark) */
+		/* (a fade came up: what was grouped in the dark. Only when the fit is worse than the grouping left
+		 * it: with more colours in use than slots it is never good, and grouping again changes nothing) */
+		for (p = 0; p < 2; p++) {
+			if (grp_new[p]) { grp_new[p] = 0; grp_err[p] = err[p]; }
+			else if (err[p] > 60 && err[p] > grp_err[p] + 24) { want_group[p] = 1; DBG(dbg_t3++); }
+		}   /* (a fade came up: what was grouped in the dark) */
 	}
 	/* (not while a fade is moving: every step of it would be a new grouping and a screenful of cells) */
-	for (p = 0; p < 2; p++) if (want_group[p] && vbl_count - grouped_at[p] >= 25 && vbl_count - fade_at >= 12 + 3 * fade_gap) {
+	for (p = 0; p < 2; p++) if (want_group[p] && vbl_count - grouped_at[p] >= (25UL << grp_n[p]) && vbl_count - fade_at >= 12 + 3 * fade_gap) {
 		want_group[p] = 0;
+		/* (each grouping of a scene waits twice as long as the one before: it costs a screenful of cells,
+		 * and a game that cycles its colours gives a reason for another every second) */
+		if (grp_n[p] < 5) grp_n[p]++;
+		grp_new[p] = 1; cram_dirty = 1;   /* (how well it fits is measured with the next palette) */
+		DBG(dbg_gc++);
 		if (group(p)) {
 			DBG(dbg_group++);
 			for (i = 0; i < 2048; i++) cache_ok[p][i] = 0;
 			cell_all[p] = 1;
+#if BOBS
+			if (!p) img_flush();
+#endif
 		}
 		pal_stale = 1;
 	}
 	if (tiles_dirty) {                    /* tiles the game rewrote: their planar copies go, and the cells showing them */
 		int scan = 0, lo = td_lo, hi = td_hi;
 		tiles_dirty = 0; td_lo = 2048; td_hi = -1;
+#if BOBS
+		{ int any = 0; for (i = lo; i <= hi; i++) if (tile_dirty[i] && tile_img[i]) { any = 1; tile_img[i] = 0; } if (any) img_tiles(lo, hi); }
+#endif
+#ifdef DBG_ALLDIRTY                       /* (a check of the tiles' cell lists: every cell drawn again instead) */
+		cell_all[0] = cell_all[1] = 1;
+#endif
 		for (i = lo; i <= hi; i++) if (tile_dirty[i]) {
 			cache_ok[0][i] = cache_ok[1][i] = 0;
 			for (u32 id = tl_head[i]; id != NOCELL; id = tl_next[id]) cell_dirty((int)(id >> 11), id & (CELLS - 1));
@@ -1064,32 +1283,61 @@ static void picture(void) {
 	if (cell_all[0]) wall = 1;            /* (plane A's colours moved: the window's tiles are in them) */
 	for (p = 0; p < 2; p++) if (cell_all[p]) { cell_all[p] = 0; all_dirty(p); }
 	int s = back * 2;                     /* plane A's bitmap that isn't on screen */
-	if (!busy) {                          /* a new picture: the sprites as they are now */
+#if BOBS
+	if (bq_run) { layer_blit(); return; } /* (the blitter is finishing the picture) */
+#endif
+	if (!busy) {                          /* a new picture */
+		/* (the one before is on screen from the next blank: until then its predecessor's bitmap and
+		 * copper list, the ones to be written now, are still the ones shown) */
+		if (vbl_count == flipped_at) return;
 		for (i = 0; i < got_n[back]; i++) { u32 c = got_list[back][i]; got_flag[back][c] = 0; valid[s][c] = 0; }   /* the sprites it had */
 		got_n[back] = 0;
 		for (i = 0; i < bob_n; i++) { bob_flag[bob_list[i]] = 0; sh_ok[0][bob_list[i]] = 0; }   /* and the shadow's */
 		bob_n = 0;
-		if (reg[1] & 0x40) sprites();
 		busy = 1;
+		phase = 0;
 		changed = 0;
 		drawn_seq = vint_seq;
 		began_at = vbl_count;
 		rest = 0;
 	}
 	rest++;
+	if (!phase) {
+#if BOBS
+		/* the bitmap without sprites first, while the shadow has none either */
+		if (!present(CLEAN, 0) && vbl_count - began_at < 8) return;
+		pic_no++; dl_n = 0;
+#endif
+		if (reg[1] & 0x40) sprites();     /* the sprites as they are now: drawn into the shadow, or listed for the blitter */
+#if BOBS
+		bob_plan(s);
+#endif
+		phase = 1;
+	}
 	/* the cells in view, as far as the time goes; a picture not whole by then is gone on with after the
-	 * next blank (for the scroll as it is then), and what is on screen stays meanwhile */
+	 * next blank, and what is on screen stays meanwhile */
 	window();
 	if ((!present(s, 0) || !present(s + 1, 1)) && vbl_count - began_at < 8) return;
 	/* (eight blanks and still not whole: the game changes more a frame than there is time for. It is shown
 	 * as far as it got: cells out of date here and there are better than no picture) */
 	if (pal_stale) { int err[2]; pal_stale = 0; load_palette(err); }   /* (colours that came with this frame's tiles) */
 	build_copper();
+#if BOBS
+	for (i = 0; i < plan_n && bq_n < NBQ; i++) bq[bq_n++] = plan[i];
+	if (bq_n) { bq_pos = 0; bq_run = 1; layer_blit(); return; }   /* shown when the blitter is through */
+#endif
+	flip();
+}
+
+/* the picture is whole: its copper list takes over at the next vertical blank */
+static void flip(void) {
+	CUSTOM(0x082) = (u16)(u32)cop[back];
+	flipped_at = vbl_count;
 	back ^= 1;
 	busy = 0;
 	DBG(dbg_flip++);
 #ifdef LAYER_DEBUG                        /* the layer's state where a memory dump finds it */
-	{ u8 *d = (u8 *)0x900000; for (i = 0; i < 24; i++) d[i] = reg[i];
+	{ int i; u8 *d = (u8 *)0x900000; for (i = 0; i < 24; i++) d[i] = reg[i];
 	  for (i = 0; i < 64; i++) { d[32 + i * 2] = (u8)(cram[i] >> 8); d[33 + i * 2] = (u8)cram[i]; }
 	  for (i = 0; i < 40; i++) { d[160 + i * 2] = (u8)(vsram[i] >> 8); d[161 + i * 2] = (u8)vsram[i]; }
 	  d[240] = (u8)rest; d[241] = (u8)bob_n; d[242] = nslot[0]; d[243] = nslot[1];
@@ -1128,6 +1376,9 @@ static int tn;
 #endif
 int layer_vbl(u32 pc) {
 	vbl_count++;
+#if BOBS
+	layer_blit();
+#endif
 	DBG(dbg_vint += (u32)waiting(pc));
 	DBG(dbg_w2 += (pc - (port_ram - PORT_RAM) >= idles[2] && idles[2]));
 	DBG(dbg_en += (reg[1] >> 5) & 1);
@@ -1139,7 +1390,7 @@ int layer_vbl(u32 pc) {
 #ifdef LAYER_DEBUG                        /* every 256 blanks: pictures shown, geometries, groupings, plane set-ups; the game's reads and writes of
 	                                        * hardware, its words to the VDP's data port, words by DMA, and the frames it finished in time */
 	if (!(vbl_count & 255)) {
-		ser_hex((u32)dbg_flip, 2); ser_hex((u32)dbg_geo, 2); ser_hex((u32)dbg_group, 2); ser_hex((u32)dbg_moved, 2); ser_hex(dbg_rd, 5); ser_hex(dbg_wr, 5); ser_hex(dbg_data, 5); ser_hex(dbg_dma, 5); ser_hex(dbg_vint, 3); ser_hex(dbg_w2, 3); ser_hex(dbg_en, 3); ser_hex(dbg_tc, 5); ser_hex(dbg_tp, 5); ser_hex(dbg_st, 5); ser_hex(dbg_sn, 4); ser_hex(dbg_gt, 4); ser('\n'); dbg_w2 = dbg_en = 0; dbg_tc = dbg_tp = dbg_st = dbg_sn = dbg_gt = 0;
+		ser_hex((u32)dbg_flip, 2); ser_hex((u32)dbg_geo, 2); ser_hex((u32)dbg_group, 2); ser_hex((u32)dbg_moved, 2); ser_hex(dbg_rd, 5); ser_hex(dbg_wr, 5); ser_hex(dbg_data, 5); ser_hex(dbg_dma, 5); ser_hex(dbg_vint, 3); ser_hex(dbg_w2, 3); ser_hex(dbg_en, 3); ser_hex(dbg_tc, 5); ser_hex(dbg_tp, 5); ser_hex(dbg_st, 5); ser_hex(dbg_sn, 4); ser_hex(dbg_gt, 4); ser_hex(dbg_bs, 4); ser_hex(dbg_t1, 4); ser_hex(dbg_t2, 4); ser_hex(dbg_t3, 4); ser_hex(dbg_gc, 3); ser_hex(nslot[0], 2); ser_hex(nslot[1], 2); ser('\n'); dbg_bs = dbg_t1 = dbg_t2 = dbg_t3 = dbg_gc = 0; dbg_w2 = dbg_en = 0; dbg_tc = dbg_tp = dbg_st = dbg_sn = dbg_gt = 0;
 		dbg_rd = dbg_wr = dbg_data = dbg_dma = dbg_vint = 0;
 		dbg_flip = dbg_geo = dbg_group = dbg_moved = 0;
 	}
@@ -1171,7 +1422,7 @@ void layer_init(void) {
 	for (i = 0; i < 2048; i++) tl_head[i] = NOCELL;
 	tables_moved();
 	window_moved();
-	for (i = 0; i < 4 * WIN_PLANE; i++) wsurf[i] = 0;
+	for (i = 0; i < WIN_BYTES; i++) wsurf[i] = 0;
 	for (int k = 0; k < 2; k++) { cop[k][0] = 0xFFFF; cop[k][1] = 0xFFFE; }
 	CUSTOM(0x100) = 0x0201;
 	CUSTOM(0x102) = 0;
@@ -1179,12 +1430,16 @@ void layer_init(void) {
 	CUSTOM(0x106) = 0x1000;               /* BPLCON3: the second playfield's colours from 16 */
 	CUSTOM(0x180) = 0;
 	CUSTOM(0x10C) = 0;
-	CUSTOM(0x108) = PF_ROW - 42; CUSTOM(0x10A) = PF_ROW - 42;   /* 21 words are fetched per line */
-	CUSTOM(0x1FC) = 0;
+	CUSTOM(0x108) = PF_LINE - FETCHED; CUSTOM(0x10A) = PF_LINE - FETCHED;   /* the fetches of eight bytes a line */
+	CUSTOM(0x1FC) = 3;                    /* the bitplanes fetched 64 bits at a time: a quarter of the bus's slots, the rest for the CPU and the blitter */
 	CUSTOM(0x08E) = 0x2C81;               /* 320 x 224 from line $2C */
 	CUSTOM(0x090) = 0x0CC1;
-	CUSTOM(0x092) = 0x0030; CUSTOM(0x094) = 0x00D0;   /* one word early, for the fine scroll */
+	CUSTOM(0x092) = 0x0018; CUSTOM(0x094) = DDFSTOP;   /* one fetch (64 pixels) early, for the fine scroll; the last begins at $B8 */
 	CUSTOM(0x080) = (u16)((u32)cop[0] >> 16); CUSTOM(0x082) = (u16)(u32)cop[0];
 	CUSTOM(0x088) = 0;
 	CUSTOM(0x034) = 0xFF00;
+#if BOBS
+	for (i = 0; i < PF_BYTES; i++) surf[CLEAN][i] = 0;
+	CUSTOM(0x096) = 0x8040;               /* the blitter */
+#endif
 }
