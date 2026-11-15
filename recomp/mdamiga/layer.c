@@ -68,7 +68,9 @@ volatile u32 vbl_count;
 /* The game's RAM and code are in fast RAM (main.c), so the chip RAM agk port laid them out in is
  * free: plane A once more without its sprites (what the blitter rubs them out with) and the sprites'
  * images are there. A port with less than 128K of code has no room for it and draws them by hand. */
-#if PORT_SCREEN0 - PORT_CODE >= PF_BYTES && !defined(NO_BOBS)
+/* (-DUSE_BOBS: not the default yet. On a stock machine, in Thunder Force IV's first stage from the
+ * mountains on, cells of the wrong tiles appear in both planes with it and not without) */
+#if PORT_SCREEN0 - PORT_CODE >= PF_BYTES && defined(USE_BOBS)
 #define BOBS 1
 #define CLEAN 4
 #else
@@ -82,6 +84,7 @@ static u16 *const cop[2] = { (u16 *)PORT_COPPER, (u16 *)(PORT_COPPER + 0x4000) }
 static int dbg_cells, dbg_tiles;         /* drawn this frame */
 static int dbg_moved, dbg_group, dbg_flip, dbg_geo;
 static u32 dbg_rd, dbg_wr, dbg_data, dbg_dma, dbg_vint, dbg_w2, dbg_en;
+static u32 dbg_lay[3], dbg_lay_at[3];   /* accesses to the chip RAM the game's RAM and code were laid out in: DMA sources, reads, writes (and the last address) */
 static u32 dbg_tc, dbg_tp, dbg_st, dbg_sn, dbg_gt, dbg_bs, dbg_t1, dbg_t2, dbg_t3, dbg_gc;   /* cells drawn, cells put, sprite tiles, sprites, tiles made planar */
 #else
 #define DBG(x) (void)0
@@ -298,6 +301,7 @@ static void dma_run(void) {
 	DBG(dbg_dma += len);
 	if (mode < 2) {
 		u32 src = ((u32)(reg[23] & 0x7F) << 17 | (u32)reg[22] << 9 | (u32)reg[21] << 1);
+		DBG(if (src - PORT_RAM < PORT_SCREEN0 - PORT_RAM) { dbg_lay[0]++; dbg_lay_at[0] = src; });
 		if ((vdp_code & 0xF) == 1 && reg[15] == 2 && !(vdp_addr & 1)) {   /* the usual case: words into VRAM */
 			vram_block(vdp_addr, (const u8 *)game_addr(src), len);
 			vdp_addr = (vdp_addr + len * 2) & 0xFFFF;
@@ -440,6 +444,7 @@ void sh_r(u32 a, int bits) {
 	if (a >= 0xA00000 && a < 0xE00000) v = bits == 32 ? io_read(a, 16) << 16 | io_read(a + 2, 16) : io_read(a, bits);
 	else {
 		const u8 *p = (const u8 *)game_addr(a);
+		DBG(if (a - PORT_RAM < PORT_SCREEN0 - PORT_RAM) { dbg_lay[1]++; dbg_lay_at[1] = a; });
 		v = bits == 8 ? p[0] : bits == 16 ? (u32)p[0] << 8 | p[1] : (u32)p[0] << 24 | (u32)p[1] << 16 | (u32)p[2] << 8 | p[3];
 	}
 	if (bits == 8) cell[0] = (u8)v;
@@ -457,6 +462,7 @@ void sh_w(u32 a, int bits) {
 		if (bits == 32) { io_write(a, v >> 16, 16); io_write(a + 2, v & 0xFFFF, 16); } else io_write(a, v, bits);
 	} else {
 		u8 *p = (u8 *)game_addr(a);
+		DBG(if (a - PORT_RAM < PORT_SCREEN0 - PORT_RAM) { dbg_lay[2]++; dbg_lay_at[2] = a; });
 		if (bits == 8) p[0] = (u8)v;
 		else if (bits == 16) { p[0] = (u8)(v >> 8); p[1] = (u8)v; }
 		else { p[0] = (u8)(v >> 24); p[1] = (u8)(v >> 16); p[2] = (u8)(v >> 8); p[3] = (u8)v; }
@@ -952,13 +958,15 @@ void layer_blit(void) {
 	flip();
 }
 /* the cells a blit of `size` at `off` covers in bitmap s: fn 0 -> nonzero if the shadow has a sprite
- * in one (a hand-drawn one); fn 1: those the clean bitmap doesn't hold lose their mark in s; fn 2: all do */
+ * in one (a hand-drawn one) or the clean bitmap doesn't hold one (out of view, or there was no time
+ * to bring it up to date: copied from there it would be an old cell over a new one); fn 1: those the
+ * clean bitmap doesn't hold lose their mark in s; fn 2: all do */
 static int rect_cells(int s, u32 off, u16 size, int fn) {
 	int row = (int)(off / PF_LINE), col = (int)(off % PF_LINE), words = size & 63, rows = (size >> 6) >> 2;
 	for (int cr = row >> 3; cr <= (row + rows - 1) >> 3; cr++)
 		for (int c = col; c < col + words * 2; c++) {
 			u32 at = (u32)(cr & 31) * 128 + (u32)c;
-			if (fn == 0) { if (bob_flag[(cr & 31) << 6 | (c & 63)]) return 1; }
+			if (fn == 0) { if (bob_flag[(cr & 31) << 6 | (c & 63)] || !valid[CLEAN][at]) return 1; }
 			else if (fn == 2 || !valid[CLEAN][at]) valid[s][at] = 0;
 		}
 	return 0;
@@ -973,7 +981,6 @@ static void bob_plan(int s) {
 	for (int i = 0; i < rect_n[back]; i++) {
 		u32 off = rects[back][i].off; u16 size = rects[back][i].size;
 		if (rect_cells(s, off, size, 0)) { rect_cells(s, off, size, 2); continue; }
-		rect_cells(s, off, size, 1);
 		bq[bq_n].a = (u32)surf[CLEAN] + off; bq[bq_n].d = (u32)surf[s] + off; bq[bq_n].con0 = 0x09F0; bq[bq_n].size = size; bq_n++;
 	}
 	plan_n = 0;
@@ -1147,6 +1154,7 @@ static const u32 idles[] = { PORT_IDLES 0, 0 };   /* agk port's: the loops the g
 static u32 fade_at, fade_gap;             /* when most of the palette last moved, and how long after the time before */
 static u8 overran;                        /* the last picture's work ran into the next blank */
 static void picture(void);
+static void flip(void);
 static u32 flipped_at = 0xFFFFFFFF;       /* the blank count when the last picture was handed to the copper */
 static u8 phase;                          /* of the picture being made: 0 before its sprites are looked at */
 /* The game comes first: a frame of its logic, then the picture in what is left of the frame. The
@@ -1390,7 +1398,7 @@ int layer_vbl(u32 pc) {
 #ifdef LAYER_DEBUG                        /* every 256 blanks: pictures shown, geometries, groupings, plane set-ups; the game's reads and writes of
 	                                        * hardware, its words to the VDP's data port, words by DMA, and the frames it finished in time */
 	if (!(vbl_count & 255)) {
-		ser_hex((u32)dbg_flip, 2); ser_hex((u32)dbg_geo, 2); ser_hex((u32)dbg_group, 2); ser_hex((u32)dbg_moved, 2); ser_hex(dbg_rd, 5); ser_hex(dbg_wr, 5); ser_hex(dbg_data, 5); ser_hex(dbg_dma, 5); ser_hex(dbg_vint, 3); ser_hex(dbg_w2, 3); ser_hex(dbg_en, 3); ser_hex(dbg_tc, 5); ser_hex(dbg_tp, 5); ser_hex(dbg_st, 5); ser_hex(dbg_sn, 4); ser_hex(dbg_gt, 4); ser_hex(dbg_bs, 4); ser_hex(dbg_t1, 4); ser_hex(dbg_t2, 4); ser_hex(dbg_t3, 4); ser_hex(dbg_gc, 3); ser_hex(nslot[0], 2); ser_hex(nslot[1], 2); ser('\n'); dbg_bs = dbg_t1 = dbg_t2 = dbg_t3 = dbg_gc = 0; dbg_w2 = dbg_en = 0; dbg_tc = dbg_tp = dbg_st = dbg_sn = dbg_gt = 0;
+		ser_hex((u32)dbg_flip, 2); ser_hex((u32)dbg_geo, 2); ser_hex((u32)dbg_group, 2); ser_hex((u32)dbg_moved, 2); ser_hex(dbg_rd, 5); ser_hex(dbg_wr, 5); ser_hex(dbg_data, 5); ser_hex(dbg_dma, 5); ser_hex(dbg_vint, 3); ser_hex(dbg_w2, 3); ser_hex(dbg_en, 3); ser_hex(dbg_tc, 5); ser_hex(dbg_tp, 5); ser_hex(dbg_st, 5); ser_hex(dbg_sn, 4); ser_hex(dbg_gt, 4); ser_hex(dbg_bs, 4); ser_hex(dbg_t1, 4); ser_hex(dbg_t2, 4); ser_hex(dbg_t3, 4); ser_hex(dbg_gc, 3); ser_hex(nslot[0], 2); ser_hex(nslot[1], 2); for (int k = 0; k < 3; k++) { ser_hex(dbg_lay[k], 4); ser_hex(dbg_lay_at[k], 6); dbg_lay[k] = 0; } ser('\n'); dbg_bs = dbg_t1 = dbg_t2 = dbg_t3 = dbg_gc = 0; dbg_w2 = dbg_en = 0; dbg_tc = dbg_tp = dbg_st = dbg_sn = dbg_gt = 0;
 		dbg_rd = dbg_wr = dbg_data = dbg_dma = dbg_vint = 0;
 		dbg_flip = dbg_geo = dbg_group = dbg_moved = 0;
 	}
@@ -1420,6 +1428,11 @@ void layer_init(void) {
 #endif
 	for (i = 0; i < 2 * CELLS; i++) cell_tile[i] = NOCELL;
 	for (i = 0; i < 2048; i++) tl_head[i] = NOCELL;
+#ifdef CALIBRATE                          /* (how fast is this CPU: 200000 times round a loop of three instructions, in raster lines) */
+	{ static volatile u32 n; u32 lines = 0, last = CUSTOM(0x006) >> 8;
+	  for (u32 k = 200000; k; k--) { n++; if (!(k & 255)) { u32 l = CUSTOM(0x006) >> 8; if (l != last) { lines += (l - last) & 255; last = l; } } }
+	  ser_hex(lines, 6); ser('\n'); }
+#endif
 	tables_moved();
 	window_moved();
 	for (i = 0; i < WIN_BYTES; i++) wsurf[i] = 0;
