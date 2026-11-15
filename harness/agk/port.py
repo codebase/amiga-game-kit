@@ -256,6 +256,49 @@ def table_targets(by_addr, order, rom, known, data=frozenset()):
                 out.add(tgt)
                 k += 1
             tbytes |= set(range(start, start + 4 * k))
+        elif mn in ("jmp", "jsr") and i >= 2 and re.fullmatch(r"(a[0-6])@\(0,(d[0-7]):[wl]\)", ops[0]):
+            # `move.w (aX,dY.w),dZ` `lea BASE,aW` `jmp (aW,dZ)`: word offsets from BASE, in a table aX points
+            # at. aX is loaded just before, or by each of the dispatcher's callers (`lea T,aX` and a branch
+            # here: Thunder Force IV's objects, a state each)
+            m = re.fullmatch(r"(a[0-6])@\(0,(d[0-7]):[wl]\)", ops[0])
+            _, m1, o1 = by_addr[order[i - 1]]
+            _, m2, o2 = by_addr[order[i - 2]]
+            if not (m1 == "lea" and len(o1) == 2 and o1[1] == m.group(1) and ABS.match(o1[0])):
+                continue
+            mi = re.fullmatch(r"(a[0-6])@\(0,d[0-7]:[wl]\)", o2[0]) if m2 == "movew" and len(o2) == 2 else None
+            if not mi or o2[1] != m.group(2):
+                continue
+            base, treg = int(ABS.match(o1[0]).group(1), 16), mi.group(1)
+            def table_of(x):
+                _, mx, ox = by_addr[x]
+                if mx == "lea" and len(ox) == 2 and ox[1] == treg and (ABS.match(ox[0]) or PCREL.match(ox[0])):
+                    return int((ABS.match(ox[0]) or PCREL.match(ox[0])).group(1), 16)
+                return None
+            window = order[max(0, i - 10):i - 1]
+            ts = [table_of(x) for x in window if table_of(x) is not None][-1:]
+            if not ts:
+                inside = set(window)
+                for j, x in enumerate(order[:-1]):
+                    if table_of(x) is not None:
+                        _, mn3, ops3 = by_addr[order[j + 1]]
+                        if direct_target(mn3, ops3) in inside:
+                            ts.append(table_of(x))
+            for t in ts:
+                if not 0x200 <= t < romsize or t & 1:
+                    continue
+                limit, k, got = romsize, 0, []
+                while t + 2 * k + 1 < min(limit, romsize) and k < 1024:
+                    if k and (t + 2 * k) in known:
+                        break
+                    tgt = base + struct.unpack(">H", rom[t + 2 * k:t + 2 * k + 2])[0]
+                    if tgt & 1 or not 0x200 <= tgt < romsize:
+                        break
+                    if tgt > t:
+                        limit = min(limit, tgt)
+                    got.append(tgt)
+                    k += 1
+                out |= set(got)
+                tbytes |= set(range(t, t + 2 * k))
     return out, tbytes
 
 
@@ -300,7 +343,9 @@ def find_code(rom_path, analysis, image, hints, log=print):
     # from the calls that ran, where what follows the call never executed
     data_callees = set()
     for a, w, mn, ops in instrs:
-        if a in covered and (mn == "jsr" or mn.startswith("bsr")) and (a + 2 * w) not in covered:
+        # (and was read as data: a call whose routine didn't come back in the analysis run, a coroutine's
+        # yield or an object's exit, has code after it like any other)
+        if a in covered and (mn == "jsr" or mn.startswith("bsr")) and (a + 2 * w) not in covered and (a + 2 * w) in read:
             t = direct_target(mn, [gas_operand(o) for o in recomp.split_operands(ops)] if ops else [])
             if t is not None:
                 data_callees.add(t)

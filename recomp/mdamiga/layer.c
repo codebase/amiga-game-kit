@@ -67,6 +67,7 @@ static u16 *const cop[2] = { (u16 *)PORT_COPPER, (u16 *)(PORT_COPPER + 0x4000) }
 static int dbg_cells, dbg_tiles;         /* drawn this frame */
 static int dbg_moved, dbg_group, dbg_flip, dbg_geo;
 static u32 dbg_rd, dbg_wr, dbg_data, dbg_dma, dbg_vint, dbg_w2, dbg_en;
+static u32 dbg_tc, dbg_tp, dbg_st, dbg_sn, dbg_gt;   /* cells drawn, cells put, sprite tiles, sprites, tiles made planar */
 #else
 #define DBG(x) (void)0
 #endif
@@ -516,9 +517,9 @@ static int group(int p) {
 		for (i = 0; i < count; i++) map[p][member[i]] = (u8)(near[i] + 1);
 	}
 	nslot[p] = (u8)reps;
-	lut_ok[p] = 0;
 	for (i = 0; i < reps; i++) slot_rep[p][i + 1] = rep[i];
 	for (k = 0, i = 0; i < 64; i++) k |= old[i] ^ map[p][i];
+	if (k) lut_ok[p] = 0;                 /* (the same grouping again: the tables stand, 2000 entries of them) */
 	return k;
 }
 
@@ -559,7 +560,13 @@ static void load_palette(int *err) {
 typedef struct { u8 row[8][4]; u8 mask[8]; } ptile_t;
 static ptile_t cache[2][2048][4];
 static u8 cache_ok[2][2048];              /* a bit per palette line */
-static u8 tile_in_nt[2048];               /* the tile was drawn in a cell (so a change to it means cells to redraw) */
+static u8 tile_in_nt[2048];               /* the tile was drawn in a cell of the window (so a change to it means cells to redraw) */
+/* the cells of the two planes a tile is drawn in, as a list per tile (a cell is in the list of the
+ * tile it was last drawn with): a tile the game rewrites, an animation mostly, finds its cells
+ * without the name tables being read through */
+#define NOCELL 0xFFFF
+static u16 cell_tile[2 * CELLS], tl_next[2 * CELLS], tl_prev[2 * CELLS], tl_head[2048];
+
 static u8 rev[256];
 
 static const ptile_t *get_tile(int p, int tile, int line) {
@@ -567,6 +574,7 @@ static const ptile_t *get_tile(int p, int tile, int line) {
 	if (cache_ok[p][tile] >> line & 1) return t;
 	const u8 *src = &vram[tile * 32];
 	const u8 *m = &map[p][line * 16];
+	DBG(dbg_gt++);
 	u16 bits = 0;
 	for (int i = 0; i < 32; i++) bits |= used[src[i]];
 	bits &= (u16)~(seen[p][line] | 1);
@@ -594,9 +602,23 @@ static void draw_cell(int p, u32 cell, int over) {
 	int tile = (e[0] & 7) << 8 | e[1], line = (e[0] >> 5) & 3, hf = e[0] & 8, vf = e[0] & 16;
 	const ptile_t *t = get_tile(p, tile, line);
 	u8 *d = shadow[p] + (cell >> 6) * 8 * SH_ROW + (cell & 63);
-	DBG(dbg_cells++);
-	tile_in_nt[tile] = 1;
-	if (!over) sh_ok[p][cell] = 1;
+	DBG(dbg_cells++); DBG(dbg_tc++);
+	if (!over) {
+		u32 id = (u32)p * CELLS + cell;
+		sh_ok[p][cell] = 1;
+		if (cell_tile[id] != tile) {
+			u16 old = cell_tile[id], nx;
+			if (old != NOCELL) {              /* out of the list it was in */
+				nx = tl_next[id];
+				if (tl_prev[id] == NOCELL) tl_head[old] = nx; else tl_next[tl_prev[id]] = nx;
+				if (nx != NOCELL) tl_prev[nx] = tl_prev[id];
+			}
+			nx = tl_head[tile];
+			cell_tile[id] = (u16)tile; tl_next[id] = nx; tl_prev[id] = NOCELL;
+			if (nx != NOCELL) tl_prev[nx] = (u16)id;
+			tl_head[tile] = (u16)id;
+		}
+	}
 	for (int y = 0; y < 8; y++, d += SH_ROW) {
 		const u8 *r = t->row[vf ? 7 - y : y];
 		u8 b0 = r[0], b1 = r[1], b2 = r[2], b3 = r[3];
@@ -639,7 +661,7 @@ static void put(int s, int p, int r, int c, int n) {
 	const u8 *src = shadow[p] + r * 8 * SH_ROW + (c & 63);
 	u8 *dst = surf[s] + r * 8 * PF_ROW + c;
 	int k, y;
-	DBG(dbg_tiles += n);
+	DBG(dbg_tiles += n); DBG(dbg_tp += (u32)n);
 	if (n == 4) {
 		for (k = 0; k < 4; k++, src += SH_PLANE - 8 * SH_ROW, dst += PF_PLANE - 8 * PF_ROW)
 			for (y = 0; y < 8; y++, src += SH_ROW, dst += PF_ROW) *(u32 *)dst = *(const u32 *)src;
@@ -658,23 +680,44 @@ static u8 row_of[2][H];                   /* per line: the bitmap row */
 
 static u8 wmin[2][32], wmax[2][32];       /* per cell row of the bitmap: the columns on screen (none: min > max) */
 
+static u8 brk[H + 4];                     /* per line, a bit a plane: its bitmap pointer doesn't simply carry on from the line before */
+
+/* (by runs: a line that scrolls as the one above it costs a compare and three stores; the game's
+ * scroll table is read once per line or per eight, as its mode says) */
 static void geometry(void) {
 	const u8 *hs = &vram[(u32)(reg[13] & 0x3F) << 10];
 	int mode = reg[11] & 3;
 	hs_dirty = 0;
 	DBG(dbg_geo++);
+	for (int y = 0; y < H; y += 4) *(u32 *)&brk[y] = 0;
 	for (int p = 0; p < 2; p++) {
-		int vs = vsram[p];
-		for (int r = 0; r < 32; r++) { wmin[p][r] = 255; wmax[p][r] = 0; }
-		for (int y = 0; y < H; y++) {
-			const u8 *e = hs + (mode == 0 ? 0 : mode == 3 ? y * 4 : (y & ~7) * 4) + p * 2;
-			int x = (0 - (e[0] << 8 | e[1])) & 511;
-			if (x < 16) x += 512;
-			sx[p][y] = (u16)x;
-			int row = (y + vs) & 255, r = row >> 3, c0 = x >> 3, c1 = (x + 319) >> 3;
-			row_of[p][y] = (u8)row;
-			if (c0 < wmin[p][r]) wmin[p][r] = (u8)c0;
-			if (c1 > wmax[p][r]) wmax[p][r] = (u8)c1;
+		int row = vsram[p] & 255, raw = -1, x = 0, c0 = 0, c1 = 0;
+		u8 *mn = wmin[p], *mx = wmax[p], bit = (u8)(1 << p);
+		u16 *sxp = sx[p];
+		u8 *rop = row_of[p];
+		const u8 *e = hs + p * 2;
+		for (int r = 0; r < 32; r++) { mn[r] = 255; mx[r] = 0; }
+		for (int y = 0; y < H; y++, row = (row + 1) & 255) {
+			int b = !row || !y;
+			if (!y || mode == 3 || (mode == 2 && !(y & 7))) {
+				int v = e[0] << 8 | e[1];
+				if (mode == 3) e += 4; else if (mode == 2) e += 32;
+				if (v != raw) {
+					raw = v;
+					x = (0 - v) & 511;
+					if (x < 16) x += 512;
+					c0 = x >> 3; c1 = (x + 319) >> 3;
+					b = 1;
+				}
+			}
+			sxp[y] = (u16)x;
+			rop[y] = (u8)row;
+			if (b) brk[y] |= bit;
+			if (b || !(row & 7)) {
+				int r = row >> 3;
+				if (c0 < mn[r]) mn[r] = (u8)c0;
+				if (c1 > mx[r]) mx[r] = (u8)c1;
+			}
 		}
 	}
 }
@@ -694,29 +737,14 @@ static int present(int s, int p) {
 		if (c <= c1 && late()) return 0;
 		u8 *v = &valid[s][r * 128];
 		u8 *ok = &sh_ok[p][r << 6];
-		while (c <= c1) {
-			if (!(c & 3) && c + 3 <= c1) {
-				u32 four = *(const u32 *)(v + c);
-				if (four == 0x01010101) { c += 4; continue; }
-				if (!four) {
-					for (int k = 0; k < 4; k++) if (!ok[(c + k) & 63]) draw_cell(p, (u32)(r << 6 | ((c + k) & 63)), 0);
-					put(s, p, r, c, 4);
-					*(u32 *)(v + c) = 0x01010101;
-					c += 4;
-					continue;
-				}
-			}
-			if (v[c]) { c++; continue; }
-			if (!ok[c & 63]) draw_cell(p, (u32)(r << 6 | (c & 63)), 0);
-			if (!(c & 1) && c < c1 && !v[c + 1]) {
-				if (!ok[(c + 1) & 63]) draw_cell(p, (u32)(r << 6 | ((c + 1) & 63)), 0);
-				put(s, p, r, c, 2);
-				v[c] = v[c + 1] = 1;
-				c += 2;
-			} else {
-				put(s, p, r, c, 1);
-				v[c++] = 1;
-			}
+		/* four cells at a time, a long a row: a write to chip RAM costs the same whatever its width, and
+		 * there are only a few thousand to be had in a frame (the cells beside one that changed ride along) */
+		for (c &= ~3; c <= c1; c += 4) {
+			u32 four = *(const u32 *)(v + c);
+			if (four == 0x01010101) continue;
+			for (int k = 0; k < 4; k++) if (!ok[(c + k) & 63]) draw_cell(p, (u32)(r << 6 | ((c + k) & 63)), 0);
+			put(s, p, r, c, 4);
+			*(u32 *)(v + c) = 0x01010101;
 		}
 	}
 	return 1;
@@ -728,10 +756,9 @@ static int present(int s, int p) {
  * plane A's new bitmap, its scroll and its colours all at once. */
 static void build_copper(void) {
 	u16 *c = cop[back];
-	u32 ptr[2], want[2];
+	u32 want[2];
 	const u8 *base[2] = { surf[back * 2], surf[back * 2 + 1] };
-	u32 pstep = PF_PLANE;
-	int fine[2], con1, past255 = 0, hint = (reg[0] & 0x10) ? reg[10] : -1, i;
+	int fine[2], con1 = -1, past255 = 0, hint = (reg[0] & 0x10) ? reg[10] : -1, i;
 	*c++ = 0x100; *c++ = (reg[1] & 0x40) ? 0x0611 : 0x0201;   /* BPLCON0: eight planes as two playfields, or nothing */
 	*c++ = 0x106; *c++ = 0x1000;          /* BPLCON3: the second playfield's colours from 16 */
 	for (i = 0; i < 32; i++) { *c++ = (u16)(0x180 + 2 * i); *c++ = pal_hi[i]; }
@@ -742,16 +769,27 @@ static void build_copper(void) {
 	*c++ = 0x1001; *c++ = 0xFFFE; *c++ = 0x009C; *c++ = 0x8040;
 	*c++ = 0x2001; *c++ = 0xFFFE; *c++ = 0x009C; *c++ = 0x8040;
 	for (int y = 0; y < H; y++) {
-		for (int p = 0; p < 2; p++) {
-			int x = sx[p][y];
-			want[p] = (u32)base[p] + (u32)row_of[p][y] * PF_ROW + (u32)((x - 1) >> 4) * 2;
-			fine[p] = (16 - (x & 15)) & 15;
+		/* (most lines carry on from the one above: only the lines geometry marked, the window's edges,
+		 * and the lines of the two interrupts are looked at any further) */
+		int win = (u32)(y - wtop) < (u32)wlines;
+		int b = brk[y];
+		if (win || (wlines && y == wtop + wlines)) b |= 1;   /* (the window's rows are closer together than the modulo steps: every line) */
+		if (!y) b = 3;
+		int irq = y && y - 1 == hint, poll = y && ((0x2C + y - 1) & 15) == 15;
+		if (!(b | irq | poll)) continue;
+		int c1 = con1, movec = 0;
+		if (b) {
+			fine[0] = con1 & 15; fine[1] = (con1 >> 4) & 15;
+			for (int p = 0; p < 2; p++) if (b >> p & 1) {
+				int x = sx[p][y];
+				want[p] = (u32)base[p] + (u32)row_of[p][y] * PF_ROW + (u32)((x - 1) >> 4) * 2;
+				fine[p] = (16 - (x & 15)) & 15;
+			}
+			if (win) { want[0] = (u32)wsurf + (u32)(y - wtop) * WIN_ROW; fine[0] = 0; }   /* the window's lines */
+			c1 = fine[1] << 4 | fine[0];
+			movec = c1 != con1;
 		}
-		if ((u32)(y - wtop) < (u32)wlines) { want[0] = (u32)wsurf + (u32)(y - wtop) * WIN_ROW; fine[0] = 0; }   /* the window's lines */
-		int c1 = fine[1] << 4 | fine[0];
-		int moveA = y == 0 || want[0] != ptr[0] + PF_ROW, moveB = y == 0 || want[1] != ptr[1] + PF_ROW;
-		int movec = y == 0 || c1 != con1, irq = y && y - 1 == hint, poll = y && ((0x2C + y - 1) & 15) == 15;
-		if (y && (moveA || moveB || movec || irq || poll)) {   /* after line y-1's fetch, before line y's */
+		if (y) {                              /* after line y-1's fetch, before line y's */
 			int l = 0x2C + y - 1;
 			if (l >= 256 && !past255) { *c++ = 0xFFDF; *c++ = 0xFFFE; past255 = 1; }
 			if (l != 255) { *c++ = (u16)((l & 0xFF) << 8 | 0xDB); *c++ = 0xFFFE; }
@@ -759,20 +797,21 @@ static void build_copper(void) {
 		}
 		if (irq) { *c++ = 0x009C; *c++ = 0x8010; }
 		if (movec) { *c++ = 0x102; *c++ = (u16)c1; }
-		u32 step = (u32)(y - wtop) < (u32)wlines ? WIN_PLANE : PF_PLANE;   /* plane A's bitplanes: how far apart on this line */
-		for (int p = 0; p < 2; p++) if (p ? moveB : moveA) {
-			u32 a = want[p], st = p ? PF_PLANE : step, was = p ? PF_PLANE : pstep;
+		for (int p = 0; p < 2; p++) if (b >> p & 1) {
+			/* (few moves fit between two lines' fetches: the high word only when the pointer, which
+			 * has run on a row from the last line, isn't in the same 64K) */
+			int pwin = !p && y && (u32)(y - 1 - wtop) < (u32)wlines;   /* the line above was the window's */
+			u32 a = want[p], st = (!p && win) ? WIN_PLANE : PF_PLANE, was = pwin ? WIN_PLANE : PF_PLANE, ran = 0;
+			if (y) ran = (pwin ? (u32)wsurf + (u32)(y - 1 - wtop) * WIN_ROW
+			                   : (u32)base[p] + (u32)row_of[p][y - 1] * PF_ROW + (u32)((sx[p][y - 1] - 1) >> 4) * 2) + PF_ROW;
 			for (int k = 0; k < 4; k++, a += st) {
 				int r = 0x0E0 + (k * 2 + p) * 4;       /* plane A is bitplanes 1,3,5,7; plane B 2,4,6,8 */
-				/* (few moves fit between two lines' fetches: the high word only when the pointer, which
-				 * has run on a row from the last line, isn't in the same 64K) */
-				if (y == 0 || ((ptr[p] + (u32)k * was + PF_ROW) >> 16) != (a >> 16)) { *c++ = (u16)r; *c++ = (u16)(a >> 16); }
+				if (y == 0 || ((ran + (u32)k * was) >> 16) != (a >> 16)) { *c++ = (u16)r; *c++ = (u16)(a >> 16); }
 				*c++ = (u16)(r + 2); *c++ = (u16)a;
 			}
 		}
-		pstep = step;
 		if (poll) { *c++ = 0x009C; *c++ = 0x8040; }
-		ptr[0] = want[0]; ptr[1] = want[1]; con1 = c1;
+		con1 = c1;
 	}
 	if (!past255) { *c++ = 0xFFDF; *c++ = 0xFFFE; }
 	*c++ = 0x0F01; *c++ = 0xFFFE; *c++ = 0x009C; *c++ = 0x8040;   /* (lines 271 and 287) */
@@ -819,6 +858,7 @@ static void sprites(void) {
 			if ((attr >> 15) != pass) continue;
 			if (X0 <= -w * 8 || X0 >= 320 || Y0 <= -h * 8 || Y0 >= H) continue;
 			int tile0 = attr & 0x7FF, line = (attr >> 13) & 3, hf = attr & 0x800, vf = attr & 0x1000;
+			DBG(dbg_sn++);
 			for (int cx = 0; cx < w; cx++) {
 				int X = X0 + cx * 8;
 				if (X <= -8 || X >= 320) continue;
@@ -826,6 +866,7 @@ static void sprites(void) {
 				for (int cy = 0; cy < h; cy++) {
 					int Y = Y0 + cy * 8;
 					if (Y <= -8 || Y >= H) continue;
+					DBG(dbg_st++);
 					const ptile_t *t = get_tile(0, (tile0 + col * h + (vf ? h - 1 - cy : cy)) & 0x7FF, line);
 					u32 last = 0xFFFFFFFF;
 					/* the usual case, the quick way: the tile whole on screen, its eight lines scrolled alike, and
@@ -960,7 +1001,7 @@ static void picture(void) {
 	 * that waits for the blank by asking the VDP, its interrupt off, writes nothing for frames on end,
 	 * and a stock machine has no time for the sprites and the copper list all over again each frame) */
 	if (!busy && !changed && !want_group[0] && !want_group[1] && !pal_stale) return;
-	if (hs_dirty) geometry();
+	if (hs_dirty && !busy) geometry();    /* (a picture is finished for the scroll it was begun for) */
 	if (scene_new) {                      /* the planes were set up anew: the colours are found again as tiles are drawn */
 		scene_new = 0;
 		for (p = 0; p < 2; p++) {
@@ -1006,13 +1047,12 @@ static void picture(void) {
 	if (tiles_dirty) {                    /* tiles the game rewrote: their planar copies go, and the cells showing them */
 		int scan = 0, lo = td_lo, hi = td_hi;
 		tiles_dirty = 0; td_lo = 2048; td_hi = -1;
-		for (i = lo; i <= hi; i++) if (tile_dirty[i]) { cache_ok[0][i] = cache_ok[1][i] = 0; if (tile_in_nt[i]) scan = 1; else tile_dirty[i] = 0; }
-		if (scan) {
-			for (p = 0; p < 2; p++) {
-				const u8 *t = &vram[nt[p] & 0xFFFF];
-				int count = pw * ph > 4096 ? 4096 : pw * ph;
-				for (i = 0; i < count; i++, t += 2) if (tile_dirty[(t[0] & 7) << 8 | t[1]]) entry_dirty(p, i);
-			}
+		for (i = lo; i <= hi; i++) if (tile_dirty[i]) {
+			cache_ok[0][i] = cache_ok[1][i] = 0;
+			for (u32 id = tl_head[i]; id != NOCELL; id = tl_next[id]) cell_dirty((int)(id >> 11), id & (CELLS - 1));
+			if (tile_in_nt[i]) scan = 1; else tile_dirty[i] = 0;
+		}
+		if (scan) {                       /* (the window's few cells are read through) */
 			if (wlines) {
 				const u8 *t = &vram[(wnt + ((u32)wrow0 << ((reg[12] & 1) ? 7 : 6))) & 0xFFFF];
 				int count = (wlines >> 3) << ((reg[12] & 1) ? 6 : 5);
@@ -1099,7 +1139,7 @@ int layer_vbl(u32 pc) {
 #ifdef LAYER_DEBUG                        /* every 256 blanks: pictures shown, geometries, groupings, plane set-ups; the game's reads and writes of
 	                                        * hardware, its words to the VDP's data port, words by DMA, and the frames it finished in time */
 	if (!(vbl_count & 255)) {
-		ser_hex((u32)dbg_flip, 2); ser_hex((u32)dbg_geo, 2); ser_hex((u32)dbg_group, 2); ser_hex((u32)dbg_moved, 2); ser_hex(dbg_rd, 5); ser_hex(dbg_wr, 5); ser_hex(dbg_data, 5); ser_hex(dbg_dma, 5); ser_hex(dbg_vint, 3); ser_hex(dbg_w2, 3); ser_hex(dbg_en, 3); ser_hex(mem16(port_ram + 0xFE04), 4); ser('\n'); dbg_w2 = dbg_en = 0;
+		ser_hex((u32)dbg_flip, 2); ser_hex((u32)dbg_geo, 2); ser_hex((u32)dbg_group, 2); ser_hex((u32)dbg_moved, 2); ser_hex(dbg_rd, 5); ser_hex(dbg_wr, 5); ser_hex(dbg_data, 5); ser_hex(dbg_dma, 5); ser_hex(dbg_vint, 3); ser_hex(dbg_w2, 3); ser_hex(dbg_en, 3); ser_hex(dbg_tc, 5); ser_hex(dbg_tp, 5); ser_hex(dbg_st, 5); ser_hex(dbg_sn, 4); ser_hex(dbg_gt, 4); ser('\n'); dbg_w2 = dbg_en = 0; dbg_tc = dbg_tp = dbg_st = dbg_sn = dbg_gt = 0;
 		dbg_rd = dbg_wr = dbg_data = dbg_dma = dbg_vint = 0;
 		dbg_flip = dbg_geo = dbg_group = dbg_moved = 0;
 	}
@@ -1127,6 +1167,8 @@ void layer_init(void) {
 	CUSTOM(0x032) = 372;                  /* where the program was loaded, on the serial line (a profile needs it) */
 	ser_hex((u32)layer_init, 8); ser('\n');
 #endif
+	for (i = 0; i < 2 * CELLS; i++) cell_tile[i] = NOCELL;
+	for (i = 0; i < 2048; i++) tl_head[i] = NOCELL;
 	tables_moved();
 	window_moved();
 	for (i = 0; i < 4 * WIN_PLANE; i++) wsurf[i] = 0;
