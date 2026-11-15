@@ -176,10 +176,12 @@ static void entry_dirty(int p, u32 n) {   /* the name table entry n of plane p w
 static u32 entry_of(u32 cell) {           /* a bitmap cell -> its name table entry */
 	return (((cell >> 6) & (u32)(ph - 1)) << pw_shift) | (cell & 63 & (u32)(pw - 1));
 }
+static u8 changed = 1;                    /* the game wrote something the picture is made of, since the last one was begun */
 static void vram_w(u32 a, u8 hi, u8 lo) {
 	a &= 0xFFFE;
 	if (vram[a] == hi && vram[a + 1] == lo) return;
 	vram[a] = hi; vram[a + 1] = lo;
+	changed = 1;
 	int t = (int)(a >> 5);
 	tile_dirty[t] = 1; tiles_dirty = 1;
 	if (t < td_lo) td_lo = t;
@@ -211,6 +213,7 @@ static void vram_block(u32 a, const u8 *p, u32 n) {
 		if (a + 32 > nt[1] && a < nt[1] + size) { for (int k = 0; k < 32; k += 2) vram_w(a + (u32)k, p[k], p[k + 1]); continue; }
 		if (wlines && a + 32 > wnt && a < wnt + 0x1000) { for (int k = 0; k < 32; k += 2) vram_w(a + (u32)k, p[k], p[k + 1]); continue; }
 		d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = s[3]; d[4] = s[4]; d[5] = s[5]; d[6] = s[6]; d[7] = s[7];
+		changed = 1;
 		int t = (int)(a >> 5);
 		tile_dirty[t] = 1; tiles_dirty = 1;
 		if (t < td_lo) td_lo = t;
@@ -237,8 +240,8 @@ static void vdp_data_write(u16 v) {
 	case 1:
 		if (vdp_addr & 1) vram_w(vdp_addr, (u8)v, (u8)(v >> 8)); else vram_w(vdp_addr, (u8)(v >> 8), (u8)v);
 		break;
-	case 3: { u16 n = v & 0xEEE, *c = &cram[(vdp_addr >> 1) & 63]; if (*c != n) { *c = n; cram_dirty = 1; cram_chg[(vdp_addr >> 1) & 63] = 1; } break; }
-	case 5: { u16 *c = &vsram[(vdp_addr >> 1) % 40]; if (*c != (v & 0x7FF)) { *c = v & 0x7FF; hs_dirty = 1; } break; }
+	case 3: { u16 n = v & 0xEEE, *c = &cram[(vdp_addr >> 1) & 63]; if (*c != n) { *c = n; changed = 1; cram_dirty = 1; cram_chg[(vdp_addr >> 1) & 63] = 1; } break; }
+	case 5: { u16 *c = &vsram[(vdp_addr >> 1) % 40]; if (*c != (v & 0x7FF)) { *c = v & 0x7FF; changed = 1; hs_dirty = 1; } break; }
 	}
 	vdp_addr = (vdp_addr + reg[15]) & 0xFFFF;
 	if (dma_fill_pending) {
@@ -300,6 +303,7 @@ static void vdp_ctrl_write(u16 v) {
 		int r = (v >> 8) & 0x1F;
 		if (r < 24 && reg[r] != (u8)v) {
 			reg[r] = (u8)v;
+			changed = 1;
 			if (r == 2 || r == 4 || r == 16) tables_moved();
 			if (r == 3 || r == 12 || r == 17 || r == 18) window_moved();
 			if (r == 7) cram_dirty = 1;
@@ -908,6 +912,7 @@ static u32 vint_seq, drawn_seq;           /* the game's interrupts, and the one 
 static u32 work_at;                       /* the blank in which the layer last drew while the game waited */
 static const u32 idles[] = { PORT_IDLES 0, 0 };   /* agk port's: the loops the game waits for an interrupt in */
 static u32 fade_at, fade_gap;             /* when most of the palette last moved, and how long after the time before */
+static u8 overran;                        /* the last picture's work ran into the next blank */
 static void picture(void);
 /* The game comes first: a frame of its logic, then the picture in what is left of the frame. The
  * game says when it is done by waiting for its interrupt in a loop agk port found, and the copper
@@ -927,6 +932,7 @@ void layer_idle(u32 pc) {
 	if (late()) return;
 	work_at = vbl_count;
 	picture();
+	overran = (CUSTOM(0x01E) & 0x0020) != 0;
 }
 
 /* after the game's vertical interrupt. A game that never waits (it takes more than a frame, every
@@ -940,13 +946,20 @@ void layer_frame(void) {
 	if (deadline < DEADLINE) deadline = DEADLINE;
 	if (deadline > 300) deadline = 300;
 	if (late()) return;
+	/* (the last one took the whole frame: this frame is the game's) */
+	if (overran) { overran = 0; return; }
 	picture();
+	overran = (CUSTOM(0x01E) & 0x0020) != 0;
 }
 
 /* the cells and the sprites, then the display that shows them from the next vertical blank; as far
  * as the time goes (deadline), and gone on with the next time */
 static void picture(void) {
 	int p, i;
+	/* nothing the picture is made of was written since the one on screen was begun: it stands. (A game
+	 * that waits for the blank by asking the VDP, its interrupt off, writes nothing for frames on end,
+	 * and a stock machine has no time for the sprites and the copper list all over again each frame) */
+	if (!busy && !changed && !want_group[0] && !want_group[1] && !pal_stale) return;
 	if (hs_dirty) geometry();
 	if (scene_new) {                      /* the planes were set up anew: the colours are found again as tiles are drawn */
 		scene_new = 0;
@@ -1018,6 +1031,7 @@ static void picture(void) {
 		bob_n = 0;
 		if (reg[1] & 0x40) sprites();
 		busy = 1;
+		changed = 0;
 		drawn_seq = vint_seq;
 		began_at = vbl_count;
 		rest = 0;

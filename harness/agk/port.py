@@ -1422,7 +1422,7 @@ def build_amiga(outdir, kit_root, image, analysis=None, log=print):
             f.write(f"#define PORT_{k} {v:#x}\n")
         # (the loops the game waits for an interrupt in, first and last instruction: the layer draws meanwhile)
         f.write("#define PORT_IDLES " + "".join(f"{a:#x},{b:#x}," for a, b in info.get("idle", [])) + "\n")
-    script = ("m68k-amigaos-gcc -m68020 -O2 -fomit-frame-pointer -Wall -Wl,-Map,game.map -o game main.c layer.c sound.c inflate.c start.S > build.log 2>&1 "
+    script = (f"m68k-amigaos-gcc -m68020 -O2 -fomit-frame-pointer -Wall {os.environ.get('PORT_AMIGA_CFLAGS', '')} -Wl,-Map,game.map -o game main.c layer.c sound.c inflate.c start.S > build.log 2>&1 "
               "|| { tail -30 build.log; exit 1; }; m68k-amigaos-nm -n game > game.nm; m68k-amigaos-strip game; "
               "printf 'game\\n' > startup-sequence; rm -f game.adf; "
               "xdftool game.adf format PORT ffs + boot install + write game game + write game.z game.z + makedir s "
