@@ -861,6 +861,17 @@ class Rewriter:
             self.unsafe.add(a)
             self.notes["stack pointers cleared (the top of RAM)"] += 1
             return [f"\tmoveal #{self.lay['ram'] + 0x10000:#x},sp"]
+        # ---- scratch below the stack: `movea.l sp,an` and at once a write through -(an), read back through
+        # (an)+, the stack pointer never moved. Safe on the Mega Drive where nothing interrupts the routine
+        # (Thunder Force IV's, in its vertical interrupt, splits a DMA's length into bytes that way); on the
+        # Amiga the layer's own interrupts come at any time and their frame lands on those bytes (the
+        # length's low byte read back as $6C, the frame's vector offset). It gets a place in the layer's page.
+        if mn == "moveal" and len(ops) == 2 and ops[0] == "sp" and re.fullmatch(r"a[0-6]", ops[1]) and a + n in self.code:
+            ops2 = self.code[a + n][2]
+            if len(ops2) == 2 and ops2[1] == ops[1] + "@-":
+                self.unsafe.add(a)
+                self.notes["scratch below the stack pointer moved to the layer's page"] += 1
+                return [f"\tlea {self.lay['cell'] + 0xC0:#x},{ops[1]}"]
         # ---- the interrupt mask: the Mega Drive's vertical interrupt is level 6 and its horizontal one 4;
         # the port delivers both at level 3 (the Amiga's vertical blank), so "allow them" is mask 2
         if mn == "stop" and len(ops) == 1 and IMM.match(ops[0]):      # (the wait for an interrupt, with its mask)

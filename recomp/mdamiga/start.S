@@ -172,11 +172,17 @@ l3:
 	jsr	_layer_irq_enter
 	movem.l	(sp)+,d0-d1/a0-a1
 	move.l	([_port_cell]),-(sp)
+	move.l	_held+8,-(sp)               | (the VDP's state the interrupted code had: put back when its handler is through)
+	move.l	_held+4,-(sp)
+	move.l	_held,-(sp)
 	pea	hint_done(pc)
 	move.w	#0x2300,-(sp)
 	move.l	0x70.w,-(sp)                | the game's handler (the Mega Drive's level 4)
 	rts
 hint_done:
+	move.l	(sp)+,_held
+	move.l	(sp)+,_held+4
+	move.l	(sp)+,_held+8
 	move.l	(sp)+,([_port_cell])
 	movem.l	d0-d1/a0-a1,-(sp)
 	jsr	_layer_irq_leave
@@ -215,11 +221,17 @@ hint_done:
 	bra.s	post
 7:	sf	([_port_cell],16)           | (awake)
 	move.l	([_port_cell]),-(sp)        | the cell: the interrupted code may be between an instruction and its call
+	move.l	_held+8,-(sp)               | and the VDP's state it had (layer_vbl took it)
+	move.l	_held+4,-(sp)
+	move.l	_held,-(sp)
 	pea	post_cell(pc)                | a frame for the game's return, the 68000's (agk port turns its rte into move (sp)+,sr; rts)
 	move.w	#0x2300,-(sp)
 	move.l	0x78.w,-(sp)                | the game's handler
 	rts
 post_cell:
+	move.l	(sp)+,_held
+	move.l	(sp)+,_held+4
+	move.l	(sp)+,_held+8
 	move.l	(sp)+,([_port_cell])
 post:
 	movem.l	d0-d1/a0-a1,-(sp)
