@@ -340,6 +340,10 @@ void frame_hook(void) {
 		for (int i = 0; i < 8; i++) fprintf(tracef, " A%d=%08X", i, cpu.a[i]);
 		fprintf(tracef, "\n");
 	}
+	{ static const char *poke; static int asked;   /* RECOMP_POKE=ADDR:VAL[,ADDR:VAL...] (hex): bytes held every frame (lives, so a scripted run sees the whole game) */
+		if (!asked) { asked = 1; poke = getenv("RECOMP_POKE"); if (poke) poke = strdup(poke); }
+		for (const char *q = poke; q && *q; ) { char *e; unsigned long a = strtoul(q, &e, 16); if (*e != ':') break;
+			mem[a & 0xFFFFFF] = (u8)strtoul(e + 1, &e, 16); q = *e == ',' ? e + 1 : e; if (q == e && *e) break; } }
 	if (max_frames && frame_count >= max_frames) {
 		if (png_path) write_png(png_path);
 		if (wavf) wav_close();

@@ -552,40 +552,96 @@ static void newcomer(int p, int c) {
 /* group the colours playfield p's tiles use into 15 slots: fifteen colours picked to be as far from each other
  * as possible (the first, then whichever is farthest from all picked so far), and every colour
  * with the nearest of them. -> nonzero if the grouping changed */
+static u16 wt[2][64];                     /* how many of the tiles made for a playfield hold the colour */
+static u16 gw[2][64];                     /* what a colour weighed at the last grouping: the cells showing it, mostly */
+static u16 cell_tile[2 * CELLS];
+static u16 use_n[4][2048];
+static void weigh(int p) {                /* the cells drawn in the plane, by tile and palette line; their colours get that many each */
+	const u8 *n = &vram[nt[p] & 0xFFFF];
+	int i, l;
+	for (l = 0; l < 4; l++) for (i = 0; i < 2048; i++) use_n[l][i] = 0;
+	for (i = 0; i < CELLS; i++) {
+		u16 t = cell_tile[p * CELLS + i];
+		if (t < 2048) use_n[n[entry_of(p, (u32)i) * 2] >> 5 & 3][t]++;
+	}
+	for (i = 0; i < 64; i++) gw[p][i] = (u16)(wt[p][i] > 28 ? 32 : wt[p][i] + 4);
+	if (!p) for (i = 0; i < 64; i++) if (!(cram[i] & 0xEEE)) gw[p][i] += 300;   /* (black is what the window's panels and the sprites' outlines are made of, and neither is counted below) */
+	for (l = 0; l < 4; l++) for (i = 0; i < 2048; i++) if (use_n[l][i]) {
+		const u8 *src = &vram[i * 32];
+		u16 bits = 0;
+		for (int k = 0; k < 32; k++) bits |= used[src[k]];
+		for (int k = 1; k < 16; k++) if (bits >> k & 1) gw[p][l * 16 + k] += use_n[l][i];
+	}
+}
 static int group(int p) {
 	static u8 member[64], near[64];
-	static int far[64];
-	u8 rep[15], old[64];
-	int count = 0, reps = 0, i, k;
+	static int far[64], w[64];
+	static int cr[15], cg[15], cb[15];    /* the slots' colours, sixteenths of a CRAM level */
+	u8 old[64];
+	int count = 0, reps = 0, fixed, i, k, s;
+	weigh(p);
 	for (i = 0; i < 64; i++) {
 		old[i] = map[p][i];
 		map[p][i] = 0;
-		if ((i & 15) && (seen[p][i >> 4] >> (i & 15) & 1)) member[count++] = (u8)i;
+		if ((i & 15) && (seen[p][i >> 4] >> (i & 15) & 1)) { w[count] = gw[p][i]; member[count++] = (u8)i; }
 	}
 	grouped_at[p] = vbl_count;
 	if (count) {
 		for (i = 0; i < count; i++) { far[i] = 1 << 30; near[i] = 0; }
 		/* the colours the game keeps changing get slots of their own, up to eight: sharing one,
 		 * they would drag the others' colour along (and the grouping would never settle) */
-		for (i = 0; i < count && reps < 8; i++) if (anim[member[i]]) { near[i] = (u8)reps; far[i] = -1; rep[reps++] = member[i]; }
-		int next = -1;
-		for (i = 0; i < count; i++) if (far[i] >= 0) { next = i; break; }
+		for (i = 0; i < count && reps < 8; i++) if (anim[member[i]]) { near[i] = (u8)reps; far[i] = -1; reps++; }
+		fixed = reps;
+		/* the first of the rest is the colour most tiles hold, each next the one whose distance from
+		 * those picked, times the tiles holding it, is greatest: a slot goes where being wrong shows most */
+		int next = -1, best = 0;
+		for (i = 0; i < count; i++) if (far[i] >= 0 && w[i] > best) { best = w[i]; next = i; }
 		while (next >= 0 && reps < 15) {
-			rep[reps] = member[next];
-			int best = 0, bi = -1;
+			u16 c = cram[member[next]];
+			int bi = -1;
+			best = 0;
 			for (i = 0; i < count; i++) {
 				if (far[i] < 0) continue;
-				int d = dist(cram[member[i]], cram[rep[reps]]);
+				int d = dist(cram[member[i]], c);
 				if (d < far[i]) { far[i] = d; near[i] = (u8)reps; }
-				if (far[i] > best) { best = far[i]; bi = i; }
+				if (far[i] * w[i] > best) { best = far[i] * w[i]; bi = i; }
 			}
 			reps++;
 			next = bi;                    /* (none: every colour is one of the picked ones already) */
 		}
-		for (i = 0; i < count; i++) map[p][member[i]] = (u8)(near[i] + 1);
+		/* then each slot's colour moved to the middle of its colours and the colours shared out again, three times */
+		for (int it = 0; it < 3 && reps > fixed; it++) {
+			static int sr[15], sg[15], sb[15], sn[15];
+			for (s = fixed; s < reps; s++) sr[s] = sg[s] = sb[s] = sn[s] = 0;
+			for (i = 0; i < count; i++) if (far[i] >= 0) {
+				u16 c = cram[member[i]];
+				s = near[i]; sr[s] += (c >> 1 & 7) * w[i]; sg[s] += (c >> 5 & 7) * w[i]; sb[s] += (c >> 9 & 7) * w[i]; sn[s] += w[i];
+			}
+			for (s = fixed; s < reps; s++) if (sn[s]) { cr[s] = sr[s] * 16 / sn[s]; cg[s] = sg[s] * 16 / sn[s]; cb[s] = sb[s] * 16 / sn[s]; }
+			else {                        /* (a slot left with nothing takes the colour worst off) */
+				int worst = -1, wi = -1;
+				for (i = 0; i < count; i++) if (far[i] > 0 && far[i] * w[i] > worst) { worst = far[i] * w[i]; wi = i; }
+				if (wi >= 0) { u16 c = cram[member[wi]]; cr[s] = (c >> 1 & 7) * 16; cg[s] = (c >> 5 & 7) * 16; cb[s] = (c >> 9 & 7) * 16; far[wi] = 0; }
+			}
+			for (i = 0; i < count; i++) if (far[i] >= 0) {
+				u16 c = cram[member[i]];
+				int r = (c >> 1 & 7) * 16, g = (c >> 5 & 7) * 16, bl = (c >> 9 & 7) * 16, bd = 1 << 30;
+				for (s = fixed; s < reps; s++) {
+					int dr = r - cr[s], dg = g - cg[s], db = bl - cb[s], d = dr * dr * 3 + dg * dg * 4 + db * db * 2;
+					if (d < bd) { bd = d; near[i] = (u8)s; }
+				}
+				far[i] = bd >> 8;
+			}
+		}
+		for (s = 0; s < reps; s++) slot_rep[p][s + 1] = 0;
+		for (i = 0; i < count; i++) {     /* (a slot is known to newcomers by the colour of it most tiles hold) */
+			map[p][member[i]] = (u8)(near[i] + 1);
+			u8 *rp = &slot_rep[p][near[i] + 1];
+			if (!*rp || wt[p][member[i]] > wt[p][*rp]) *rp = member[i];
+		}
+		for (i = 0; i < 64; i++) wt[p][i] >>= 1;   /* (what is counted from here on weighs as much as all before) */
 	}
 	nslot[p] = (u8)reps;
-	for (i = 0; i < reps; i++) slot_rep[p][i + 1] = rep[i];
 	for (k = 0, i = 0; i < 64; i++) k |= old[i] ^ map[p][i];
 	if (k) lut_ok[p] = 0;                 /* (the same grouping again: the tables stand, 2000 entries of them) */
 	return k;
@@ -606,7 +662,7 @@ static void load_palette(int *err) {
 		for (i = 0; i < 16; i++) r[i] = g[i] = b[i] = n[i] = 0;
 		for (i = 0; i < 64; i++) {
 			int s = map[p][i];
-			if (s) { u16 c = cram[i]; r[s] += lev[c >> 1 & 7]; g[s] += lev[c >> 5 & 7]; b[s] += lev[c >> 9 & 7]; n[s]++; }
+			if (s) { u16 c = cram[i]; int k = gw[p][i] ? gw[p][i] : 4; r[s] += lev[c >> 1 & 7] * k; g[s] += lev[c >> 5 & 7] * k; b[s] += lev[c >> 9 & 7] * k; n[s] += k; }
 		}
 		for (i = 1; i < 16; i++) if (n[i]) { r[i] /= n[i]; g[i] /= n[i]; b[i] /= n[i]; set_colour(p * 16 + i, r[i], g[i], b[i]); }
 		int worst = 0;
@@ -647,6 +703,7 @@ static const ptile_t *get_tile(int p, int tile, int line) {
 	DBG(dbg_gt++);
 	u16 bits = 0;
 	for (int i = 0; i < 32; i++) bits |= used[src[i]];
+	for (int i = 1; i < 16; i++) if (bits >> i & 1) { u16 *k = &wt[p][line * 16 + i]; if (*k < 60000) ++*k; }
 	bits &= (u16)~(seen[p][line] | 1);
 	if (bits) {
 		seen[p][line] |= bits;
@@ -667,8 +724,10 @@ static const ptile_t *get_tile(int p, int tile, int line) {
 }
 
 /* a cell of plane p's shadow from its name table entry; over = keep what the tile leaves clear */
+static u8 b_pri;                          /* plane B has shown cells with priority since the scene began: sprites without go behind them */
 static void draw_cell(int p, u32 cell, int over) {
 	const u8 *e = &vram[(nt[p] + entry_of(p, cell) * 2) & 0xFFFF];
+	if (p && (e[0] & 0x80)) b_pri = 1;
 	int tile = (e[0] & 7) << 8 | e[1], line = (e[0] >> 5) & 3, hf = e[0] & 8, vf = e[0] & 16;
 	const ptile_t *t = get_tile(p, tile, line);
 	u8 *d = shadow[p] + (cell >> 6) * 8 * SH_ROW + (cell & 63);
@@ -1087,7 +1146,7 @@ static void sprites(void) {
 		link = s[3] & 0x7F;
 		if (!link) break;
 	}
-	const u8 *nta = &vram[nt[0] & 0xFFFF];
+	const u8 *nta = &vram[nt[0] & 0xFFFF], *ntb = &vram[nt[1] & 0xFFFF];
 	u8 *base = shadow[0];
 	u8 *gflag = got_flag[back], *val = valid[back * 2];
 	u16 *glist = got_list[back];
@@ -1104,7 +1163,7 @@ static void sprites(void) {
 			{   /* the blitter's, if the lines it is on scroll alike and no cell with priority is before it */
 				int r0 = Y0 < 0 ? -Y0 : 0, r1 = h * 8 < H - Y0 ? h * 8 : H - Y0, ya = Y0 + r0, yb = Y0 + r1 - 1;
 				int bx = sx[0][ya] + X0, slot = -1;
-				if (dl_n < 80 && bx >= 0 && sx[0][yb] == sx[0][ya] && sx[0][(ya + yb) >> 1] == sx[0][ya]) {
+				if (!(b_pri && !pass) && dl_n < 80 && bx >= 0 && sx[0][yb] == sx[0][ya] && sx[0][(ya + yb) >> 1] == sx[0][ya]) {
 					int clear = 1;
 					if (!pass) {
 						int ra = row_of[0][ya];
@@ -1136,7 +1195,7 @@ static void sprites(void) {
 					u32 last = 0xFFFFFFFF;
 					/* the usual case, the quick way: the tile whole on screen, its eight lines scrolled alike, and
 					 * no edge of the bitmap in it. The (at most four) cells it touches once, then a word a plane a row. */
-					if (Y >= 0 && Y + 7 < H && sx[0][Y] == sx[0][Y + 7] && sx[0][Y] == sx[0][Y + 3] && row_of[0][Y + 7] == row_of[0][Y] + 7) {
+					if (!(b_pri && !pass) && Y >= 0 && Y + 7 < H && sx[0][Y] == sx[0][Y + 7] && sx[0][Y] == sx[0][Y + 3] && row_of[0][Y + 7] == row_of[0][Y] + 7) {
 						int bx = sx[0][Y] + X, brow = row_of[0][Y], sh = bx & 7, c0 = (bx >> 3) & 63;
 						if (bx >= 0 && c0 < 63) {
 							int two_c = sh != 0, two_r = (brow & 7) != 0;
@@ -1195,6 +1254,17 @@ static void sprites(void) {
 						u8 *d = base + brow * SH_ROW;
 						u8 b0 = src[0], b1 = src[1], b2 = src[2], b3 = src[3];
 						if (hf) { m = rev[m]; b0 = rev[b0]; b1 = rev[b1]; b2 = rev[b2]; b3 = rev[b3]; }
+						if (b_pri && !pass) {     /* behind plane B's cells with priority: what of the row their pixels cover isn't drawn */
+							int xb = sx[1][yy] + X, rb = row_of[1][yy], ca = (xb >> 3) & 63, cb2 = (ca + 1) & 63;
+							u32 la = (u32)(rb >> 3) << 6 | (u32)ca, lb = (u32)(rb >> 3) << 6 | (u32)cb2;
+							const u8 *sb = shadow[1] + rb * SH_ROW;
+							u8 oa = 0, ob = 0;
+							if (sh_ok[1][la] && (ntb[entry_of(1, la) * 2] & 0x80)) oa = sb[ca] | sb[ca + SH_PLANE] | sb[ca + SH_PLANE * 2] | sb[ca + SH_PLANE * 3];
+							if (sh_ok[1][lb] && (ntb[entry_of(1, lb) * 2] & 0x80)) ob = sb[cb2] | sb[cb2 + SH_PLANE] | sb[cb2 + SH_PLANE * 2] | sb[cb2 + SH_PLANE * 3];
+							m &= (u8)~(((oa << 8 | ob) << (xb & 7)) >> 8);
+							if (!m) continue;
+							b0 &= m; b1 &= m; b2 &= m; b3 &= m;
+						}
 						u16 k = (u16)~((m << 8) >> sh);
 						u16 v;
 						v = (u16)(d[c0] << 8 | d[c1]); v = (u16)((v & k) | ((b0 << 8) >> sh)); d[c0] = (u8)(v >> 8); d[c1] = (u8)v; d += SH_PLANE;
@@ -1281,6 +1351,8 @@ static void picture(void) {
 		scene_new = 0;
 		for (p = 0; p < 2; p++) {
 			for (i = 0; i < 4; i++) seen[p][i] = 0;
+			b_pri = 0;
+			for (i = 0; i < 64; i++) wt[p][i] = 0;
 			for (i = 0; i < 64; i++) map[p][i] = 0;
 			for (i = 0; i < 2048; i++) cache_ok[p][i] = 0;
 			nslot[p] = want_group[p] = lut_ok[p] = grp_n[p] = 0;
